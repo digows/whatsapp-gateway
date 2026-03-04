@@ -1,6 +1,7 @@
 import { logger } from './logger'
 
 const WEBHOOK_URL = process.env.WEBHOOK_URL
+const WEBHOOK_STATUS_URL = process.env.WEBHOOK_STATUS_URL
 const WEBHOOK_USER = process.env.WEBHOOK_USER
 const WEBHOOK_PASSWORD = process.env.WEBHOOK_PASSWORD
 
@@ -11,12 +12,18 @@ interface WebhookPayload {
 }
 
 /**
- * Dispatches an event payload to the configured WEBHOOK_URL (typically n8n).
+ * Dispatches an event payload to the configured WEBHOOK_URL or WEBHOOK_STATUS_URL.
  * Silently logs errors instead of crashing the session.
  */
 export async function dispatchWebhook(payload: WebhookPayload): Promise<void> {
-    if (!WEBHOOK_URL) {
-        logger.warn('WEBHOOK_URL not configured – skipping dispatch')
+    const isStatusEvent = payload.event.startsWith('connection.')
+    const targetUrl = isStatusEvent ? WEBHOOK_STATUS_URL : WEBHOOK_URL
+
+    if (!targetUrl) {
+        // Only warn if it's the main messages webhook missing. Status webhooks are strictly optional.
+        if (!isStatusEvent) {
+            logger.warn('WEBHOOK_URL not configured – skipping dispatch')
+        }
         return
     }
 
@@ -30,7 +37,7 @@ export async function dispatchWebhook(payload: WebhookPayload): Promise<void> {
             headers['Authorization'] = `Basic ${encoded}`
         }
 
-        const res = await fetch(WEBHOOK_URL, {
+        const res = await fetch(targetUrl, {
             method: 'POST',
             headers,
             body: JSON.stringify(payload),

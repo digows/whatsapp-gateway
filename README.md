@@ -151,7 +151,8 @@ curl -X POST http://localhost:3000/sessions/support/send \
 | `PORT`         | `3000`              | HTTP API port                            |
 | `HOST`         | `0.0.0.0`           | Bind host                                |
 | `DATA_DIR`     | `./data/sessions`   | Session persistence directory            |
-| `WEBHOOK_URL`  | *(empty)*           | n8n Webhook Trigger URL                  |
+| `WEBHOOK_URL`  | *(empty)*           | n8n Webhook Trigger URL for incoming messages |
+| `WEBHOOK_STATUS_URL` | *(empty)*       | Optional n8n Webhook URL for connection events (e.g. `connection.open`, `connection.logout`) |
 | `WEBHOOK_USER` | *(empty)*           | Optional Basic Auth Username for Webhook |
 | `WEBHOOK_PASSWORD` | *(empty)*       | Optional Basic Auth Password for Webhook |
 | `LOG_LEVEL`    | `info`              | Log level (`trace`, `debug`, `info`, `warn`) |
