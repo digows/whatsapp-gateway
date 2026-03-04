@@ -10,6 +10,7 @@ import makeWASocket, {
     proto,
     WAMessageContent,
     WAMessageKey,
+    jidNormalizedUser,
 } from '@whiskeysockets/baileys'
 import path from 'path'
 import fs from 'fs'
@@ -163,19 +164,42 @@ class SessionManager {
                         // Skip messages sent by ourselves
                         if (msg.key.fromMe) continue
 
-                        const text =
-                            msg.message?.conversation ||
-                            msg.message?.extendedTextMessage?.text ||
-                            undefined
+                        let text = ''
+                        let messageType = 'NEW' // 'NEW', 'EDITED', 'REVOKED'
+                        let originalMessageId = undefined
+
+                        // Determine message type and extract correct text
+                        const msgContent = msg.message
+                        if (msgContent) {
+                            if (msgContent.protocolMessage) {
+                                const protocolMsg = msgContent.protocolMessage
+                                if (protocolMsg.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+                                    messageType = 'REVOKED'
+                                    originalMessageId = protocolMsg.key?.id || undefined
+                                } else if (protocolMsg.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
+                                    messageType = 'EDITED'
+                                    originalMessageId = protocolMsg.key?.id || undefined
+                                    text = protocolMsg.editedMessage?.conversation ||
+                                        protocolMsg.editedMessage?.extendedTextMessage?.text || ''
+                                }
+                            } else {
+                                text = msgContent.conversation ||
+                                    msgContent.extendedTextMessage?.text || ''
+                            }
+                        }
 
                         dispatchWebhook({
                             sessionId: id,
                             event: 'messages.upsert',
                             data: {
+                                type: messageType,
                                 from: msg.key.remoteJid || '',
+                                participant: msg.key.participant,
+                                phoneNumber: jidNormalizedUser(msg.key.participant || msg.key.remoteJid || '').replace(/@.*$/, ''),
                                 pushName: msg.pushName || '',
                                 messageId: msg.key.id || '',
-                                text: text || '',
+                                originalMessageId,
+                                text: text,
                                 hasMedia: !!(
                                     msg.message?.imageMessage ||
                                     msg.message?.videoMessage ||
