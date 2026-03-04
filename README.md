@@ -152,6 +152,8 @@ curl -X POST http://localhost:3000/sessions/support/send \
 | `HOST`         | `0.0.0.0`           | Bind host                                |
 | `DATA_DIR`     | `./data/sessions`   | Session persistence directory            |
 | `WEBHOOK_URL`  | *(empty)*           | n8n Webhook Trigger URL                  |
+| `WEBHOOK_USER` | *(empty)*           | Optional Basic Auth Username for Webhook |
+| `WEBHOOK_PASSWORD` | *(empty)*       | Optional Basic Auth Password for Webhook |
 | `LOG_LEVEL`    | `info`              | Log level (`trace`, `debug`, `info`, `warn`) |
 | `NODE_ENV`     | *(empty)*           | Set to `production` to disable pretty-print |
 

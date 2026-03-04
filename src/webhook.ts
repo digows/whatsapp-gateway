@@ -1,6 +1,8 @@
 import { logger } from './logger'
 
 const WEBHOOK_URL = process.env.WEBHOOK_URL
+const WEBHOOK_USER = process.env.WEBHOOK_USER
+const WEBHOOK_PASSWORD = process.env.WEBHOOK_PASSWORD
 
 interface WebhookPayload {
     sessionId: string
@@ -19,9 +21,18 @@ export async function dispatchWebhook(payload: WebhookPayload): Promise<void> {
     }
 
     try {
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+        }
+
+        if (WEBHOOK_USER && WEBHOOK_PASSWORD) {
+            const encoded = Buffer.from(`${WEBHOOK_USER}:${WEBHOOK_PASSWORD}`).toString('base64')
+            headers['Authorization'] = `Basic ${encoded}`
+        }
+
         const res = await fetch(WEBHOOK_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify(payload),
         })
 
