@@ -216,6 +216,30 @@ class SessionManager {
         const sessionDir = path.join(DATA_DIR, id)
         fs.rmSync(sessionDir, { recursive: true, force: true })
     }
+
+    /** Auto-loads all sessions found in the data directory */
+    async loadExistingSessions(): Promise<void> {
+        if (!fs.existsSync(DATA_DIR)) {
+            fs.mkdirSync(DATA_DIR, { recursive: true })
+            return
+        }
+
+        const entries = fs.readdirSync(DATA_DIR, { withFileTypes: true })
+        for (const entry of entries) {
+            if (entry.isDirectory()) {
+                const sessionId = entry.name
+                logger.info({ session: sessionId }, 'Auto-loading existing session from disk...')
+                try {
+                    // Start in the background to not block the server startup
+                    this.startSession(sessionId).catch(err => {
+                        logger.error({ err, session: sessionId }, 'Failed to auto-load session')
+                    })
+                } catch (err) {
+                    logger.error({ err, session: sessionId }, 'Failed to initiate auto-load')
+                }
+            }
+        }
+    }
 }
 
 // Export singleton

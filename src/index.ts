@@ -114,6 +114,9 @@ app.delete<{ Params: { id: string } }>('/sessions/:id', async (req, reply) => {
 
 async function main() {
     try {
+        // Auto-load sessions from disk before starting HTTP server
+        await sessionManager.loadExistingSessions()
+
         await app.listen({ port: PORT, host: HOST })
         logger.info(`WhatsApp Gateway running on http://${HOST}:${PORT}`)
     } catch (err) {
