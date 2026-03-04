@@ -205,7 +205,9 @@ class SessionManager {
                                 type: messageType,
                                 from: remoteJid,
                                 participant: msg.key.participant,
-                                phoneNumber: jidNormalizedUser(msg.key.participant || remoteJid).replace(/@.*$/, ''),
+                                // If it's a LID, Baileys sometimes populates `senderPn` from the raw stanza.
+                                // Otherwise, we fallback to just stripping the domain from participant/remoteJid
+                                phoneNumber: (msg as Record<string, any>).senderPn || jidNormalizedUser(msg.key.participant || remoteJid).replace(/@.*$/, ''),
                                 pushName: msg.pushName || '',
                                 messageId: msg.key.id || '',
                                 originalMessageId,
