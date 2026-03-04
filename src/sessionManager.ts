@@ -164,6 +164,14 @@ class SessionManager {
                         // Skip messages sent by ourselves
                         if (msg.key.fromMe) continue
 
+                        const remoteJid = msg.key.remoteJid || ''
+
+                        // Skip Status broadcasts (Stories) to avoid flooding the webhook
+                        if (remoteJid === 'status@broadcast') {
+                            logger.debug({ session: id }, 'Ignored status@broadcast message')
+                            continue
+                        }
+
                         let text = ''
                         let messageType = 'NEW' // 'NEW', 'EDITED', 'REVOKED'
                         let originalMessageId = undefined
@@ -184,7 +192,9 @@ class SessionManager {
                                 }
                             } else {
                                 text = msgContent.conversation ||
-                                    msgContent.extendedTextMessage?.text || ''
+                                    msgContent.extendedTextMessage?.text ||
+                                    msgContent.imageMessage?.caption ||
+                                    msgContent.videoMessage?.caption || ''
                             }
                         }
 
@@ -193,9 +203,9 @@ class SessionManager {
                             event: 'messages.upsert',
                             data: {
                                 type: messageType,
-                                from: msg.key.remoteJid || '',
+                                from: remoteJid,
                                 participant: msg.key.participant,
-                                phoneNumber: jidNormalizedUser(msg.key.participant || msg.key.remoteJid || '').replace(/@.*$/, ''),
+                                phoneNumber: jidNormalizedUser(msg.key.participant || remoteJid).replace(/@.*$/, ''),
                                 pushName: msg.pushName || '',
                                 messageId: msg.key.id || '',
                                 originalMessageId,
