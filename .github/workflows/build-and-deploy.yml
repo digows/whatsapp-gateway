@@ -57,11 +57,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # Ex: vai criar a tag :latest e também uma tag com o hash do commit ou versão v1.0
           tags: |
-            type=sha,format=long
-            type=ref,event=branch
-            latest
+            type=sha,format=short
+            type=raw,value=latest
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
