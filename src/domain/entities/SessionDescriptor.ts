@@ -1,4 +1,4 @@
-import { SessionAddress } from '../../contracts/gateway.js';
+import { SessionAddress } from '../../shared/contracts/gateway.js';
 
 /**
  * Canonical identifier for a hosted WhatsApp session.

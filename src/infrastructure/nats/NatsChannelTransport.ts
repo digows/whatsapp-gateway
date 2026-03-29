@@ -1,13 +1,13 @@
 import {
   DeliveryResultEvent,
-  IncomingMessageEvent,
+  InboundEvent,
   OutgoingMessageCommand,
   ProviderId,
   SessionAddress,
   SessionStatusEvent,
   WorkerCommand,
   WorkerTransport,
-} from '../../contracts/gateway.js';
+} from '../../shared/contracts/gateway.js';
 import { Codec, JSONCodec, Subscription } from 'nats';
 import { NatsConnection } from './NatsConnection.js';
 import { NatsSubjectBuilder } from './NatsSubjectBuilder.js';
@@ -21,7 +21,7 @@ type OutgoingHandler = (command: OutgoingMessageCommand) => Promise<void>;
  */
 export class NatsChannelTransport implements WorkerTransport {
   private readonly workerCommandCodec = JSONCodec<WorkerCommand>();
-  private readonly incomingCodec = JSONCodec<IncomingMessageEvent>();
+  private readonly inboundCodec = JSONCodec<InboundEvent>();
   private readonly outgoingCodec = JSONCodec<OutgoingMessageCommand>();
   private readonly deliveryCodec = JSONCodec<DeliveryResultEvent>();
   private readonly sessionStatusCodec = JSONCodec<SessionStatusEvent>();
@@ -79,11 +79,11 @@ export class NatsChannelTransport implements WorkerTransport {
     this.outgoingSubscriptions.delete(sessionKey);
   }
 
-  public async publishIncoming(event: IncomingMessageEvent): Promise<void> {
+  public async publishInbound(event: InboundEvent): Promise<void> {
     const client = await NatsConnection.getClient();
     client.publish(
       this.getSessionSubject(event.session, 'incoming'),
-      this.incomingCodec.encode(event),
+      this.inboundCodec.encode(event),
     );
   }
 

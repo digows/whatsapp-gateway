@@ -1,4 +1,4 @@
-import { OutgoingMessageContent } from '../../../contracts/gateway.js';
+import { OutgoingMessageContent } from '../../../shared/contracts/gateway.js';
 
 export interface RateLimiterConfig {
   maxPerMinute: number;

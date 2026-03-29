@@ -1,5 +1,5 @@
 import { env } from '../../application/config/env.js';
-import { OutgoingMessageContent } from '../../contracts/gateway.js';
+import { OutgoingMessageContent } from '../../shared/contracts/gateway.js';
 import { SessionDescriptor } from '../entities/SessionDescriptor.js';
 import { IAntiBanWarmUpStateRepository } from '../repositories/IAntiBanWarmUpStateRepository.js';
 import { ContentVariator } from './antiban/ContentVariator.js';

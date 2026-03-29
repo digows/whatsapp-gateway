@@ -1,6 +1,6 @@
 import { env } from '../../application/config/env.js';
 import { renderConfigTemplate } from '../../application/config/renderConfigTemplate.js';
-import { SessionAddress } from '../../contracts/gateway.js';
+import { SessionAddress } from '../../shared/contracts/gateway.js';
 
 export class RedisKeyBuilder {
   public static getSessionLockKey(session: SessionAddress): string {

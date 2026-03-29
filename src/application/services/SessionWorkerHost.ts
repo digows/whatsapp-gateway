@@ -5,7 +5,7 @@ import {
   SessionStatus,
   WorkerCommand,
   WorkerTransport,
-} from '../../contracts/gateway.js';
+} from '../../shared/contracts/gateway.js';
 import { env } from '../config/env.js';
 import { CHANNEL_PROVIDER_ID } from '../config/provider.js';
 import { SessionDescriptor } from '../../domain/entities/SessionDescriptor.js';
@@ -155,8 +155,8 @@ export class SessionWorkerHost {
         env.SESSION_LOCK_TTL_MS,
       );
       const runtime = this.runtimeFactory(descriptor, {
-        onIncomingMessage: async event => {
-          await this.transport.publishIncoming(event);
+        onInboundEvent: async event => {
+          await this.transport.publishInbound(event);
         },
         onSessionStatus: async event => {
           await this.transport.publishSessionStatus({

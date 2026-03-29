@@ -1,5 +1,5 @@
 import { env } from '../../application/config/env.js';
-import { ProviderId } from '../../contracts/gateway.js';
+import { ProviderId } from '../../shared/contracts/gateway.js';
 import { WorkerHeartbeat } from '../../domain/entities/WorkerHeartbeat.js';
 import { WorkerIdentity } from '../../domain/entities/WorkerIdentity.js';
 import { RedisConnection } from './RedisConnection.js';

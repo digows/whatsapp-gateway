@@ -2,12 +2,15 @@ import makeWASocket, { DisconnectReason, proto } from 'baileys';
 import {
   DeliveryResultEvent,
   IncomingMessage,
-  IncomingMessageEvent,
+  InboundEvent,
+  MessageReactionEvent,
+  MessageReceivedEvent,
+  MessageUpdatedEvent,
   OutgoingMessageCommand,
   SessionRuntime,
   SessionRuntimeCallbacks,
   SessionStatusEvent,
-} from '../../contracts/gateway.js';
+} from '../../shared/contracts/gateway.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import qrcode from 'qrcode-terminal';
 import { env } from '../../application/config/env.js';
@@ -22,7 +25,7 @@ import { createBaileysLogger } from './BaileysLogger.js';
 import { BaileysMessageNormalizer } from './BaileysMessageNormalizer.js';
 
 export interface BaileysProviderCallbacks {
-  onIncomingMessage?: (event: IncomingMessageEvent) => Promise<void>;
+  onInboundEvent?: (event: InboundEvent) => Promise<void>;
   onSessionStatus?: (event: SessionStatusEvent) => Promise<void>;
 }
 
@@ -290,10 +293,14 @@ export class BaileysProvider implements SessionRuntime {
         continue;
       }
 
-      await this.callbacks.onIncomingMessage({
+      const inboundEvent: MessageReceivedEvent = {
+        eventType: 'message.received',
         session: this.session,
+        timestamp: normalized.timestamp,
         message: normalized,
-      });
+      };
+
+      await this.callbacks.onInboundEvent(inboundEvent);
     }
   }
 
@@ -315,7 +322,12 @@ export class BaileysProvider implements SessionRuntime {
         continue;
       }
 
-      const { chatLabel, senderLabel } = await this.describeMessageKey(key);
+      const messageId = key.id;
+      if (!messageId) {
+        continue;
+      }
+
+      const { chatId, senderId, chatLabel, senderLabel } = await this.describeMessageKey(key);
       const parts = [
         `chat=${chatLabel}`,
         `sender=${senderLabel}`,
@@ -339,6 +351,22 @@ export class BaileysProvider implements SessionRuntime {
       }
 
       console.log(`\n[MSG UPDATE] ${parts.join(' ')}`);
+
+      const inboundEvent: MessageUpdatedEvent = {
+        eventType: 'message.updated',
+        session: this.session,
+        timestamp: new Date().toISOString(),
+        messageId,
+        chatId,
+        senderId,
+        fromMe: Boolean(key.fromMe),
+        status: typeof status === 'number' ? status : undefined,
+        stubType: typeof stubType === 'number' ? stubType : undefined,
+        contentType: hasMessage ? this.describeMessageContentType(update.message) : undefined,
+        pollUpdateCount: pollUpdateCount > 0 ? pollUpdateCount : undefined,
+      };
+
+      await this.callbacks.onInboundEvent(inboundEvent);
     }
   }
 
@@ -349,11 +377,25 @@ export class BaileysProvider implements SessionRuntime {
         continue;
       }
 
-      const { chatLabel, senderLabel } = await this.describeMessageKey(key);
+      const { chatId, senderId, chatLabel, senderLabel } = await this.describeMessageKey(key);
       const reactionText = entry?.reaction?.text || 'removed';
       console.log(
         `\n[MSG REACTION] chat=${chatLabel} sender=${senderLabel} text=${reactionText}`,
       );
+
+      const inboundEvent: MessageReactionEvent = {
+        eventType: 'message.reaction',
+        session: this.session,
+        timestamp: new Date().toISOString(),
+        messageId: key.id || undefined,
+        chatId,
+        senderId,
+        fromMe: Boolean(key.fromMe),
+        reactionText: entry?.reaction?.text || undefined,
+        removed: !entry?.reaction?.text,
+      };
+
+      await this.callbacks.onInboundEvent(inboundEvent);
     }
   }
 
@@ -635,6 +677,8 @@ export class BaileysProvider implements SessionRuntime {
   }
 
   private async describeRawMessage(rawMessage: any): Promise<{
+    chatId: string;
+    senderId: string;
     chatLabel: string;
     senderLabel: string;
   }> {
@@ -648,6 +692,8 @@ export class BaileysProvider implements SessionRuntime {
     key: any,
     senderName?: string,
   ): Promise<{
+    chatId: string;
+    senderId: string;
     chatLabel: string;
     senderLabel: string;
   }> {
@@ -660,11 +706,16 @@ export class BaileysProvider implements SessionRuntime {
       ? await this.resolveJidToE164(rawChatId, key?.remoteJidAlt)
       : null;
 
+    const chatId = chatPhone || rawChatId || 'unknown';
+    const senderId = senderPhone || rawSenderId || 'unknown';
+
     return {
-      chatLabel: chatPhone || rawChatId || 'unknown',
+      chatId,
+      senderId,
+      chatLabel: chatId,
       senderLabel: senderName
         ? `${senderName}${senderPhone ? ` <${senderPhone}>` : ''}`
-        : senderPhone || rawSenderId || 'unknown',
+        : senderId,
     };
   }
 

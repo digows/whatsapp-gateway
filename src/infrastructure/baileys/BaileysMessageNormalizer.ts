@@ -1,7 +1,7 @@
 import {
   ChatType,
   IncomingMessage,
-} from '../../contracts/gateway.js';
+} from '../../shared/contracts/gateway.js';
 
 type ResolvePhoneFn = (
   jid: string | null | undefined,

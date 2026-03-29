@@ -1,7 +1,7 @@
 import {
   ProviderId,
   WorkerHeartbeatContract,
-} from '../../contracts/gateway.js';
+} from '../../shared/contracts/gateway.js';
 import { WorkerIdentity } from './WorkerIdentity.js';
 
 /**

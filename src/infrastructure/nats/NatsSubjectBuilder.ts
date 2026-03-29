@@ -1,6 +1,6 @@
 import { env } from '../../application/config/env.js';
 import { renderConfigTemplate } from '../../application/config/renderConfigTemplate.js';
-import { ProviderId, SessionAddress } from '../../contracts/gateway.js';
+import { ProviderId, SessionAddress } from '../../shared/contracts/gateway.js';
 
 export class NatsSubjectBuilder {
   public static getWorkerControlSubject(providerId: ProviderId, workerId: string): string {
