@@ -32,6 +32,33 @@ const envSchema = z.object({
   NATS_URL: z.string().default('nats://localhost:4222'),
 
   /**
+   * NATS subjects used by the worker runtime.
+   * Supported placeholders:
+   * {provider} {workerId} {workspaceId} {sessionId}
+   */
+  NATS_SUBJECT_CONTROL_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.worker.{workerId}.control'),
+  NATS_SUBJECT_INBOUND_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.incoming'),
+  NATS_SUBJECT_OUTBOUND_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.outgoing'),
+  NATS_SUBJECT_DELIVERY_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.delivery'),
+  NATS_SUBJECT_STATUS_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.status'),
+  NATS_SUBJECT_ACTIVATION_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.activation'),
+
+  /**
+   * Redis key namespace and templates.
+   * Supported placeholders:
+   * {prefix} {provider} {workerId} {workspaceId} {sessionId} {type} {id} {jid}
+   */
+  REDIS_KEY_PREFIX: z.string().default('wa'),
+  REDIS_KEY_SESSION_LOCK_TEMPLATE: z.string().default('{prefix}:{workspaceId}:lock:session:{sessionId}'),
+  REDIS_KEY_SESSION_WORKER_REGISTRY_TEMPLATE: z.string().default('{prefix}:{workspaceId}:registry:workers'),
+  REDIS_KEY_CLUSTER_ALIVE_TEMPLATE: z.string().default('{prefix}:cluster:alive:{workerId}'),
+  REDIS_KEY_CLUSTER_HEALTH_TEMPLATE: z.string().default('{prefix}:cluster:health'),
+  REDIS_KEY_AUTH_RECORD_TEMPLATE: z.string().default('{prefix}:{workspaceId}:auth:{sessionId}:{type}:{id}'),
+  REDIS_KEY_AUTH_SESSION_PATTERN_TEMPLATE: z.string().default('{prefix}:{workspaceId}:auth:{sessionId}:*'),
+  REDIS_KEY_LID_MAPPING_TEMPLATE: z.string().default('{prefix}:{workspaceId}:lid-mapping:{jid}'),
+  REDIS_KEY_ANTI_BAN_WARMUP_TEMPLATE: z.string().default('{prefix}:{provider}:{workspaceId}:antiban:warmup:{sessionId}'),
+
+  /**
    * Development-only bootstrap session used by src/dev.ts.
    */
   DEV_WORKSPACE_ID: z.coerce.number().default(1),

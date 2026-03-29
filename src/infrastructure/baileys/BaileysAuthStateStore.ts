@@ -7,6 +7,7 @@ import {
 } from 'baileys';
 import { Redis } from 'ioredis';
 import { ISignalKeyRepository } from '../../domain/repositories/ISignalKeyRepository.js';
+import { RedisKeyBuilder } from '../redis/RedisKeyBuilder.js';
 
 const JSON_PARSE_FAILED = Symbol('json-parse-failed');
 
@@ -51,7 +52,11 @@ export class BaileysAuthStateStore {
         keys: {
           get: async (type, ids) => {
             const result: SignalDataSet = {};
-            const cacheKeyPrefix = `wa:${this.workspaceId}:auth:${this.sessionId}:${type}:`;
+            const cacheKeyPrefix = RedisKeyBuilder.getAuthRecordKeyPrefix(
+              this.workspaceId,
+              this.sessionId,
+              type,
+            );
 
             const cachedValues = await this.redis.mget(
               ...ids.map(id => `${cacheKeyPrefix}${id}`),
@@ -106,7 +111,11 @@ export class BaileysAuthStateStore {
                 typeData,
               );
 
-              const cacheKeyPrefix = `wa:${this.workspaceId}:auth:${this.sessionId}:${type}:`;
+              const cacheKeyPrefix = RedisKeyBuilder.getAuthRecordKeyPrefix(
+                this.workspaceId,
+                this.sessionId,
+                type,
+              );
               for (const [id, value] of Object.entries(typeData)) {
                 if (value) {
                   await this.redis.setex(
@@ -127,7 +136,14 @@ export class BaileysAuthStateStore {
         await this.repository.saveKeys(this.workspaceId, this.sessionId, 'creds', {
           default: creds,
         });
-        await this.redis.del(`wa:${this.workspaceId}:auth:${this.sessionId}:creds:default`);
+        await this.redis.del(
+          RedisKeyBuilder.getAuthRecordKey(
+            this.workspaceId,
+            this.sessionId,
+            'creds',
+            'default',
+          ),
+        );
       },
     };
   }
@@ -139,7 +155,10 @@ export class BaileysAuthStateStore {
 
     await this.repository.removeAllKeys(this.workspaceId, this.sessionId);
 
-    const pattern = `wa:${this.workspaceId}:auth:${this.sessionId}:*`;
+    const pattern = RedisKeyBuilder.getAuthSessionPattern(
+      this.workspaceId,
+      this.sessionId,
+    );
     const keys = await this.redis.keys(pattern);
     if (keys.length > 0) {
       await this.redis.del(...keys);

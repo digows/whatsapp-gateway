@@ -16,6 +16,7 @@ import { AntiBanService } from '../../domain/services/AntiBanService.js';
 import { PgSignalKeyRepository } from '../pg/PgSignalKeyRepository.js';
 import { RedisAntiBanWarmUpStateRepository } from '../redis/RedisAntiBanWarmUpStateRepository.js';
 import { RedisConnection } from '../redis/RedisConnection.js';
+import { RedisKeyBuilder } from '../redis/RedisKeyBuilder.js';
 import { BaileysAuthStateStore } from './BaileysAuthStateStore.js';
 import { createBaileysLogger } from './BaileysLogger.js';
 import { BaileysMessageNormalizer } from './BaileysMessageNormalizer.js';
@@ -577,7 +578,10 @@ export class BaileysProvider implements SessionRuntime {
         const pn = jids.find((jid: string) => jid.includes('@s.whatsapp.net'));
 
         if (lid && pn) {
-          const redisKey = `wa:${this.session.workspaceId}:lid-mapping:${lid}`;
+          const redisKey = RedisKeyBuilder.getLidMappingKey(
+            this.session.workspaceId,
+            lid,
+          );
           await redis.setex(redisKey, 86400 * 30, pn);
         }
       }
@@ -614,7 +618,9 @@ export class BaileysProvider implements SessionRuntime {
     if (lidMatch) {
       try {
         const redis = RedisConnection.getClient();
-        const mappedPn = await redis.get(`wa:${this.session.workspaceId}:lid-mapping:${jid}`);
+        const mappedPn = await redis.get(
+          RedisKeyBuilder.getLidMappingKey(this.session.workspaceId, jid),
+        );
         if (mappedPn) {
           return this.resolveJidToE164(mappedPn);
         }

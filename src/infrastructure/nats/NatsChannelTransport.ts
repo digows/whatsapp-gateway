@@ -10,6 +10,7 @@ import {
 } from '../../contracts/gateway.js';
 import { Codec, JSONCodec, Subscription } from 'nats';
 import { NatsConnection } from './NatsConnection.js';
+import { NatsSubjectBuilder } from './NatsSubjectBuilder.js';
 
 type WorkerCommandHandler = (command: WorkerCommand) => Promise<void>;
 type OutgoingHandler = (command: OutgoingMessageCommand) => Promise<void>;
@@ -103,14 +104,20 @@ export class NatsChannelTransport implements WorkerTransport {
   }
 
   private getWorkerControlSubject(workerId: string): string {
-    return `jarvix.v1.channel.${this.providerId}.worker.${workerId}.control`;
+    return NatsSubjectBuilder.getWorkerControlSubject(this.providerId, workerId);
   }
 
   private getSessionSubject(
     session: SessionAddress,
     eventType: 'incoming' | 'outgoing' | 'delivery' | 'status',
   ): string {
-    return `jarvix.v1.channel.${this.providerId}.session.${session.workspaceId}.${session.sessionId}.${eventType}`;
+    return NatsSubjectBuilder.getSessionSubject(
+      {
+        ...session,
+        provider: this.providerId,
+      },
+      eventType,
+    );
   }
 
   private getSessionKey(session: SessionAddress): string {

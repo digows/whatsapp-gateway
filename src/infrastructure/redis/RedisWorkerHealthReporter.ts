@@ -3,6 +3,7 @@ import { ProviderId } from '../../contracts/gateway.js';
 import { WorkerHeartbeat } from '../../domain/entities/WorkerHeartbeat.js';
 import { WorkerIdentity } from '../../domain/entities/WorkerIdentity.js';
 import { RedisConnection } from './RedisConnection.js';
+import { RedisKeyBuilder } from './RedisKeyBuilder.js';
 
 /**
  * Redis adapter for the worker heartbeat registry consumed by the Control Plane.
@@ -37,8 +38,8 @@ export class RedisWorkerHealthReporter {
 
     const redis = RedisConnection.getCoordinationClient();
     try {
-      await redis.del(`wa:cluster:alive:${this.workerIdentity.id}`);
-      await redis.hdel('wa:cluster:health', this.workerIdentity.id);
+      await redis.del(RedisKeyBuilder.getClusterAliveKey(this.workerIdentity.id));
+      await redis.hdel(RedisKeyBuilder.getClusterHealthKey(), this.workerIdentity.id);
     } catch (error) {
       console.warn(`[HEALTH] Failed to clear health presence for ${this.workerIdentity.id}:`, error);
     }
@@ -56,11 +57,16 @@ export class RedisWorkerHealthReporter {
       );
 
       await redis.hset(
-        'wa:cluster:health',
+        RedisKeyBuilder.getClusterHealthKey(),
         this.workerIdentity.id,
         JSON.stringify(heartbeat.toRegistryPayload()),
       );
-      await redis.set(`wa:cluster:alive:${this.workerIdentity.id}`, '1', 'EX', 15);
+      await redis.set(
+        RedisKeyBuilder.getClusterAliveKey(this.workerIdentity.id),
+        '1',
+        'EX',
+        15,
+      );
     } catch (error) {
       console.error('[HEALTH] Failed to send heartbeat:', error);
     }

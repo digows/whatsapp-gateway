@@ -2,6 +2,7 @@ import { env } from '../../application/config/env.js';
 import { SessionDescriptor } from '../../domain/entities/SessionDescriptor.js';
 import { WorkerIdentity } from '../../domain/entities/WorkerIdentity.js';
 import { RedisConnection } from './RedisConnection.js';
+import { RedisKeyBuilder } from './RedisKeyBuilder.js';
 
 // @ts-ignore
 import RedlockModule from 'redlock';
@@ -49,7 +50,7 @@ export class RedisSessionCoordinator {
       };
     }
 
-    const lockKey = `wa:${session.workspaceId}:lock:session:${session.sessionId}`;
+    const lockKey = RedisKeyBuilder.getSessionLockKey(session);
     await this.clearOrphanedAssignment(session, lockKey);
 
     try {
@@ -94,7 +95,7 @@ export class RedisSessionCoordinator {
 
   public async getAssignedWorker(session: SessionDescriptor): Promise<string | null> {
     return this.redis.hget(
-      `wa:${session.workspaceId}:registry:workers`,
+      RedisKeyBuilder.getSessionWorkerRegistryKey(session),
       session.sessionId,
     );
   }
@@ -118,7 +119,7 @@ export class RedisSessionCoordinator {
     }
 
     await this.redis.hdel(
-      `wa:${session.workspaceId}:registry:workers`,
+      RedisKeyBuilder.getSessionWorkerRegistryKey(session),
       session.sessionId,
     );
     console.warn(
@@ -150,13 +151,13 @@ export class RedisSessionCoordinator {
   }
 
   private async isWorkerAlive(workerId: string): Promise<boolean> {
-    const exists = await this.redis.exists(`wa:cluster:alive:${workerId}`);
+    const exists = await this.redis.exists(RedisKeyBuilder.getClusterAliveKey(workerId));
     return exists === 1;
   }
 
   private async registerWorkerAssignment(session: SessionDescriptor): Promise<void> {
     await this.redis.hset(
-      `wa:${session.workspaceId}:registry:workers`,
+      RedisKeyBuilder.getSessionWorkerRegistryKey(session),
       session.sessionId,
       this.workerIdentity.id,
     );
@@ -167,7 +168,7 @@ export class RedisSessionCoordinator {
 
   private async unregisterWorkerAssignment(session: SessionDescriptor): Promise<void> {
     await this.redis.hdel(
-      `wa:${session.workspaceId}:registry:workers`,
+      RedisKeyBuilder.getSessionWorkerRegistryKey(session),
       session.sessionId,
     );
     console.log(

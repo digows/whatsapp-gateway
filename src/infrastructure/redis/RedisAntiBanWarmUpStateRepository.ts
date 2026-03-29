@@ -3,6 +3,7 @@ import { env } from '../../application/config/env.js';
 import { AntiBanWarmUpState } from '../../domain/entities/AntiBanWarmUpState.js';
 import { SessionDescriptor } from '../../domain/entities/SessionDescriptor.js';
 import { IAntiBanWarmUpStateRepository } from '../../domain/repositories/IAntiBanWarmUpStateRepository.js';
+import { RedisKeyBuilder } from './RedisKeyBuilder.js';
 
 export class RedisAntiBanWarmUpStateRepository implements IAntiBanWarmUpStateRepository {
   constructor(private readonly redis: Redis) {}
@@ -33,6 +34,6 @@ export class RedisAntiBanWarmUpStateRepository implements IAntiBanWarmUpStateRep
   }
 
   private getKey(session: SessionDescriptor): string {
-    return `wa:${session.provider}:${session.workspaceId}:antiban:warmup:${session.sessionId}`;
+    return RedisKeyBuilder.getAntiBanWarmUpKey(session);
   }
 }
