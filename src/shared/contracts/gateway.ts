@@ -47,10 +47,43 @@ export type IncomingMessage = {
   };
 };
 
-export type IncomingMessageEvent = {
+export type MessageReceivedEvent = {
+  eventType: 'message.received';
   session: SessionAddress;
+  timestamp: string;
   message: IncomingMessage;
 };
+
+export type MessageUpdatedEvent = {
+  eventType: 'message.updated';
+  session: SessionAddress;
+  timestamp: string;
+  messageId: string;
+  chatId: string;
+  senderId: string;
+  fromMe: boolean;
+  status?: number;
+  stubType?: number;
+  contentType?: string;
+  pollUpdateCount?: number;
+};
+
+export type MessageReactionEvent = {
+  eventType: 'message.reaction';
+  session: SessionAddress;
+  timestamp: string;
+  messageId?: string;
+  chatId: string;
+  senderId: string;
+  fromMe: boolean;
+  reactionText?: string;
+  removed: boolean;
+};
+
+export type InboundEvent =
+  | MessageReceivedEvent
+  | MessageUpdatedEvent
+  | MessageReactionEvent;
 
 export type OutgoingMessageCommand = {
   commandId: string;
@@ -97,7 +130,7 @@ export type WorkerCommand = {
 };
 
 export type SessionRuntimeCallbacks = {
-  onIncomingMessage: (event: IncomingMessageEvent) => Promise<void>;
+  onInboundEvent: (event: InboundEvent) => Promise<void>;
   onSessionStatus: (event: SessionStatusEvent) => Promise<void>;
 };
 
@@ -119,7 +152,7 @@ export type WorkerTransport = {
     handler: (command: OutgoingMessageCommand) => Promise<void>,
   ): Promise<void>;
   disconnectSession(session: SessionAddress): Promise<void>;
-  publishIncoming(event: IncomingMessageEvent): Promise<void>;
+  publishInbound(event: InboundEvent): Promise<void>;
   publishDelivery(event: DeliveryResultEvent): Promise<void>;
   publishSessionStatus(event: SessionStatusEvent): Promise<void>;
 };
