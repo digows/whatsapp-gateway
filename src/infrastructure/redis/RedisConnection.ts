@@ -43,7 +43,7 @@ export class RedisConnection {
     const client = new Redis(env.REDIS_URL, {
       maxRetriesPerRequest: 3,
       enableReadyCheck: true,
-      connectionName: `jarvix-whatsapp-provider:${role}`,
+      connectionName: `whatsapp-gateway:${env.CHANNEL_PROVIDER_ID}:${role}`,
     });
 
     client.on('error', err => {

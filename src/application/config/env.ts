@@ -20,7 +20,7 @@ const envSchema = z.object({
   /**
    * PostgreSQL connection string for persistent authentication state storage.
    */
-  POSTGRES_URL: z.string().url().default('postgresql://localhost:5432/jarvix'),
+  POSTGRES_URL: z.string().url().default('postgresql://localhost:5432/whatsapp_gateway'),
 
   /**
    * PostgreSQL Schema name for this provider.

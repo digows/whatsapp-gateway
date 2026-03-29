@@ -13,134 +13,39 @@ import {
 } from '../../domain/entities/messaging/InboundEvent.js';
 import { Message } from '../../domain/entities/messaging/Message.js';
 import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
-import { MessageContentType } from '../../domain/entities/messaging/MessageContentType.js';
+import {
+  MessageContentType,
+  parseMessageContentType,
+} from '../../domain/entities/messaging/MessageContentType.js';
 import { SendMessageCommand } from '../../domain/entities/messaging/SendMessageCommand.js';
 import {
   ChatType,
   MessageContext,
+  parseChatType,
 } from '../../domain/entities/messaging/MessageContext.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
-import {
-  SessionStatus,
-  SessionStatusEvent,
-} from '../../domain/entities/operational/SessionStatus.js';
+import { SessionStatusEvent } from '../../domain/entities/operational/SessionStatus.js';
 import {
   WorkerCommand,
-  WorkerCommandAction,
+  parseWorkerCommandAction,
 } from '../../domain/entities/operational/WorkerCommand.js';
 import { NatsConnection } from './NatsConnection.js';
 import { NatsSubjectBuilder } from './NatsSubjectBuilder.js';
-
-type SessionPayload = {
-  provider: string;
-  workspaceId: number;
-  sessionId: string;
-};
-
-type MessageContentPayload = {
-  type: string;
-  text?: string;
-  mediaUrl?: string;
-  fileName?: string;
-};
-
-type MessageContextPayload = {
-  chatType: string;
-  remoteJid: string;
-  participantId?: string;
-  senderPhone?: string;
-};
-
-type MessagePayload = {
-  chatId: string;
-  timestamp: string;
-  content: MessageContentPayload;
-  messageId?: string;
-  senderId?: string;
-  participantId?: string;
-  context?: MessageContextPayload;
-};
-
-type SendMessageCommandPayload = {
-  commandId: string;
-  session: SessionPayload;
-  message: MessagePayload;
-};
-
-type WorkerCommandPayload = {
-  commandId: string;
-  action: string;
-  session: SessionPayload;
-};
-
-type SessionStatusPayload = {
-  session: SessionPayload;
-  workerId?: string;
-  status: string;
-  reason?: string;
-  timestamp: string;
-};
-
-type DeliveryResultPayload = {
-  commandId: string;
-  session: SessionPayload;
-  recipientId: string;
-  status: string;
-  providerMessageId?: string;
-  reason?: string;
-  timestamp: string;
-};
-
-type ReceivedMessageEventPayload = {
-  eventType: InboundEventType.MessageReceived;
-  session: SessionPayload;
-  timestamp: string;
-  message: MessagePayload;
-};
-
-type MessageUpdatedEventPayload = {
-  eventType: InboundEventType.MessageUpdated;
-  session: SessionPayload;
-  timestamp: string;
-  messageId: string;
-  chatId: string;
-  senderId: string;
-  fromMe: boolean;
-  status?: number;
-  stubType?: number;
-  contentType?: string;
-  pollUpdateCount?: number;
-};
-
-type MessageReactionEventPayload = {
-  eventType: InboundEventType.MessageReaction;
-  session: SessionPayload;
-  timestamp: string;
-  messageId?: string;
-  chatId: string;
-  senderId: string;
-  fromMe: boolean;
-  reactionText?: string;
-  removed: boolean;
-};
-
-type InboundEventPayload =
-  | ReceivedMessageEventPayload
-  | MessageUpdatedEventPayload
-  | MessageReactionEventPayload;
 
 type WorkerCommandHandler = (command: WorkerCommand) => Promise<void>;
 type OutgoingHandler = (command: SendMessageCommand) => Promise<void>;
 
 /**
  * NATS implementation of the worker transport contract.
+ * The wire format is parsed explicitly so invalid broker payloads never become
+ * invalid domain entities by unchecked casts.
  */
 export class NatsChannelTransport implements WorkerTransport {
-  private readonly workerCommandCodec = JSONCodec<WorkerCommandPayload>();
-  private readonly inboundCodec = JSONCodec<InboundEventPayload>();
-  private readonly outgoingCodec = JSONCodec<SendMessageCommandPayload>();
-  private readonly deliveryCodec = JSONCodec<DeliveryResultPayload>();
-  private readonly sessionStatusCodec = JSONCodec<SessionStatusPayload>();
+  private readonly workerCommandCodec = JSONCodec<unknown>();
+  private readonly inboundCodec = JSONCodec<unknown>();
+  private readonly outgoingCodec = JSONCodec<unknown>();
+  private readonly deliveryCodec = JSONCodec<unknown>();
+  private readonly sessionStatusCodec = JSONCodec<unknown>();
 
   private workerSubscription?: Subscription;
   private readonly outgoingSubscriptions = new Map<string, Subscription>();
@@ -178,7 +83,7 @@ export class NatsChannelTransport implements WorkerTransport {
     void this.consume(
       subscription,
       this.workerCommandCodec,
-      payload => handler(this.mapWorkerCommand(payload)),
+      payload => handler(this.parseWorkerCommand(payload)),
       '[NATS] Failed to process worker command:',
     );
   }
@@ -199,7 +104,7 @@ export class NatsChannelTransport implements WorkerTransport {
     void this.consume(
       subscription,
       this.outgoingCodec,
-      payload => handler(this.mapSendMessageCommand(payload)),
+      payload => handler(this.parseSendMessageCommand(payload)),
       '[NATS] Failed to process outbound command:',
     );
   }
@@ -214,7 +119,7 @@ export class NatsChannelTransport implements WorkerTransport {
     const client = await NatsConnection.getClient();
     client.publish(
       NatsSubjectBuilder.getSessionSubject(event.session, 'incoming'),
-      this.inboundCodec.encode(this.mapInboundEventPayload(event)),
+      this.inboundCodec.encode(this.serializeInboundEvent(event)),
     );
   }
 
@@ -224,7 +129,7 @@ export class NatsChannelTransport implements WorkerTransport {
       NatsSubjectBuilder.getSessionSubject(event.session, 'delivery'),
       this.deliveryCodec.encode({
         commandId: event.commandId,
-        session: this.mapSessionPayload(event.session),
+        session: this.serializeSession(event.session),
         recipientId: event.recipientId,
         status: event.status,
         providerMessageId: event.providerMessageId,
@@ -239,7 +144,7 @@ export class NatsChannelTransport implements WorkerTransport {
     client.publish(
       NatsSubjectBuilder.getSessionSubject(event.session, 'status'),
       this.sessionStatusCodec.encode({
-        session: this.mapSessionPayload(event.session),
+        session: this.serializeSession(event.session),
         workerId: event.workerId,
         status: event.status,
         reason: event.reason,
@@ -248,20 +153,20 @@ export class NatsChannelTransport implements WorkerTransport {
     );
   }
 
-  private mapInboundEventPayload(event: InboundEvent): InboundEventPayload {
+  private serializeInboundEvent(event: InboundEvent): Record<string, unknown> {
     if (event instanceof ReceivedMessageEvent) {
       return {
         eventType: event.eventType,
-        session: this.mapSessionPayload(event.session),
+        session: this.serializeSession(event.session),
         timestamp: event.timestamp,
-        message: this.mapMessagePayload(event.message),
+        message: this.serializeMessage(event.message),
       };
     }
 
     if (event instanceof MessageUpdatedEvent) {
       return {
         eventType: event.eventType,
-        session: this.mapSessionPayload(event.session),
+        session: this.serializeSession(event.session),
         timestamp: event.timestamp,
         messageId: event.messageId,
         chatId: event.chatId,
@@ -276,7 +181,7 @@ export class NatsChannelTransport implements WorkerTransport {
 
     return {
       eventType: event.eventType,
-      session: this.mapSessionPayload(event.session),
+      session: this.serializeSession(event.session),
       timestamp: event.timestamp,
       messageId: event.messageId,
       chatId: event.chatId,
@@ -287,27 +192,34 @@ export class NatsChannelTransport implements WorkerTransport {
     };
   }
 
-  private mapWorkerCommand(payload: WorkerCommandPayload): WorkerCommand {
+  private parseWorkerCommand(payload: unknown): WorkerCommand {
+    const payloadRecord = this.requireRecord(payload, 'worker command');
     return new WorkerCommand(
-      payload.commandId,
-      payload.action as WorkerCommandAction,
-      this.mapSession(payload.session),
+      this.readRequiredString(payloadRecord, 'commandId', 'worker command'),
+      parseWorkerCommandAction(this.readRequiredString(payloadRecord, 'action', 'worker command')),
+      this.parseSession(payloadRecord.session, 'worker command session'),
     );
   }
 
-  private mapSendMessageCommand(payload: SendMessageCommandPayload): SendMessageCommand {
+  private parseSendMessageCommand(payload: unknown): SendMessageCommand {
+    const payloadRecord = this.requireRecord(payload, 'outgoing command');
     return new SendMessageCommand(
-      payload.commandId,
-      this.mapSession(payload.session),
-      this.mapMessage(payload.message),
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      this.parseMessage(payloadRecord.message, 'outgoing command message'),
     );
   }
 
-  private mapSession(payload: SessionPayload): SessionReference {
-    return new SessionReference(payload.provider, payload.workspaceId, payload.sessionId);
+  private parseSession(payload: unknown, label: string): SessionReference {
+    const payloadRecord = this.requireRecord(payload, label);
+    return new SessionReference(
+      this.readRequiredString(payloadRecord, 'provider', label),
+      this.readRequiredNumber(payloadRecord, 'workspaceId', label),
+      this.readRequiredString(payloadRecord, 'sessionId', label),
+    );
   }
 
-  private mapSessionPayload(session: SessionReference): SessionPayload {
+  private serializeSession(session: SessionReference): Record<string, unknown> {
     return {
       provider: session.provider,
       workspaceId: session.workspaceId,
@@ -315,30 +227,28 @@ export class NatsChannelTransport implements WorkerTransport {
     };
   }
 
-  private mapMessage(payload: MessagePayload): Message {
+  private parseMessage(payload: unknown, label: string): Message {
+    const payloadRecord = this.requireRecord(payload, label);
+    const rawContext = payloadRecord.context;
+
     return new Message(
-      payload.chatId,
-      payload.timestamp,
-      this.mapMessageContent(payload.content),
-      payload.messageId,
-      payload.senderId,
-      payload.participantId,
-      payload.context
-        ? new MessageContext(
-            payload.context.chatType as ChatType,
-            payload.context.remoteJid,
-            payload.context.participantId,
-            payload.context.senderPhone,
-          )
-        : undefined,
+      this.readRequiredString(payloadRecord, 'chatId', label),
+      this.readRequiredString(payloadRecord, 'timestamp', label),
+      this.parseMessageContent(payloadRecord.content, `${label} content`),
+      this.readOptionalString(payloadRecord, 'messageId', label),
+      this.readOptionalString(payloadRecord, 'senderId', label),
+      this.readOptionalString(payloadRecord, 'participantId', label),
+      rawContext === undefined
+        ? undefined
+        : this.parseMessageContext(rawContext, `${label} context`),
     );
   }
 
-  private mapMessagePayload(message: Message): MessagePayload {
+  private serializeMessage(message: Message): Record<string, unknown> {
     return {
       chatId: message.chatId,
       timestamp: message.timestamp,
-      content: this.mapMessageContentPayload(message.content),
+      content: this.serializeMessageContent(message.content),
       messageId: message.messageId,
       senderId: message.senderId,
       participantId: message.participantId,
@@ -353,22 +263,88 @@ export class NatsChannelTransport implements WorkerTransport {
     };
   }
 
-  private mapMessageContent(payload: MessageContentPayload): MessageContent {
-    return new MessageContent(
-      payload.type as MessageContentType,
-      payload.text,
-      payload.mediaUrl,
-      payload.fileName,
+  private parseMessageContext(payload: unknown, label: string): MessageContext {
+    const payloadRecord = this.requireRecord(payload, label);
+    return new MessageContext(
+      parseChatType(this.readRequiredString(payloadRecord, 'chatType', label)),
+      this.readRequiredString(payloadRecord, 'remoteJid', label),
+      this.readOptionalString(payloadRecord, 'participantId', label),
+      this.readOptionalString(payloadRecord, 'senderPhone', label),
     );
   }
 
-  private mapMessageContentPayload(content: MessageContent): MessageContentPayload {
+  private parseMessageContent(payload: unknown, label: string): MessageContent {
+    const payloadRecord = this.requireRecord(payload, label);
+    return new MessageContent(
+      parseMessageContentType(this.readRequiredString(payloadRecord, 'type', label)),
+      this.readOptionalString(payloadRecord, 'text', label),
+      this.readOptionalString(payloadRecord, 'mediaUrl', label),
+      this.readOptionalString(payloadRecord, 'fileName', label),
+    );
+  }
+
+  private serializeMessageContent(content: MessageContent): Record<string, unknown> {
     return {
       type: content.type,
       text: content.text,
       mediaUrl: content.mediaUrl,
       fileName: content.fileName,
     };
+  }
+
+  private requireRecord(value: unknown, label: string): Record<string, unknown> {
+    if (!this.isRecord(value)) {
+      throw new Error(`${label} must be an object.`);
+    }
+
+    return value;
+  }
+
+  private readRequiredString(
+    source: Record<string, unknown>,
+    key: string,
+    label: string,
+  ): string {
+    const value = source[key];
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new Error(`${label}.${key} must be a non-empty string.`);
+    }
+
+    return value;
+  }
+
+  private readOptionalString(
+    source: Record<string, unknown>,
+    key: string,
+    label: string,
+  ): string | undefined {
+    const value = source[key];
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    if (typeof value !== 'string') {
+      throw new Error(`${label}.${key} must be a string when provided.`);
+    }
+
+    return value;
+  }
+
+  private readRequiredNumber(
+    source: Record<string, unknown>,
+    key: string,
+    label: string,
+  ): number {
+    const value = source[key];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error(`${label}.${key} must be a finite number.`);
+    }
+
+    return value;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 
   private async consume<T>(

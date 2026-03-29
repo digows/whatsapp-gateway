@@ -81,8 +81,8 @@ export class BaileysProvider implements SessionRuntime {
     this.sock = makeWASocket({
       auth: state,
       agent: this.proxyAgent,
-      fetchAgent: this.proxyAgent as any,
-      logger: createBaileysLogger() as any,
+      fetchAgent: this.proxyAgent,
+      logger: createBaileysLogger(),
       syncFullHistory: false,
     });
 
@@ -156,7 +156,7 @@ export class BaileysProvider implements SessionRuntime {
       );
     } finally {
       if (decision.content.type === MessageContentType.Text && !isGroup && this.sock) {
-        await this.sock.sendPresenceUpdate('paused' as any, recipientJid).catch(() => {});
+        await this.sock.sendPresenceUpdate('paused', recipientJid).catch(() => {});
       }
     }
   }
@@ -220,8 +220,8 @@ export class BaileysProvider implements SessionRuntime {
       return;
     }
 
-    const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-    const errorMsg = (lastDisconnect?.error as any)?.message || '';
+    const statusCode = this.extractDisconnectStatusCode(lastDisconnect?.error);
+    const errorMsg = this.extractErrorMessage(lastDisconnect?.error);
     const isIntentional =
       this.isStopping
       || errorMsg.includes('Intentional Logout')
@@ -596,7 +596,7 @@ export class BaileysProvider implements SessionRuntime {
           fileName: content.fileName ?? content.text ?? 'document',
         };
       default:
-        throw new Error(`Unsupported outbound content type: ${(content as any).type}`);
+        throw new Error(`Unsupported outbound content type: ${String(content.type)}`);
     }
   }
 
@@ -731,12 +731,41 @@ export class BaileysProvider implements SessionRuntime {
   private describeMessageContentType(message: any): string {
     const content = this.unwrapMessage(message);
 
-    if (!content || typeof content !== 'object') {
+    if (!this.isRecord(content)) {
       return 'unknown';
     }
 
-    const contentKeys = Object.keys(content).filter(key => Boolean((content as any)[key]));
+    const contentKeys = Object.keys(content).filter(key => Boolean(content[key]));
     return contentKeys[0] ?? 'unknown';
+  }
+
+  private extractDisconnectStatusCode(error: unknown): number | undefined {
+    if (!this.isRecord(error)) {
+      return undefined;
+    }
+
+    const output = error.output;
+    if (!this.isRecord(output) || typeof output.statusCode !== 'number') {
+      return undefined;
+    }
+
+    return output.statusCode;
+  }
+
+  private extractErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    if (this.isRecord(error) && typeof error.message === 'string') {
+      return error.message;
+    }
+
+    return '';
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 
   private buildDebugContentSuffix(

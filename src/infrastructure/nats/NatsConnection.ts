@@ -4,7 +4,7 @@ import { env } from '../../application/config/env.js';
 export class NatsConnection {
   private static instance: CoreNatsConnection | null = null;
   private static isConnecting = false;
-  private static connectionName = 'jarvix-whatsapp-provider';
+  private static connectionName = `whatsapp-gateway:${env.CHANNEL_PROVIDER_ID}`;
 
   public static async connect(name = this.connectionName): Promise<CoreNatsConnection> {
     if (this.instance) {

@@ -378,7 +378,7 @@ export class SessionWorkerHost {
       return;
     }
 
-    console.warn(`[HOST] Unknown worker command action ${(command as any).action}.`);
+    console.warn(`[HOST] Unknown worker command action ${command.action}.`);
   };
 
   private async publishSessionStatus(

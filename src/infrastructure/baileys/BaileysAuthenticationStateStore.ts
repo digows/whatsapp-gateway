@@ -3,12 +3,14 @@ import {
   BufferJSON,
   initAuthCreds,
   SignalDataSet,
+  SignalDataTypeMap,
   proto,
 } from 'baileys';
 import { Redis } from 'ioredis';
 import { AuthenticationStateKey } from '../../domain/entities/authentication/AuthenticationStateKey.js';
 import { AuthenticationStateQuery } from '../../domain/entities/authentication/AuthenticationStateQuery.js';
 import { AuthenticationStateRecord } from '../../domain/entities/authentication/AuthenticationStateRecord.js';
+import { AuthenticationStateType } from '../../domain/entities/authentication/AuthenticationStateType.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { SignalKeyRepository } from '../../domain/repositories/authentication/SignalKeyRepository.js';
 import { RedisKeyBuilder } from '../redis/RedisKeyBuilder.js';
@@ -20,7 +22,6 @@ const JSON_PARSE_FAILED = Symbol('json-parse-failed');
  */
 export class BaileysAuthenticationStateStore {
   private readonly cacheTtlSeconds = 3600;
-  private readonly binaryKeyTypes = new Set(['sender-key', 'identity-key']);
 
   constructor(
     private readonly session: SessionReference,
@@ -33,11 +34,18 @@ export class BaileysAuthenticationStateStore {
     saveCreds: () => Promise<void>;
   }> {
     let credentials: any;
-    const credentialsQuery = new AuthenticationStateQuery(this.session, 'creds', ['default']);
+    const credentialsQuery = new AuthenticationStateQuery(
+      this.session,
+      AuthenticationStateType.Credentials,
+      ['default'],
+    );
     const credentialRecords = await this.repository.findByQuery(credentialsQuery);
 
     if (credentialRecords.length > 0) {
-      credentials = this.deserializeStoredValue('creds', credentialRecords[0].serializedData);
+      credentials = this.deserializeStoredValue(
+        AuthenticationStateType.Credentials,
+        credentialRecords[0].serializedData,
+      );
     } else {
       console.log(
         `[AUTH] No persistent credentials found for ${this.session.toLogLabel()}. Initializing new state.`,
@@ -49,9 +57,13 @@ export class BaileysAuthenticationStateStore {
       state: {
         creds: credentials,
         keys: {
-          get: async (type, ids) => {
-            const result: SignalDataSet = {};
-            const cacheKeyPrefix = RedisKeyBuilder.getAuthenticationRecordKeyPrefix(this.session, type);
+          get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
+            const result: { [id: string]: SignalDataTypeMap[T] } = {};
+            const authenticationStateType = AuthenticationStateType.fromValue(type);
+            const cacheKeyPrefix = RedisKeyBuilder.getAuthenticationRecordKeyPrefix(
+              this.session,
+              authenticationStateType,
+            );
 
             const cachedValues = await this.redis.mget(
               ...ids.map(id => `${cacheKeyPrefix}${id}`),
@@ -62,7 +74,11 @@ export class BaileysAuthenticationStateStore {
               const id = ids[index];
               const cached = cachedValues[index];
               if (cached) {
-                (result as any)[id] = this.deserializeStoredValue(type, cached);
+                Reflect.set(
+                  result,
+                  id,
+                  this.deserializeStoredValue(authenticationStateType, cached),
+                );
               } else {
                 missingIds.push(id);
               }
@@ -70,40 +86,42 @@ export class BaileysAuthenticationStateStore {
 
             if (missingIds.length > 0) {
               const records = await this.repository.findByQuery(
-                new AuthenticationStateQuery(this.session, type, missingIds),
+                new AuthenticationStateQuery(this.session, authenticationStateType, missingIds),
               );
 
               for (const record of records) {
-                const parsed = this.deserializeStoredValue(type, record.serializedData);
-                (result as any)[record.key.id] = parsed;
+                const parsed = this.deserializeStoredValue(record.key.type, record.serializedData);
+                Reflect.set(result, record.key.id, parsed);
 
                 await this.redis.setex(
                   `${cacheKeyPrefix}${record.key.id}`,
                   this.cacheTtlSeconds,
-                  this.serializeCacheValue(type, record.serializedData),
+                  this.serializeCacheValue(record.key.type, record.serializedData),
                 );
               }
             }
 
-            return result as any;
+            return result;
           },
           set: async data => {
             const recordsToSave: AuthenticationStateRecord[] = [];
 
-            for (const [type, rawTypeData] of Object.entries(
-              data as Record<string, Record<string, unknown> | undefined>,
-            )) {
+            for (const [type, rawTypeData] of Object.entries(data)) {
               if (!rawTypeData) {
                 continue;
               }
 
-              const cacheKeyPrefix = RedisKeyBuilder.getAuthenticationRecordKeyPrefix(this.session, type);
+              const authenticationStateType = AuthenticationStateType.fromValue(type);
+              const cacheKeyPrefix = RedisKeyBuilder.getAuthenticationRecordKeyPrefix(
+                this.session,
+                authenticationStateType,
+              );
               for (const [id, value] of Object.entries(rawTypeData)) {
                 if (value) {
                   recordsToSave.push(
                     new AuthenticationStateRecord(
                       this.session,
-                      new AuthenticationStateKey(type, id),
+                      new AuthenticationStateKey(authenticationStateType, id),
                       value,
                     ),
                   );
@@ -111,14 +129,14 @@ export class BaileysAuthenticationStateStore {
                   await this.redis.setex(
                     `${cacheKeyPrefix}${id}`,
                     this.cacheTtlSeconds,
-                    this.serializeCacheValue(type, value),
+                    this.serializeCacheValue(authenticationStateType, value),
                   );
                   continue;
                 }
 
                 await this.redis.del(`${cacheKeyPrefix}${id}`);
                 await this.repository.removeByQuery(
-                  new AuthenticationStateQuery(this.session, type, [id]),
+                  new AuthenticationStateQuery(this.session, authenticationStateType, [id]),
                 );
               }
             }
@@ -130,7 +148,10 @@ export class BaileysAuthenticationStateStore {
         },
       },
       saveCreds: async () => {
-        const credentialsKey = new AuthenticationStateKey('creds', 'default');
+        const credentialsKey = new AuthenticationStateKey(
+          AuthenticationStateType.Credentials,
+          'default',
+        );
         await this.repository.save([
           new AuthenticationStateRecord(this.session, credentialsKey, credentials),
         ]);
@@ -153,14 +174,14 @@ export class BaileysAuthenticationStateStore {
     }
   }
 
-  private deserializeStoredValue(type: string, data: unknown): unknown {
-    if (this.binaryKeyTypes.has(type)) {
+  private deserializeStoredValue(type: AuthenticationStateType, data: unknown): unknown {
+    if (type.isBinary()) {
       return this.deserializeBinaryValue(data);
     }
 
     const parsed = this.deserializeStructuredValue(data);
-    if (type === 'app-state-sync-key' && parsed) {
-      return proto.Message.AppStateSyncKeyData.fromObject(parsed as any);
+    if (type.isAppStateSyncKey() && this.isRecord(parsed)) {
+      return proto.Message.AppStateSyncKeyData.fromObject(parsed);
     }
 
     return parsed;
@@ -232,8 +253,8 @@ export class BaileysAuthenticationStateStore {
     return current;
   }
 
-  private serializeCacheValue(type: string, value: unknown): string {
-    if (this.binaryKeyTypes.has(type)) {
+  private serializeCacheValue(type: AuthenticationStateType, value: unknown): string {
+    if (type.isBinary()) {
       const binary = this.deserializeBinaryValue(value);
       return JSON.stringify(binary, BufferJSON.replacer);
     }
@@ -255,5 +276,9 @@ export class BaileysAuthenticationStateStore {
     } catch {
       return JSON_PARSE_FAILED;
     }
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 }

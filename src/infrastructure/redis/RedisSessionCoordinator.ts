@@ -3,11 +3,7 @@ import { SessionReference } from '../../domain/entities/operational/SessionRefer
 import { WorkerIdentity } from '../../domain/entities/operational/WorkerIdentity.js';
 import { RedisConnection } from './RedisConnection.js';
 import { RedisKeyBuilder } from './RedisKeyBuilder.js';
-
-// @ts-ignore
-import RedlockModule from 'redlock';
-
-const Redlock = (RedlockModule as any).default || RedlockModule;
+import Redlock from 'redlock';
 
 export interface SessionLease {
   session: SessionReference;
@@ -20,7 +16,7 @@ export interface SessionLease {
  */
 export class RedisSessionCoordinator {
   private readonly redis = RedisConnection.getCoordinationClient();
-  private readonly redlock: any;
+  private readonly redlock: Redlock;
 
   constructor(private readonly workerIdentity: WorkerIdentity) {
     this.redlock = new Redlock([this.redis], {

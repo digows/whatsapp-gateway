@@ -1,3 +1,4 @@
+import { AuthenticationStateType } from './AuthenticationStateType.js';
 import { SessionReference } from '../operational/SessionReference.js';
 
 /**
@@ -6,11 +7,7 @@ import { SessionReference } from '../operational/SessionReference.js';
 export class AuthenticationStateQuery {
   constructor(
     public readonly session: SessionReference,
-    public readonly keyType: string,
+    public readonly keyType: AuthenticationStateType,
     public readonly keyIds: readonly string[],
-  ) {
-    if (!keyType.trim()) {
-      throw new Error('AuthenticationStateQuery requires a non-empty key type.');
-    }
-  }
+  ) {}
 }

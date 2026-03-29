@@ -4,6 +4,7 @@ import { env } from '../../application/config/env.js';
 import { AuthenticationStateKey } from '../../domain/entities/authentication/AuthenticationStateKey.js';
 import { AuthenticationStateQuery } from '../../domain/entities/authentication/AuthenticationStateQuery.js';
 import { AuthenticationStateRecord } from '../../domain/entities/authentication/AuthenticationStateRecord.js';
+import { AuthenticationStateType } from '../../domain/entities/authentication/AuthenticationStateType.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { PgConnection } from './PgConnection.js';
 
@@ -13,7 +14,6 @@ import { PgConnection } from './PgConnection.js';
  */
 export class PgSignalKeyRepository implements SignalKeyRepository {
   private readonly pool = PgConnection.getPool();
-  private readonly binaryKeyTypes = new Set(['sender-key', 'identity-key']);
 
   public async findByQuery(query: AuthenticationStateQuery): Promise<AuthenticationStateRecord[]> {
     if (query.keyIds.length === 0) {
@@ -31,7 +31,7 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
         `SELECT key_id as "keyId", serialized_data as "serializedData"
          FROM "${env.DB_SCHEMA}".authorization_keys
          WHERE session_id = $1 AND key_type = $2 AND key_id = ANY($3)`,
-        [query.session.sessionId, query.keyType, query.keyIds],
+        [query.session.sessionId, query.keyType.value, query.keyIds],
       );
 
       await client.query('COMMIT');
@@ -84,7 +84,7 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
       await client.query(
         `DELETE FROM "${env.DB_SCHEMA}".authorization_keys
          WHERE session_id = $1 AND key_type = $2 AND key_id = ANY($3)`,
-        [query.session.sessionId, query.keyType, query.keyIds],
+        [query.session.sessionId, query.keyType.value, query.keyIds],
       );
 
       await client.query('COMMIT');
@@ -139,7 +139,7 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
           [
             record.session.workspaceId,
             record.session.sessionId,
-            record.key.type,
+            record.key.type.value,
             record.key.id,
             this.serializeForPersistence(record.key.type, record.serializedData),
           ],
@@ -155,12 +155,12 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
     }
   }
 
-  private serializeForPersistence(type: string, value: unknown): string | Buffer {
+  private serializeForPersistence(type: AuthenticationStateType, value: unknown): string | Buffer {
     if (typeof value === 'string' || Buffer.isBuffer(value)) {
       return value;
     }
 
-    if (this.binaryKeyTypes.has(type) && value instanceof Uint8Array) {
+    if (type.isBinary() && value instanceof Uint8Array) {
       return Buffer.from(value);
     }
 
