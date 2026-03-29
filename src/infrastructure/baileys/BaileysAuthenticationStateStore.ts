@@ -1,19 +1,12 @@
-import {
-  AuthenticationState,
-  BufferJSON,
-  initAuthCreds,
-  SignalDataSet,
-  SignalDataTypeMap,
-  proto,
-} from 'baileys';
-import { Redis } from 'ioredis';
-import { AuthenticationStateKey } from '../../domain/entities/authentication/AuthenticationStateKey.js';
-import { AuthenticationStateQuery } from '../../domain/entities/authentication/AuthenticationStateQuery.js';
-import { AuthenticationStateRecord } from '../../domain/entities/authentication/AuthenticationStateRecord.js';
-import { AuthenticationStateType } from '../../domain/entities/authentication/AuthenticationStateType.js';
-import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
-import { SignalKeyRepository } from '../../domain/repositories/authentication/SignalKeyRepository.js';
-import { RedisKeyBuilder } from '../redis/RedisKeyBuilder.js';
+import {AuthenticationState, BufferJSON, initAuthCreds, proto, SignalDataTypeMap,} from 'baileys';
+import {Redis} from 'ioredis';
+import {AuthenticationStateKey} from '../../domain/entities/authentication/AuthenticationStateKey.js';
+import {AuthenticationStateQuery} from '../../domain/entities/authentication/AuthenticationStateQuery.js';
+import {AuthenticationStateRecord} from '../../domain/entities/authentication/AuthenticationStateRecord.js';
+import {AuthenticationStateType} from '../../domain/entities/authentication/AuthenticationStateType.js';
+import {SessionReference} from '../../domain/entities/operational/SessionReference.js';
+import {SignalKeyRepository} from '../../domain/repositories/authentication/SignalKeyRepository.js';
+import {RedisKeyBuilder} from '../redis/RedisKeyBuilder.js';
 
 const JSON_PARSE_FAILED = Symbol('json-parse-failed');
 

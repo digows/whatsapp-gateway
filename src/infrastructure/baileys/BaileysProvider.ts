@@ -1,4 +1,17 @@
 import makeWASocket, { DisconnectReason, proto } from 'baileys';
+import {
+  ActivationCommand,
+  ActivationCommandAction,
+} from '../../domain/entities/activation/ActivationCommand.js';
+import {
+  ActivationCancelledEvent,
+  ActivationCompletedEvent,
+  ActivationFailedEvent,
+  ActivationPairingCodeUpdatedEvent,
+  ActivationQrCodeUpdatedEvent,
+  ActivationStartedEvent,
+} from '../../domain/entities/activation/ActivationEvent.js';
+import { ActivationMode } from '../../domain/entities/activation/ActivationMode.js';
 import { DeliveryResult, DeliveryStatus } from '../../domain/entities/messaging/DeliveryResult.js';
 import {
   MessageReactionEvent,
@@ -27,6 +40,16 @@ import { BaileysAuthenticationStateStore } from './BaileysAuthenticationStateSto
 import { createBaileysLogger } from './BaileysLogger.js';
 import { BaileysMessageNormalizer } from './BaileysMessageNormalizer.js';
 
+interface ActiveActivation {
+  commandId: string;
+  correlationId: string;
+  activationId: string;
+  mode: ActivationMode;
+  phoneNumber?: string;
+  qrSequence: number;
+  pairingCodeSequence: number;
+}
+
 /**
  * Single-session Baileys runtime.
  * It owns the WhatsApp socket, auth state, message normalization and anti-ban behavior.
@@ -35,7 +58,10 @@ export class BaileysProvider implements SessionRuntime {
   private sock: ReturnType<typeof makeWASocket> | null = null;
   private reconnectTimer?: NodeJS.Timeout;
   private isStopping = false;
+  private isConnected = false;
   private readonly loggedCiphertextIssues = new Set<string>();
+  private activeActivation?: ActiveActivation;
+  private latestQrCode?: string;
 
   private readonly proxyAgent?: HttpsProxyAgent<string>;
   private readonly antiBan: AntiBanService;
@@ -91,6 +117,12 @@ export class BaileysProvider implements SessionRuntime {
 
   public async stop(): Promise<void> {
     this.isStopping = true;
+    this.isConnected = false;
+
+    if (this.activeActivation) {
+      await this.publishActivationCancelled(this.activeActivation, 'session_stopped');
+      this.activeActivation = undefined;
+    }
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -101,6 +133,15 @@ export class BaileysProvider implements SessionRuntime {
       this.sock.end(new Error('Intentional Shutdown'));
       this.sock = null;
     }
+  }
+
+  public async handleActivationCommand(command: ActivationCommand): Promise<void> {
+    if (command.action === ActivationCommandAction.Start) {
+      await this.startActivation(command);
+      return;
+    }
+
+    await this.cancelActivation(command);
   }
 
   public async send(command: SendMessageCommand): Promise<DeliveryResult> {
@@ -203,15 +244,28 @@ export class BaileysProvider implements SessionRuntime {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      this.latestQrCode = qr;
       console.log(
         `\n[QR CODE] Scan below to connect WhatsApp for ${this.session.toLogLabel()}:`,
       );
       qrcode.generate(qr, { small: true });
+
+      if (this.activeActivation?.mode === ActivationMode.QrCode) {
+        await this.publishCurrentQrCode(this.activeActivation);
+      }
     }
 
     if (connection === 'open') {
+      this.isConnected = true;
+      this.latestQrCode = undefined;
       console.log(`[BaileysProvider] Connection opened for ${this.session.toLogLabel()}.`);
       this.antiBan.onReconnect();
+
+      if (this.activeActivation) {
+        await this.publishActivationCompleted(this.activeActivation);
+        this.activeActivation = undefined;
+      }
+
       await this.publishStatus(SessionStatus.Connected);
       return;
     }
@@ -234,6 +288,7 @@ export class BaileysProvider implements SessionRuntime {
     );
 
     this.antiBan.onDisconnect(statusCode);
+    this.isConnected = false;
     this.sock = null;
 
     if (statusCode === DisconnectReason.loggedOut && !isIntentional) {
@@ -254,11 +309,108 @@ export class BaileysProvider implements SessionRuntime {
 
     this.isStopping = false;
     if (!isIntentional) {
+      if (this.activeActivation) {
+        await this.publishActivationFailed(
+          this.activeActivation,
+          `disconnect:${statusCode ?? 'unknown'}`,
+        );
+        this.activeActivation = undefined;
+      }
       await this.publishStatus(SessionStatus.Failed, `disconnect:${statusCode}`);
     }
     console.log(
       `[BaileysProvider] ${this.session.toLogLabel()} stopped (${isIntentional ? 'requested' : 'logged out'}).`,
     );
+  }
+
+  private async startActivation(command: ActivationCommand): Promise<void> {
+    const activation = this.createActiveActivation(command);
+    this.activeActivation = activation;
+
+    await this.callbacks.onActivationEvent(
+      new ActivationStartedEvent(
+        activation.commandId,
+        activation.correlationId,
+        activation.activationId,
+        this.session,
+        new Date().toISOString(),
+        activation.mode,
+        activation.phoneNumber,
+      ),
+    );
+
+    await this.start();
+
+    if (!this.isCurrentActivation(activation)) {
+      return;
+    }
+
+    if (this.isConnected) {
+      await this.publishActivationCompleted(activation);
+      if (this.isCurrentActivation(activation)) {
+        this.activeActivation = undefined;
+      }
+      return;
+    }
+
+    if (activation.mode === ActivationMode.QrCode) {
+      await this.publishCurrentQrCode(activation);
+      return;
+    }
+
+    if (!this.sock) {
+      await this.publishActivationFailed(activation, 'activation socket unavailable');
+      if (this.isCurrentActivation(activation)) {
+        this.activeActivation = undefined;
+      }
+      return;
+    }
+
+    try {
+      const pairingCode = await this.sock.requestPairingCode(
+        this.normalizePhoneNumberForPairingCode(activation.phoneNumber ?? ''),
+        command.customPairingCode,
+      );
+
+      if (!this.isCurrentActivation(activation)) {
+        return;
+      }
+
+      activation.pairingCodeSequence += 1;
+      await this.callbacks.onActivationEvent(
+        new ActivationPairingCodeUpdatedEvent(
+          activation.commandId,
+          activation.correlationId,
+          activation.activationId,
+          this.session,
+          new Date().toISOString(),
+          pairingCode,
+          activation.pairingCodeSequence,
+          activation.phoneNumber,
+        ),
+      );
+    } catch (error) {
+      await this.publishActivationFailed(
+        activation,
+        error instanceof Error ? error.message : String(error),
+      );
+
+      if (this.isCurrentActivation(activation)) {
+        this.activeActivation = undefined;
+      }
+    }
+  }
+
+  private async cancelActivation(command: ActivationCommand): Promise<void> {
+    const activation = this.isCurrentActivationById(command.activationId)
+      ? this.activeActivation!
+      : this.createActiveActivation(command);
+
+    await this.publishActivationCancelled(activation, 'cancelled_by_command');
+
+    if (this.isCurrentActivation(activation)) {
+      this.activeActivation = undefined;
+    }
   }
 
   private async handleMessagesUpsert(event: any): Promise<void> {
@@ -648,6 +800,15 @@ export class BaileysProvider implements SessionRuntime {
     return `+${digits}`;
   }
 
+  private normalizePhoneNumberForPairingCode(phoneNumber: string): string {
+    const digits = phoneNumber.replace(/\D/g, '');
+    if (!digits) {
+      throw new Error('Pairing code activation requires a numeric phone number.');
+    }
+
+    return digits;
+  }
+
   private async resolveJidToE164(
     jid: string | null | undefined,
     altJid?: string | null,
@@ -737,6 +898,90 @@ export class BaileysProvider implements SessionRuntime {
 
     const contentKeys = Object.keys(content).filter(key => Boolean(content[key]));
     return contentKeys[0] ?? 'unknown';
+  }
+
+  private createActiveActivation(command: ActivationCommand): ActiveActivation {
+    return {
+      commandId: command.commandId,
+      correlationId: command.correlationId,
+      activationId: command.activationId,
+      mode: command.mode ?? ActivationMode.QrCode,
+      phoneNumber: command.phoneNumber,
+      qrSequence: 0,
+      pairingCodeSequence: 0,
+    };
+  }
+
+  private isCurrentActivation(activation: ActiveActivation): boolean {
+    return this.activeActivation?.activationId === activation.activationId;
+  }
+
+  private isCurrentActivationById(activationId: string): boolean {
+    return this.activeActivation?.activationId === activationId;
+  }
+
+  private async publishCurrentQrCode(activation: ActiveActivation): Promise<void> {
+    if (!this.latestQrCode || !this.isCurrentActivation(activation)) {
+      return;
+    }
+
+    activation.qrSequence += 1;
+    await this.callbacks.onActivationEvent(
+      new ActivationQrCodeUpdatedEvent(
+        activation.commandId,
+        activation.correlationId,
+        activation.activationId,
+        this.session,
+        new Date().toISOString(),
+        this.latestQrCode,
+        activation.qrSequence,
+      ),
+    );
+  }
+
+  private async publishActivationCompleted(activation: ActiveActivation): Promise<void> {
+    await this.callbacks.onActivationEvent(
+      new ActivationCompletedEvent(
+        activation.commandId,
+        activation.correlationId,
+        activation.activationId,
+        this.session,
+        new Date().toISOString(),
+        activation.mode,
+      ),
+    );
+  }
+
+  private async publishActivationFailed(
+    activation: ActiveActivation,
+    reason: string,
+  ): Promise<void> {
+    await this.callbacks.onActivationEvent(
+      new ActivationFailedEvent(
+        activation.commandId,
+        activation.correlationId,
+        activation.activationId,
+        this.session,
+        new Date().toISOString(),
+        reason,
+      ),
+    );
+  }
+
+  private async publishActivationCancelled(
+    activation: ActiveActivation,
+    reason: string,
+  ): Promise<void> {
+    await this.callbacks.onActivationEvent(
+      new ActivationCancelledEvent(
+        activation.commandId,
+        activation.correlationId,
+        activation.activationId,
+        this.session,
+        new Date().toISOString(),
+        reason,
+      ),
+    );
   }
 
   private extractDisconnectStatusCode(error: unknown): number | undefined {

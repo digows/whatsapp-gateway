@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {
+  ActivationCommand,
+  ActivationCommandAction,
+  parseActivationCommandAction,
+} from '../src/domain/entities/activation/ActivationCommand.js';
+import { ActivationMode, parseActivationMode } from '../src/domain/entities/activation/ActivationMode.js';
 import { AuthenticationStateType } from '../src/domain/entities/authentication/AuthenticationStateType.js';
 import { parseMessageContentType } from '../src/domain/entities/messaging/MessageContentType.js';
 import { parseChatType } from '../src/domain/entities/messaging/MessageContext.js';
@@ -67,4 +73,45 @@ test('AuthenticationStateType centralizes known key kinds', () => {
     AuthenticationStateType.fromValue('future-baileys-type').value,
     'future-baileys-type',
   );
+});
+
+test('activation domain validates commands and parses supported values', () => {
+  const session = new SessionReference('whatsapp-web', 9, 'activation-a');
+
+  assert.equal(parseActivationCommandAction('start'), ActivationCommandAction.Start);
+  assert.equal(parseActivationMode('pairing_code'), ActivationMode.PairingCode);
+
+  const command = new ActivationCommand(
+    'cmd-activation-1',
+    'corr-activation-1',
+    'act-activation-1',
+    session,
+    ActivationCommandAction.Start,
+    ActivationMode.PairingCode,
+    '+5511999999999',
+  );
+
+  assert.equal(command.mode, ActivationMode.PairingCode);
+  assert.equal(command.phoneNumber, '+5511999999999');
+
+  assert.throws(() => {
+    new ActivationCommand(
+      'cmd-activation-2',
+      'corr-activation-2',
+      'act-activation-2',
+      session,
+      ActivationCommandAction.Start,
+    );
+  }, /requires an activation mode/);
+
+  assert.throws(() => {
+    new ActivationCommand(
+      'cmd-activation-3',
+      'corr-activation-3',
+      'act-activation-3',
+      session,
+      ActivationCommandAction.Start,
+      ActivationMode.PairingCode,
+    );
+  }, /requires a phoneNumber/);
 });

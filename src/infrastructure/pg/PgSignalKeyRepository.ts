@@ -1,12 +1,12 @@
-import { BufferJSON } from 'baileys';
-import { SignalKeyRepository } from '../../domain/repositories/authentication/SignalKeyRepository.js';
-import { env } from '../../application/config/env.js';
-import { AuthenticationStateKey } from '../../domain/entities/authentication/AuthenticationStateKey.js';
-import { AuthenticationStateQuery } from '../../domain/entities/authentication/AuthenticationStateQuery.js';
-import { AuthenticationStateRecord } from '../../domain/entities/authentication/AuthenticationStateRecord.js';
-import { AuthenticationStateType } from '../../domain/entities/authentication/AuthenticationStateType.js';
-import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
-import { PgConnection } from './PgConnection.js';
+import {BufferJSON} from 'baileys';
+import {SignalKeyRepository} from '../../domain/repositories/authentication/SignalKeyRepository.js';
+import {env} from '../../application/config/env.js';
+import {AuthenticationStateKey} from '../../domain/entities/authentication/AuthenticationStateKey.js';
+import {AuthenticationStateQuery} from '../../domain/entities/authentication/AuthenticationStateQuery.js';
+import {AuthenticationStateRecord} from '../../domain/entities/authentication/AuthenticationStateRecord.js';
+import {AuthenticationStateType} from '../../domain/entities/authentication/AuthenticationStateType.js';
+import {SessionReference} from '../../domain/entities/operational/SessionReference.js';
+import {PgConnection} from './PgConnection.js';
 
 /**
  * PostgreSQL implementation of the signal key repository.

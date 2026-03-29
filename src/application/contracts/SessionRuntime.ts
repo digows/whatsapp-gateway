@@ -1,3 +1,5 @@
+import { ActivationCommand } from '../../domain/entities/activation/ActivationCommand.js';
+import { ActivationEvent } from '../../domain/entities/activation/ActivationEvent.js';
 import { InboundEvent } from '../../domain/entities/messaging/InboundEvent.js';
 import { DeliveryResult } from '../../domain/entities/messaging/DeliveryResult.js';
 import { SendMessageCommand } from '../../domain/entities/messaging/SendMessageCommand.js';
@@ -7,6 +9,7 @@ import { SessionStatusEvent } from '../../domain/entities/operational/SessionSta
  * Callback contract implemented by the application service that hosts a session runtime.
  */
 export interface SessionRuntimeCallbacks {
+  onActivationEvent(event: ActivationEvent): Promise<void>;
   onInboundEvent(event: InboundEvent): Promise<void>;
   onSessionStatus(event: SessionStatusEvent): Promise<void>;
 }
@@ -18,5 +21,6 @@ export interface SessionRuntimeCallbacks {
 export interface SessionRuntime {
   start(): Promise<void>;
   stop(): Promise<void>;
+  handleActivationCommand(command: ActivationCommand): Promise<void>;
   send(command: SendMessageCommand): Promise<DeliveryResult>;
 }

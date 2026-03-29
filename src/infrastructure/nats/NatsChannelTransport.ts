@@ -1,39 +1,48 @@
 import { Codec, JSONCodec, Subscription } from 'nats';
 import { WorkerTransport } from '../../application/contracts/WorkerTransport.js';
 import {
+  ActivationCommand,
+  ActivationCommandAction,
+  parseActivationCommandAction,
+} from '../../domain/entities/activation/ActivationCommand.js';
+import {
+  ActivationCancelledEvent,
+  ActivationCompletedEvent,
+  ActivationEvent,
+  ActivationExpiredEvent,
+  ActivationFailedEvent,
+  ActivationPairingCodeUpdatedEvent,
+  ActivationQrCodeUpdatedEvent,
+  ActivationStartedEvent,
+} from '../../domain/entities/activation/ActivationEvent.js';
+import {
+  ActivationMode,
+  parseActivationMode,
+} from '../../domain/entities/activation/ActivationMode.js';
+import {
   DeliveryResult,
   DeliveryStatus,
 } from '../../domain/entities/messaging/DeliveryResult.js';
 import {
   InboundEvent,
-  InboundEventType,
   MessageReactionEvent,
   MessageUpdatedEvent,
   ReceivedMessageEvent,
 } from '../../domain/entities/messaging/InboundEvent.js';
 import { Message } from '../../domain/entities/messaging/Message.js';
 import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
-import {
-  MessageContentType,
-  parseMessageContentType,
-} from '../../domain/entities/messaging/MessageContentType.js';
+import { parseMessageContentType } from '../../domain/entities/messaging/MessageContentType.js';
 import { SendMessageCommand } from '../../domain/entities/messaging/SendMessageCommand.js';
-import {
-  ChatType,
-  MessageContext,
-  parseChatType,
-} from '../../domain/entities/messaging/MessageContext.js';
+import { MessageContext, parseChatType } from '../../domain/entities/messaging/MessageContext.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { SessionStatusEvent } from '../../domain/entities/operational/SessionStatus.js';
-import {
-  WorkerCommand,
-  parseWorkerCommandAction,
-} from '../../domain/entities/operational/WorkerCommand.js';
+import { WorkerCommand, parseWorkerCommandAction } from '../../domain/entities/operational/WorkerCommand.js';
 import { NatsConnection } from './NatsConnection.js';
 import { NatsSubjectBuilder } from './NatsSubjectBuilder.js';
 
 type WorkerCommandHandler = (command: WorkerCommand) => Promise<void>;
 type OutgoingHandler = (command: SendMessageCommand) => Promise<void>;
+type ActivationHandler = (command: ActivationCommand) => Promise<void>;
 
 /**
  * NATS implementation of the worker transport contract.
@@ -42,13 +51,15 @@ type OutgoingHandler = (command: SendMessageCommand) => Promise<void>;
  */
 export class NatsChannelTransport implements WorkerTransport {
   private readonly workerCommandCodec = JSONCodec<unknown>();
+  private readonly outboundCodec = JSONCodec<unknown>();
+  private readonly activationCodec = JSONCodec<unknown>();
   private readonly inboundCodec = JSONCodec<unknown>();
-  private readonly outgoingCodec = JSONCodec<unknown>();
   private readonly deliveryCodec = JSONCodec<unknown>();
   private readonly sessionStatusCodec = JSONCodec<unknown>();
 
   private workerSubscription?: Subscription;
-  private readonly outgoingSubscriptions = new Map<string, Subscription>();
+  private readonly outboundSubscriptions = new Map<string, Subscription>();
+  private readonly activationSubscriptions = new Map<string, Subscription>();
 
   constructor(private readonly providerId: string) {}
 
@@ -60,11 +71,16 @@ export class NatsChannelTransport implements WorkerTransport {
     this.workerSubscription?.unsubscribe();
     this.workerSubscription = undefined;
 
-    for (const subscription of this.outgoingSubscriptions.values()) {
+    for (const subscription of this.outboundSubscriptions.values()) {
       subscription.unsubscribe();
     }
 
-    this.outgoingSubscriptions.clear();
+    for (const subscription of this.activationSubscriptions.values()) {
+      subscription.unsubscribe();
+    }
+
+    this.outboundSubscriptions.clear();
+    this.activationSubscriptions.clear();
     await NatsConnection.close();
   }
 
@@ -95,24 +111,61 @@ export class NatsChannelTransport implements WorkerTransport {
     const client = await NatsConnection.getClient();
     const sessionKey = session.toKey();
 
-    this.outgoingSubscriptions.get(sessionKey)?.unsubscribe();
+    this.outboundSubscriptions.get(sessionKey)?.unsubscribe();
     const subscription = client.subscribe(
       NatsSubjectBuilder.getSessionSubject(session, 'outgoing'),
     );
-    this.outgoingSubscriptions.set(sessionKey, subscription);
+    this.outboundSubscriptions.set(sessionKey, subscription);
 
     void this.consume(
       subscription,
-      this.outgoingCodec,
+      this.outboundCodec,
       payload => handler(this.parseSendMessageCommand(payload)),
       '[NATS] Failed to process outbound command:',
     );
   }
 
+  public async subscribeActivation(
+    session: SessionReference,
+    handler: ActivationHandler,
+  ): Promise<void> {
+    const client = await NatsConnection.getClient();
+    const sessionKey = session.toKey();
+
+    this.activationSubscriptions.get(sessionKey)?.unsubscribe();
+    const subscription = client.subscribe(
+      NatsSubjectBuilder.getActivationSubject(session),
+    );
+    this.activationSubscriptions.set(sessionKey, subscription);
+
+    void this.consume(
+      subscription,
+      this.activationCodec,
+      async payload => {
+        if (!this.isActivationCommandPayload(payload)) {
+          return;
+        }
+
+        await handler(this.parseActivationCommand(payload));
+      },
+      '[NATS] Failed to process activation command:',
+    );
+  }
+
   public async disconnectSession(session: SessionReference): Promise<void> {
     const sessionKey = session.toKey();
-    this.outgoingSubscriptions.get(sessionKey)?.unsubscribe();
-    this.outgoingSubscriptions.delete(sessionKey);
+    this.outboundSubscriptions.get(sessionKey)?.unsubscribe();
+    this.outboundSubscriptions.delete(sessionKey);
+    this.activationSubscriptions.get(sessionKey)?.unsubscribe();
+    this.activationSubscriptions.delete(sessionKey);
+  }
+
+  public async publishActivation(event: ActivationEvent): Promise<void> {
+    const client = await NatsConnection.getClient();
+    client.publish(
+      NatsSubjectBuilder.getActivationSubject(event.session),
+      this.activationCodec.encode(this.serializeActivationEvent(event)),
+    );
   }
 
   public async publishInbound(event: InboundEvent): Promise<void> {
@@ -151,6 +204,71 @@ export class NatsChannelTransport implements WorkerTransport {
         timestamp: event.timestamp,
       }),
     );
+  }
+
+  private serializeActivationEvent(event: ActivationEvent): Record<string, unknown> {
+    const basePayload = {
+      eventType: event.eventType,
+      commandId: event.commandId,
+      correlationId: event.correlationId,
+      activationId: event.activationId,
+      session: this.serializeSession(event.session),
+      timestamp: event.timestamp,
+    };
+
+    if (event instanceof ActivationStartedEvent) {
+      return {
+        ...basePayload,
+        mode: event.mode,
+        phoneNumber: event.phoneNumber,
+      };
+    }
+
+    if (event instanceof ActivationQrCodeUpdatedEvent) {
+      return {
+        ...basePayload,
+        qrCode: event.qrCode,
+        sequence: event.sequence,
+        expiresAt: event.expiresAt,
+      };
+    }
+
+    if (event instanceof ActivationPairingCodeUpdatedEvent) {
+      return {
+        ...basePayload,
+        pairingCode: event.pairingCode,
+        sequence: event.sequence,
+        phoneNumber: event.phoneNumber,
+        expiresAt: event.expiresAt,
+      };
+    }
+
+    if (event instanceof ActivationCompletedEvent) {
+      return {
+        ...basePayload,
+        mode: event.mode,
+      };
+    }
+
+    if (event instanceof ActivationFailedEvent) {
+      return {
+        ...basePayload,
+        reason: event.reason,
+        retryable: event.retryable,
+      };
+    }
+
+    if (event instanceof ActivationExpiredEvent) {
+      return {
+        ...basePayload,
+        reason: event.reason,
+      };
+    }
+
+    return {
+      ...basePayload,
+      reason: event.reason,
+    };
   }
 
   private serializeInboundEvent(event: InboundEvent): Record<string, unknown> {
@@ -208,6 +326,30 @@ export class NatsChannelTransport implements WorkerTransport {
       this.parseSession(payloadRecord.session, 'outgoing command session'),
       this.parseMessage(payloadRecord.message, 'outgoing command message'),
     );
+  }
+
+  private parseActivationCommand(payload: unknown): ActivationCommand {
+    const payloadRecord = this.requireRecord(payload, 'activation command');
+    const action = parseActivationCommandAction(
+      this.readRequiredString(payloadRecord, 'action', 'activation command'),
+    );
+    const rawMode = this.readOptionalString(payloadRecord, 'mode', 'activation command');
+    const mode = rawMode ? parseActivationMode(rawMode) : undefined;
+
+    return new ActivationCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'activation command'),
+      this.readRequiredString(payloadRecord, 'correlationId', 'activation command'),
+      this.readRequiredString(payloadRecord, 'activationId', 'activation command'),
+      this.parseSession(payloadRecord.session, 'activation command session'),
+      action,
+      mode,
+      this.readOptionalString(payloadRecord, 'phoneNumber', 'activation command'),
+      this.readOptionalString(payloadRecord, 'customPairingCode', 'activation command'),
+    );
+  }
+
+  private isActivationCommandPayload(payload: unknown): boolean {
+    return this.isRecord(payload) && typeof payload.action === 'string';
   }
 
   private parseSession(payload: unknown, label: string): SessionReference {

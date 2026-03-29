@@ -1,6 +1,7 @@
 import { env } from '../config/env.js';
 import { SessionRuntime, SessionRuntimeCallbacks } from '../contracts/SessionRuntime.js';
 import { WorkerTransport } from '../contracts/WorkerTransport.js';
+import { ActivationMessaging } from './ActivationMessaging.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import {
   SessionStatus,
@@ -50,6 +51,7 @@ export class SessionWorkerHost {
   private readonly providerId: string;
   private readonly workerIdentity: WorkerIdentity;
   private readonly transport: WorkerTransport;
+  private readonly activationMessaging: ActivationMessaging;
   private readonly runtimeFactory: SessionRuntimeFactory;
   private readonly sessionCoordinator: RedisSessionCoordinator;
   private readonly healthReporter: RedisWorkerHealthReporter;
@@ -64,6 +66,7 @@ export class SessionWorkerHost {
     this.providerId = options.providerId ?? env.CHANNEL_PROVIDER_ID;
     this.workerIdentity = options.workerIdentity ?? WorkerIdentity.current();
     this.transport = options.transport ?? new NatsChannelTransport(this.providerId);
+    this.activationMessaging = new ActivationMessaging(this.transport);
     this.runtimeFactory = options.runtimeFactory
       ?? ((session, callbacks) => new BaileysProvider(session, callbacks));
     this.sessionCoordinator = new RedisSessionCoordinator(this.workerIdentity);
@@ -131,6 +134,9 @@ export class SessionWorkerHost {
         env.SESSION_LOCK_TTL_MS,
       );
       const runtime = this.runtimeFactory(session, {
+        onActivationEvent: async event => {
+          await this.activationMessaging.publish(event);
+        },
         onInboundEvent: async event => {
           await this.transport.publishInbound(event);
         },
@@ -168,6 +174,15 @@ export class SessionWorkerHost {
 
         const result = await currentSession.runtime.send(command);
         await this.transport.publishDelivery(result);
+      });
+
+      await this.activationMessaging.subscribe(session, async command => {
+        const currentSession = this.sessions.get(sessionKey);
+        if (!currentSession) {
+          throw new Error(`Session ${session.toLogLabel()} is no longer hosted.`);
+        }
+
+        await currentSession.runtime.handleActivationCommand(command);
       });
 
       hostedSession.lockHeartbeat = this.startLockHeartbeat(hostedSession);
