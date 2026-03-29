@@ -1,9 +1,9 @@
-import { ChannelSessionAddress } from '@jarvix/ts-channel-provider';
+import { SessionAddress } from '../../contracts/gateway.js';
 
 /**
  * Canonical identifier for a hosted WhatsApp session.
  */
-export class SessionDescriptor implements ChannelSessionAddress {
+export class SessionDescriptor implements SessionAddress {
   constructor(
     public readonly provider: string,
     public readonly workspaceId: number,

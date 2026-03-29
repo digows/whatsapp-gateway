@@ -1,16 +1,16 @@
 {
   "name": "whatsapp-web-provider",
   "version": "1.0.0",
-  "description": "Jarvix WhatsApp Web provider using Baileys",
+  "description": "WhatsApp gateway worker using Baileys",
   "type": "module",
   "scripts": {
     "start": "node dist/index.js",
     "build": "tsc -b",
     "clean": "tsc -b --clean",
-    "dev": "tsx watch src/dev.ts"
+    "dev": "tsx watch src/dev.ts",
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
-    "@jarvix/ts-channel-provider": "file:../../../sdks/ts-channel-provider",
     "baileys": "github:digows/baileys",
     "dotenv": "^16.4.5",
     "https-proxy-agent": "^7.0.4",

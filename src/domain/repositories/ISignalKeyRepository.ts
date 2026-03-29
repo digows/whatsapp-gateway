@@ -1,8 +1,5 @@
-import { AuthStateRecord } from '../entities/AuthStateRecord.js';
-
 /**
  * Repository enforcing the Data Access pattern for Baileys Signal Keys.
- * Prefix 'I' following Jarvix coding standards.
  */
 export interface ISignalKeyRepository {
   /**

@@ -1,34 +1,34 @@
 import {
-  ChannelDeliveryResultEvent,
-  ChannelIncomingMessageEvent,
-  ChannelOutgoingMessageCommand,
-  ChannelProviderId,
-  ChannelSessionAddress,
-  ChannelSessionStatusEvent,
-  ChannelWorkerCommand,
-  IChannelWorkerTransport,
-} from '@jarvix/ts-channel-provider';
+  DeliveryResultEvent,
+  IncomingMessageEvent,
+  OutgoingMessageCommand,
+  ProviderId,
+  SessionAddress,
+  SessionStatusEvent,
+  WorkerCommand,
+  WorkerTransport,
+} from '../../contracts/gateway.js';
 import { Codec, JSONCodec, Subscription } from 'nats';
 import { NatsConnection } from './NatsConnection.js';
 
-type WorkerCommandHandler = (command: ChannelWorkerCommand) => Promise<void>;
-type OutgoingHandler = (command: ChannelOutgoingMessageCommand) => Promise<void>;
+type WorkerCommandHandler = (command: WorkerCommand) => Promise<void>;
+type OutgoingHandler = (command: OutgoingMessageCommand) => Promise<void>;
 
 /**
  * NATS implementation of the shared channel transport contract.
  * Subjects are versioned to keep wire evolution explicit from day one.
  */
-export class NatsChannelTransport implements IChannelWorkerTransport {
-  private readonly workerCommandCodec = JSONCodec<ChannelWorkerCommand>();
-  private readonly incomingCodec = JSONCodec<ChannelIncomingMessageEvent>();
-  private readonly outgoingCodec = JSONCodec<ChannelOutgoingMessageCommand>();
-  private readonly deliveryCodec = JSONCodec<ChannelDeliveryResultEvent>();
-  private readonly sessionStatusCodec = JSONCodec<ChannelSessionStatusEvent>();
+export class NatsChannelTransport implements WorkerTransport {
+  private readonly workerCommandCodec = JSONCodec<WorkerCommand>();
+  private readonly incomingCodec = JSONCodec<IncomingMessageEvent>();
+  private readonly outgoingCodec = JSONCodec<OutgoingMessageCommand>();
+  private readonly deliveryCodec = JSONCodec<DeliveryResultEvent>();
+  private readonly sessionStatusCodec = JSONCodec<SessionStatusEvent>();
 
   private workerSubscription?: Subscription;
   private readonly outgoingSubscriptions = new Map<string, Subscription>();
 
-  constructor(private readonly providerId: ChannelProviderId) {}
+  constructor(private readonly providerId: ProviderId) {}
 
   public async connect(): Promise<void> {
     await NatsConnection.getClient();
@@ -59,7 +59,7 @@ export class NatsChannelTransport implements IChannelWorkerTransport {
   }
 
   public async subscribeOutgoing(
-    session: ChannelSessionAddress,
+    session: SessionAddress,
     handler: OutgoingHandler,
   ): Promise<void> {
     const client = await NatsConnection.getClient();
@@ -72,13 +72,13 @@ export class NatsChannelTransport implements IChannelWorkerTransport {
     void this.consume(subscription, this.outgoingCodec, handler, '[NATS] Failed to process outbound command:');
   }
 
-  public async disconnectSession(session: ChannelSessionAddress): Promise<void> {
+  public async disconnectSession(session: SessionAddress): Promise<void> {
     const sessionKey = this.getSessionKey(session);
     this.outgoingSubscriptions.get(sessionKey)?.unsubscribe();
     this.outgoingSubscriptions.delete(sessionKey);
   }
 
-  public async publishIncoming(event: ChannelIncomingMessageEvent): Promise<void> {
+  public async publishIncoming(event: IncomingMessageEvent): Promise<void> {
     const client = await NatsConnection.getClient();
     client.publish(
       this.getSessionSubject(event.session, 'incoming'),
@@ -86,7 +86,7 @@ export class NatsChannelTransport implements IChannelWorkerTransport {
     );
   }
 
-  public async publishDelivery(event: ChannelDeliveryResultEvent): Promise<void> {
+  public async publishDelivery(event: DeliveryResultEvent): Promise<void> {
     const client = await NatsConnection.getClient();
     client.publish(
       this.getSessionSubject(event.session, 'delivery'),
@@ -94,7 +94,7 @@ export class NatsChannelTransport implements IChannelWorkerTransport {
     );
   }
 
-  public async publishSessionStatus(event: ChannelSessionStatusEvent): Promise<void> {
+  public async publishSessionStatus(event: SessionStatusEvent): Promise<void> {
     const client = await NatsConnection.getClient();
     client.publish(
       this.getSessionSubject(event.session, 'status'),
@@ -107,13 +107,13 @@ export class NatsChannelTransport implements IChannelWorkerTransport {
   }
 
   private getSessionSubject(
-    session: ChannelSessionAddress,
+    session: SessionAddress,
     eventType: 'incoming' | 'outgoing' | 'delivery' | 'status',
   ): string {
     return `jarvix.v1.channel.${this.providerId}.session.${session.workspaceId}.${session.sessionId}.${eventType}`;
   }
 
-  private getSessionKey(session: ChannelSessionAddress): string {
+  private getSessionKey(session: SessionAddress): string {
     return `${session.provider}:${session.workspaceId}:${session.sessionId}`;
   }
 

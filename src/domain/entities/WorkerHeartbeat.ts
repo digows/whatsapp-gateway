@@ -1,7 +1,7 @@
 import {
-  ChannelProviderId,
-  ChannelWorkerHeartbeat,
-} from '@jarvix/ts-channel-provider';
+  ProviderId,
+  WorkerHeartbeatContract,
+} from '../../contracts/gateway.js';
 import { WorkerIdentity } from './WorkerIdentity.js';
 
 /**
@@ -9,7 +9,7 @@ import { WorkerIdentity } from './WorkerIdentity.js';
  */
 export class WorkerHeartbeat {
   public static capture(
-    provider: ChannelProviderId,
+    provider: ProviderId,
     workerIdentity: WorkerIdentity,
     currentSessions: number,
     maxCapacity: number,
@@ -26,7 +26,7 @@ export class WorkerHeartbeat {
   }
 
   private constructor(
-    public readonly provider: ChannelProviderId,
+    public readonly provider: ProviderId,
     public readonly workerId: string,
     public readonly currentSessions: number,
     public readonly maxCapacity: number,
@@ -48,7 +48,7 @@ export class WorkerHeartbeat {
     };
   }
 
-  public toContract(): ChannelWorkerHeartbeat {
+  public toContract(): WorkerHeartbeatContract {
     return {
       provider: this.provider,
       workerId: this.workerId,

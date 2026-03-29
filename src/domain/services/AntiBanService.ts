@@ -1,5 +1,5 @@
-import { OutgoingMessageContent } from '@jarvix/ts-channel-provider';
 import { env } from '../../application/config/env.js';
+import { OutgoingMessageContent } from '../../contracts/gateway.js';
 import { SessionDescriptor } from '../entities/SessionDescriptor.js';
 import { IAntiBanWarmUpStateRepository } from '../repositories/IAntiBanWarmUpStateRepository.js';
 import { ContentVariator } from './antiban/ContentVariator.js';
@@ -25,7 +25,7 @@ export interface AntiBanDecision {
 }
 
 /**
- * Behavioral guard aligned with Jarvix's worker design:
+ * Behavioral guard aligned with the worker runtime design:
  * explicit policies, session-scoped warm-up persistence and no opaque send wrapper.
  */
 export class AntiBanService {

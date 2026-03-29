@@ -2,7 +2,7 @@ import { SessionWorkerHost } from './application/services/SessionWorkerHost.js';
 import { installLibraryLogFilters } from './infrastructure/baileys/installLibraryLogFilters.js';
 
 async function bootstrapMain(): Promise<void> {
-  console.log('Starting Jarvix WhatsApp Web Provider (worker entrypoint)...');
+  console.log('Starting WhatsApp Gateway worker...');
   installLibraryLogFilters();
 
   const host = new SessionWorkerHost();

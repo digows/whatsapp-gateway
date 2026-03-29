@@ -1,4 +1,7 @@
-import { ChannelChatType, IncomingMessageEvent } from '@jarvix/ts-channel-provider';
+import {
+  ChatType,
+  IncomingMessage,
+} from '../../contracts/gateway.js';
 
 type ResolvePhoneFn = (
   jid: string | null | undefined,
@@ -11,7 +14,7 @@ export class BaileysMessageNormalizer {
     workspaceId: number,
     sessionId: string,
     resolvePhone: ResolvePhoneFn,
-  ): Promise<IncomingMessageEvent | null> {
+  ): Promise<IncomingMessage | null> {
     const rawChatId = message?.key?.remoteJid;
     const messageId = message?.key?.id;
     if (!rawChatId || !messageId) {
@@ -68,7 +71,7 @@ export class BaileysMessageNormalizer {
     return this.getInternalMessageReason(unwrapped);
   }
 
-  private static getChatType(jid: string): ChannelChatType {
+  private static getChatType(jid: string): ChatType {
     if (jid.endsWith('@g.us')) {
       return 'group';
     }
@@ -88,7 +91,7 @@ export class BaileysMessageNormalizer {
     return 'unknown';
   }
 
-  private static extractContent(message: any): IncomingMessageEvent['content'] | null {
+  private static extractContent(message: any): IncomingMessage['content'] | null {
     const unwrapped = this.unwrapMessage(message);
     if (!unwrapped) {
       return null;

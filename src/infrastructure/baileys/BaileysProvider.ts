@@ -1,12 +1,13 @@
 import makeWASocket, { DisconnectReason, proto } from 'baileys';
 import {
-  ChannelDeliveryResultEvent,
-  ChannelIncomingMessageEvent,
-  ChannelOutgoingMessageCommand,
-  ChannelSessionRuntimeCallbacks,
-  ChannelSessionStatusEvent,
-  IChannelSessionRuntime,
-} from '@jarvix/ts-channel-provider';
+  DeliveryResultEvent,
+  IncomingMessage,
+  IncomingMessageEvent,
+  OutgoingMessageCommand,
+  SessionRuntime,
+  SessionRuntimeCallbacks,
+  SessionStatusEvent,
+} from '../../contracts/gateway.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import qrcode from 'qrcode-terminal';
 import { env } from '../../application/config/env.js';
@@ -20,15 +21,15 @@ import { createBaileysLogger } from './BaileysLogger.js';
 import { BaileysMessageNormalizer } from './BaileysMessageNormalizer.js';
 
 export interface BaileysProviderCallbacks {
-  onIncomingMessage?: (event: ChannelIncomingMessageEvent) => Promise<void>;
-  onSessionStatus?: (event: ChannelSessionStatusEvent) => Promise<void>;
+  onIncomingMessage?: (event: IncomingMessageEvent) => Promise<void>;
+  onSessionStatus?: (event: SessionStatusEvent) => Promise<void>;
 }
 
 /**
  * Single-session Baileys runtime.
  * It owns the WhatsApp socket, auth state, message normalization and anti-ban behavior.
  */
-export class BaileysProvider implements IChannelSessionRuntime {
+export class BaileysProvider implements SessionRuntime {
   private sock: ReturnType<typeof makeWASocket> | null = null;
   private reconnectTimer?: NodeJS.Timeout;
   private isStopping = false;
@@ -40,7 +41,7 @@ export class BaileysProvider implements IChannelSessionRuntime {
 
   constructor(
     private readonly session: SessionDescriptor,
-    private readonly callbacks: ChannelSessionRuntimeCallbacks & Partial<BaileysProviderCallbacks>,
+    private readonly callbacks: SessionRuntimeCallbacks & Partial<BaileysProviderCallbacks>,
   ) {
     const proxyUrl = env.RESIDENTIAL_PROXY_URL;
     if (proxyUrl) {
@@ -101,7 +102,7 @@ export class BaileysProvider implements IChannelSessionRuntime {
     }
   }
 
-  public async send(command: ChannelOutgoingMessageCommand): Promise<ChannelDeliveryResultEvent> {
+  public async send(command: OutgoingMessageCommand): Promise<DeliveryResultEvent> {
     if (!this.sock) {
       return this.buildDeliveryResult(command, 'failed', undefined, 'no active socket');
     }
@@ -371,7 +372,7 @@ export class BaileysProvider implements IChannelSessionRuntime {
   private logNormalizedMessage(
     direction: string,
     rawMessage: any,
-    normalized: ChannelIncomingMessageEvent['message'],
+    normalized: IncomingMessage,
   ): void {
     const senderLabel = direction === 'OUT'
       ? 'self'
@@ -410,7 +411,7 @@ export class BaileysProvider implements IChannelSessionRuntime {
 
   private buildSenderLabel(
     rawMessage: any,
-    normalized: ChannelIncomingMessageEvent['message'],
+    normalized: IncomingMessage,
   ): string {
     const senderPhone = normalized.context?.senderPhone;
     const senderName =
@@ -487,11 +488,11 @@ export class BaileysProvider implements IChannelSessionRuntime {
   }
 
   private buildDeliveryResult(
-    command: ChannelOutgoingMessageCommand,
-    status: ChannelDeliveryResultEvent['status'],
+    command: OutgoingMessageCommand,
+    status: DeliveryResultEvent['status'],
     providerMessageId?: string,
     reason?: string,
-  ): ChannelDeliveryResultEvent {
+  ): DeliveryResultEvent {
     return {
       commandId: command.commandId,
       session: this.session,
@@ -504,7 +505,7 @@ export class BaileysProvider implements IChannelSessionRuntime {
   }
 
   private async publishStatus(
-    status: ChannelSessionStatusEvent['status'],
+    status: SessionStatusEvent['status'],
     reason?: string,
   ): Promise<void> {
     await this.callbacks.onSessionStatus({
@@ -515,7 +516,7 @@ export class BaileysProvider implements IChannelSessionRuntime {
     });
   }
 
-  private toBaileysContent(content: ChannelOutgoingMessageCommand['message']['content']): any {
+  private toBaileysContent(content: OutgoingMessageCommand['message']['content']): any {
     switch (content.type) {
       case 'text':
         return { text: content.text ?? '' };
@@ -674,7 +675,7 @@ export class BaileysProvider implements IChannelSessionRuntime {
 
   private buildDebugContentSuffix(
     rawMessage: any,
-    normalized?: ChannelIncomingMessageEvent['message'],
+    normalized?: IncomingMessage,
   ): string {
     if (!this.isDebugLoggingEnabled()) {
       return '';
@@ -802,7 +803,7 @@ export class BaileysProvider implements IChannelSessionRuntime {
   }
 
   private summarizeNormalizedContent(
-    content: ChannelIncomingMessageEvent['message']['content'],
+    content: IncomingMessage['content'],
   ): Record<string, unknown> | null {
     switch (content.type) {
       case 'text':

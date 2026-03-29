@@ -1,16 +1,18 @@
 {
-  "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "composite": true,
     "declaration": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "types": ["node"],
     "outDir": "./dist",
     "rootDir": "./src",
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
-  "references": [
-    {
-      "path": "../../../sdks/ts-channel-provider"
-    }
-  ],
   "include": ["src/**/*"]
 }

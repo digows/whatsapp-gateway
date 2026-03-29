@@ -1,11 +1,11 @@
 import {
-  ChannelSessionAddress,
-  ChannelSessionRuntimeCallbacks,
-  ChannelWorkerCommand,
-  IChannelSessionRuntime,
-  IChannelWorkerHost,
-  IChannelWorkerTransport,
-} from '@jarvix/ts-channel-provider';
+  SessionAddress,
+  SessionRuntime,
+  SessionRuntimeCallbacks,
+  SessionStatus,
+  WorkerCommand,
+  WorkerTransport,
+} from '../../contracts/gateway.js';
 import { env } from '../config/env.js';
 import { CHANNEL_PROVIDER_ID } from '../config/provider.js';
 import { SessionDescriptor } from '../../domain/entities/SessionDescriptor.js';
@@ -22,7 +22,7 @@ import { RedisWorkerHealthReporter } from '../../infrastructure/redis/RedisWorke
 
 interface HostedSession {
   descriptor: SessionDescriptor;
-  runtime: IChannelSessionRuntime;
+  runtime: SessionRuntime;
   lease: SessionLease;
   lockHeartbeat?: NodeJS.Timeout;
   lockHeartbeatStopped?: boolean;
@@ -30,12 +30,12 @@ interface HostedSession {
 
 type SessionRuntimeFactory = (
   session: SessionDescriptor,
-  callbacks: ChannelSessionRuntimeCallbacks,
-) => IChannelSessionRuntime;
+  callbacks: SessionRuntimeCallbacks,
+) => SessionRuntime;
 
 interface SessionWorkerHostOptions {
   providerId?: string;
-  transport?: IChannelWorkerTransport;
+  transport?: WorkerTransport;
   runtimeFactory?: SessionRuntimeFactory;
   workerIdentity?: WorkerIdentity;
 }
@@ -44,10 +44,10 @@ interface SessionWorkerHostOptions {
  * Process-level runtime for the Node worker.
  * It owns NATS connectivity, worker heartbeat, capacity and hosted sessions.
  */
-export class SessionWorkerHost implements IChannelWorkerHost {
+export class SessionWorkerHost {
   private readonly providerId: string;
   private readonly workerIdentity: WorkerIdentity;
-  private readonly transport: IChannelWorkerTransport;
+  private readonly transport: WorkerTransport;
   private readonly runtimeFactory: SessionRuntimeFactory;
   private readonly sessionCoordinator: RedisSessionCoordinator;
   private readonly healthReporter: RedisWorkerHealthReporter;
@@ -129,7 +129,7 @@ export class SessionWorkerHost implements IChannelWorkerHost {
     this.started = false;
   }
 
-  public async startSession(session: ChannelSessionAddress): Promise<void> {
+  public async startSession(session: SessionAddress): Promise<void> {
     this.ensureStarted();
 
     const descriptor = this.toDescriptor(session);
@@ -215,7 +215,7 @@ export class SessionWorkerHost implements IChannelWorkerHost {
    *
    * @param session
    */
-  public async stopSession(session: ChannelSessionAddress): Promise<void> {
+  public async stopSession(session: SessionAddress): Promise<void> {
     const descriptor = this.toDescriptor(session);
     const sessionKey = descriptor.toKey();
     const hostedSession = this.sessions.get(sessionKey);
@@ -357,7 +357,7 @@ export class SessionWorkerHost implements IChannelWorkerHost {
     }
   }
 
-  private readonly handleWorkerCommand = async (command: ChannelWorkerCommand): Promise<void> => {
+  private readonly handleWorkerCommand = async (command: WorkerCommand): Promise<void> => {
     if (command.session.provider !== this.providerId) {
       console.warn(
         `[HOST] Ignoring worker command ${command.commandId} for provider ${command.session.provider}.`,
@@ -378,7 +378,7 @@ export class SessionWorkerHost implements IChannelWorkerHost {
     console.warn(`[HOST] Unknown worker command action ${(command as any).action}.`);
   };
 
-  private toDescriptor(session: ChannelSessionAddress): SessionDescriptor {
+  private toDescriptor(session: SessionAddress): SessionDescriptor {
     return new SessionDescriptor(
       session.provider,
       session.workspaceId,
@@ -388,7 +388,7 @@ export class SessionWorkerHost implements IChannelWorkerHost {
 
   private async publishSessionStatus(
     session: SessionDescriptor,
-    status: 'starting' | 'stopping' | 'stopped' | 'failed',
+    status: Extract<SessionStatus, 'starting' | 'stopping' | 'stopped' | 'failed'>,
     reason?: string,
   ): Promise<void> {
     await this.transport.publishSessionStatus({

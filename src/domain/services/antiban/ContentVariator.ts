@@ -1,4 +1,4 @@
-import { OutgoingMessageContent } from '@jarvix/ts-channel-provider';
+import { OutgoingMessageContent } from '../../../contracts/gateway.js';
 
 export interface ContentVariatorConfig {
   maxIdenticalMessages: number;

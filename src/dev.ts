@@ -13,7 +13,7 @@ async function bootstrapDev(): Promise<void> {
     import('./infrastructure/baileys/installLibraryLogFilters.js'),
   ]);
 
-  console.log('Starting Jarvix WhatsApp Web Provider (dev entrypoint)...');
+  console.log('Starting WhatsApp Gateway (dev entrypoint)...');
   installLibraryLogFilters();
 
   const host = new SessionWorkerHost();

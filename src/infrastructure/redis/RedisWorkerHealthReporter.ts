@@ -1,5 +1,5 @@
 import { env } from '../../application/config/env.js';
-import { ChannelProviderId } from '@jarvix/ts-channel-provider';
+import { ProviderId } from '../../contracts/gateway.js';
 import { WorkerHeartbeat } from '../../domain/entities/WorkerHeartbeat.js';
 import { WorkerIdentity } from '../../domain/entities/WorkerIdentity.js';
 import { RedisConnection } from './RedisConnection.js';
@@ -11,7 +11,7 @@ export class RedisWorkerHealthReporter {
   private heartbeatTimer?: NodeJS.Timeout;
 
   constructor(
-    private readonly providerId: ChannelProviderId,
+    private readonly providerId: ProviderId,
     private readonly workerIdentity: WorkerIdentity,
     private readonly getCurrentSessions: () => number,
   ) {}
