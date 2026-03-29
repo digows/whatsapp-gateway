@@ -3,6 +3,7 @@ import { renderConfigTemplate } from '../../application/config/renderConfigTempl
 import { AuthenticationStateKey } from '../../domain/entities/authentication/AuthenticationStateKey.js';
 import { AuthenticationStateType } from '../../domain/entities/authentication/AuthenticationStateType.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
+import { CommandKind } from './RedisCommandDeduplicator.js';
 
 export class RedisKeyBuilder {
   public static getSessionLockKey(session: SessionReference): string {
@@ -81,6 +82,36 @@ export class RedisKeyBuilder {
       provider: session.provider,
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
+    });
+  }
+
+  public static getCommandProcessingKey(
+    session: SessionReference,
+    kind: CommandKind,
+    identifier: string,
+  ): string {
+    return renderConfigTemplate(env.REDIS_KEY_COMMAND_PROCESSING_TEMPLATE, {
+      prefix: env.REDIS_KEY_PREFIX,
+      provider: session.provider,
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      kind,
+      identifier,
+    });
+  }
+
+  public static getCommandCompletedKey(
+    session: SessionReference,
+    kind: CommandKind,
+    identifier: string,
+  ): string {
+    return renderConfigTemplate(env.REDIS_KEY_COMMAND_COMPLETED_TEMPLATE, {
+      prefix: env.REDIS_KEY_PREFIX,
+      provider: session.provider,
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      kind,
+      identifier,
     });
   }
 }

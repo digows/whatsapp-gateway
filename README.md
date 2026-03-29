@@ -88,6 +88,7 @@ The worker host uses NATS as the asynchronous bridge between Control Plane and s
 - **Activation:** `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.activation`
 - **Responsibility split:** Redis remains responsible for liveness, leases and worker registry; NATS is responsible for commands and events between planes.
 - **Gateway boundary:** The runtime handles the raw WhatsApp protocol and emits gateway-owned events and commands, so the control plane stays decoupled from Baileys internals.
+- **Durability mode:** `NATS_MODE=ephemeral` keeps plain publish/subscribe semantics. `NATS_MODE=jetstream` enables durable stream-backed processing for worker control, outbound and activation commands, with Redis-backed dedupe for command execution.
 
 ### 5. Entrypoints
 - **`src/index.ts`:** production worker entrypoint. Boots the host and waits for control-plane commands.
@@ -102,4 +103,9 @@ Configure the `.env` based on the `.env.example` template. The application uses 
 - `CHANNEL_PROVIDER_ID`: Logical provider identifier carried in subjects, sessions and telemetry. Default: `whatsapp-web`.
 - `POSTGRES_URL`: PostgreSQL connection string for saving cryptographic sessions (`AuthState`).
 - `REDIS_URL`: Redis connection string for distributed locks and blazing-fast `AuthState` caching.
+- `NATS_MODE`: `ephemeral` for plain NATS or `jetstream` for durable broker-backed command consumption.
+- `NATS_JETSTREAM_STREAM_NAME`: Stream name used when durable mode is enabled.
+- `NATS_JETSTREAM_STORAGE`: `file` or `memory` storage for the JetStream stream.
+- `REDIS_COMMAND_PROCESSING_TTL_SECONDS`: TTL for the transient dedupe claim while a command is executing.
+- `REDIS_COMMAND_COMPLETED_TTL_SECONDS`: TTL for the completed-command marker used to suppress duplicates.
 - `LOG_LEVEL`: Engine verbosity. Default: `info` (for deep WebSocket protocol debugging, set to `debug` or `trace`).

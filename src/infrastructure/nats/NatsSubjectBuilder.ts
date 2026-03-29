@@ -30,6 +30,17 @@ export class NatsSubjectBuilder {
     });
   }
 
+  public static getJetStreamSubjects(providerId: string): string[] {
+    return [
+      env.NATS_SUBJECT_CONTROL_TEMPLATE,
+      env.NATS_SUBJECT_INBOUND_TEMPLATE,
+      env.NATS_SUBJECT_OUTBOUND_TEMPLATE,
+      env.NATS_SUBJECT_DELIVERY_TEMPLATE,
+      env.NATS_SUBJECT_STATUS_TEMPLATE,
+      env.NATS_SUBJECT_ACTIVATION_TEMPLATE,
+    ].map(template => this.toJetStreamSubjectPattern(template, providerId));
+  }
+
   private static getSessionTemplate(
     eventType: 'incoming' | 'outgoing' | 'delivery' | 'status',
   ): string {
@@ -43,5 +54,15 @@ export class NatsSubjectBuilder {
       case 'status':
         return env.NATS_SUBJECT_STATUS_TEMPLATE;
     }
+  }
+
+  private static toJetStreamSubjectPattern(template: string, providerId: string): string {
+    return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, placeholderName: string) => {
+      if (placeholderName === 'provider') {
+        return providerId;
+      }
+
+      return '*';
+    });
   }
 }

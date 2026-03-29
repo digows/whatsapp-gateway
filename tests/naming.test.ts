@@ -5,6 +5,7 @@ import { AuthenticationStateKey } from '../src/domain/entities/authentication/Au
 import { AuthenticationStateType } from '../src/domain/entities/authentication/AuthenticationStateType.js';
 import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
 import { NatsSubjectBuilder } from '../src/infrastructure/nats/NatsSubjectBuilder.js';
+import { CommandKind } from '../src/infrastructure/redis/RedisCommandDeduplicator.js';
 import { RedisKeyBuilder } from '../src/infrastructure/redis/RedisKeyBuilder.js';
 
 test('renderConfigTemplate replaces placeholders and fails on missing values', () => {
@@ -53,6 +54,17 @@ test('NatsSubjectBuilder uses the configured default subjects', () => {
     NatsSubjectBuilder.getActivationSubject(session),
     'gateway.v1.channel.whatsapp-web.session.7.session-a.activation',
   );
+  assert.deepEqual(
+    NatsSubjectBuilder.getJetStreamSubjects('whatsapp-web'),
+    [
+      'gateway.v1.channel.whatsapp-web.worker.*.control',
+      'gateway.v1.channel.whatsapp-web.session.*.*.incoming',
+      'gateway.v1.channel.whatsapp-web.session.*.*.outgoing',
+      'gateway.v1.channel.whatsapp-web.session.*.*.delivery',
+      'gateway.v1.channel.whatsapp-web.session.*.*.status',
+      'gateway.v1.channel.whatsapp-web.session.*.*.activation',
+    ],
+  );
 });
 
 test('RedisKeyBuilder uses the configured default keys', () => {
@@ -99,5 +111,13 @@ test('RedisKeyBuilder uses the configured default keys', () => {
   assert.equal(
     RedisKeyBuilder.getAntiBanWarmUpKey(session),
     'wa:whatsapp-web:7:antiban:warmup:session-a',
+  );
+  assert.equal(
+    RedisKeyBuilder.getCommandProcessingKey(session, CommandKind.Outbound, 'cmd-1'),
+    'wa:whatsapp-web:7:command:processing:session-a:outbound:cmd-1',
+  );
+  assert.equal(
+    RedisKeyBuilder.getCommandCompletedKey(session, CommandKind.Activation, 'activation-1'),
+    'wa:whatsapp-web:7:command:completed:session-a:activation:activation-1',
   );
 });

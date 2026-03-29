@@ -33,9 +33,27 @@ const envSchema = z.object({
   REDIS_URL: z.string().url().default('redis://localhost:6379'),
 
   /**
-   * NATS JetStream connection string for asynchronous message broker integration.
+   * NATS connection string for asynchronous message broker integration.
    */
   NATS_URL: z.string().default('nats://localhost:4222'),
+
+  /**
+   * Broker delivery mode.
+   * - ephemeral: plain NATS publish/subscribe
+   * - jetstream: durable streams + consumers
+   */
+  NATS_MODE: z.enum(['ephemeral', 'jetstream']).default('ephemeral'),
+
+  /**
+   * JetStream durability settings used when NATS_MODE=jetstream.
+   */
+  NATS_JETSTREAM_STREAM_NAME: z.string().default('gateway_v1'),
+  NATS_JETSTREAM_STORAGE: z.enum(['file', 'memory']).default('file'),
+  NATS_JETSTREAM_REPLICAS: z.coerce.number().default(1),
+  NATS_JETSTREAM_MAX_AGE_MS: z.coerce.number().default(604800000),
+  NATS_JETSTREAM_DUPLICATE_WINDOW_MS: z.coerce.number().default(120000),
+  NATS_JETSTREAM_ACK_WAIT_MS: z.coerce.number().default(30000),
+  NATS_JETSTREAM_MAX_DELIVER: z.coerce.number().default(10),
 
   /**
    * NATS subjects used by the worker runtime.
@@ -52,7 +70,7 @@ const envSchema = z.object({
   /**
    * Redis key namespace and templates.
    * Supported placeholders:
-   * {prefix} {provider} {workerId} {workspaceId} {sessionId} {type} {id} {jid}
+   * {prefix} {provider} {workerId} {workspaceId} {sessionId} {type} {id} {jid} {kind} {identifier}
    */
   REDIS_KEY_PREFIX: z.string().default('wa'),
   REDIS_KEY_SESSION_LOCK_TEMPLATE: z.string().default('{prefix}:{workspaceId}:lock:session:{sessionId}'),
@@ -63,6 +81,10 @@ const envSchema = z.object({
   REDIS_KEY_AUTH_SESSION_PATTERN_TEMPLATE: z.string().default('{prefix}:{workspaceId}:auth:{sessionId}:*'),
   REDIS_KEY_LID_MAPPING_TEMPLATE: z.string().default('{prefix}:{workspaceId}:lid-mapping:{jid}'),
   REDIS_KEY_ANTI_BAN_WARMUP_TEMPLATE: z.string().default('{prefix}:{provider}:{workspaceId}:antiban:warmup:{sessionId}'),
+  REDIS_KEY_COMMAND_PROCESSING_TEMPLATE: z.string().default('{prefix}:{provider}:{workspaceId}:command:processing:{sessionId}:{kind}:{identifier}'),
+  REDIS_KEY_COMMAND_COMPLETED_TEMPLATE: z.string().default('{prefix}:{provider}:{workspaceId}:command:completed:{sessionId}:{kind}:{identifier}'),
+  REDIS_COMMAND_PROCESSING_TTL_SECONDS: z.coerce.number().default(600),
+  REDIS_COMMAND_COMPLETED_TTL_SECONDS: z.coerce.number().default(604800),
 
   /**
    * Development-only bootstrap session used by src/dev.ts.

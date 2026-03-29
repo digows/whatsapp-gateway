@@ -135,19 +135,28 @@ export class SessionWorkerHost {
       );
       const runtime = this.runtimeFactory(session, {
         onActivationEvent: async event => {
-          await this.activationMessaging.publish(event);
+          await this.publishNonCritical(
+            `activation event ${event.eventType} for ${event.session.toLogLabel()}`,
+            () => this.activationMessaging.publish(event),
+          );
         },
         onInboundEvent: async event => {
-          await this.transport.publishInbound(event);
+          await this.publishNonCritical(
+            `inbound event ${event.eventType} for ${event.session.toLogLabel()}`,
+            () => this.transport.publishInbound(event),
+          );
         },
         onSessionStatus: async event => {
-          await this.transport.publishSessionStatus(
-            new SessionStatusEvent(
-              event.session,
-              event.status,
-              event.timestamp,
-              this.workerIdentity.id,
-              event.reason,
+          await this.publishNonCritical(
+            `session status ${event.status} for ${event.session.toLogLabel()}`,
+            () => this.transport.publishSessionStatus(
+              new SessionStatusEvent(
+                event.session,
+                event.status,
+                event.timestamp,
+                this.workerIdentity.id,
+                event.reason,
+              ),
             ),
           );
 
@@ -173,7 +182,10 @@ export class SessionWorkerHost {
         }
 
         const result = await currentSession.runtime.send(command);
-        await this.transport.publishDelivery(result);
+        await this.publishNonCritical(
+          `delivery result for command ${result.commandId}`,
+          () => this.transport.publishDelivery(result),
+        );
       });
 
       await this.activationMessaging.subscribe(session, async command => {
@@ -405,14 +417,51 @@ export class SessionWorkerHost {
       | SessionStatus.Failed,
     reason?: string,
   ): Promise<void> {
-    await this.transport.publishSessionStatus(
-      new SessionStatusEvent(
-        session,
-        status,
-        new Date().toISOString(),
-        this.workerIdentity.id,
-        reason,
+    await this.publishNonCritical(
+      `session status ${status} for ${session.toLogLabel()}`,
+      () => this.transport.publishSessionStatus(
+        new SessionStatusEvent(
+          session,
+          status,
+          new Date().toISOString(),
+          this.workerIdentity.id,
+          reason,
+        ),
       ),
     );
+  }
+
+  private async publishNonCritical(
+    label: string,
+    publisher: () => Promise<void>,
+    attempts = 3,
+  ): Promise<void> {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        await publisher();
+        return;
+      } catch (error) {
+        if (attempt >= attempts) {
+          console.error(
+            `[HOST] Failed to publish ${label} after ${attempts} attempts. Keeping runtime flow alive.`,
+            error,
+          );
+          return;
+        }
+
+        console.warn(
+          `[HOST] Failed to publish ${label}. Retrying (${attempt}/${attempts})...`,
+          error,
+        );
+        await this.delay(250 * attempt);
+      }
+    }
+  }
+
+  private async delay(milliseconds: number): Promise<void> {
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, milliseconds);
+      timer.unref();
+    });
   }
 }
