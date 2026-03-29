@@ -1,7 +1,9 @@
 import {
   ChatType,
-  IncomingMessage,
-} from '../../shared/contracts/gateway.js';
+  WhatsappMessageContext,
+} from '../../domain/entities/messaging/WhatsappMessageContext.js';
+import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
+import { WhatsappMessage } from '../../domain/entities/messaging/WhatsappMessage.js';
 
 type ResolvePhoneFn = (
   jid: string | null | undefined,
@@ -11,10 +13,8 @@ type ResolvePhoneFn = (
 export class BaileysMessageNormalizer {
   public static async normalize(
     message: any,
-    workspaceId: number,
-    sessionId: string,
     resolvePhone: ResolvePhoneFn,
-  ): Promise<IncomingMessage | null> {
+  ): Promise<WhatsappMessage | null> {
     const rawChatId = message?.key?.remoteJid;
     const messageId = message?.key?.id;
     if (!rawChatId || !messageId) {
@@ -27,7 +27,7 @@ export class BaileysMessageNormalizer {
     const altJid = message.key.participantAlt || message.key.remoteJidAlt;
     const senderPhone = await resolvePhone(rawSenderId, altJid);
     const chatPhone =
-      chatType === 'direct'
+      chatType === ChatType.Direct
         ? await resolvePhone(rawChatId, message.key.remoteJidAlt)
         : null;
 
@@ -42,24 +42,22 @@ export class BaileysMessageNormalizer {
       return null;
     }
 
-    return {
-      messageId,
+    return new WhatsappMessage(
       chatId,
-      senderId,
-      participantId,
-      workspaceId,
-      sessionId,
-      timestamp: new Date(
+      new Date(
         Number(message.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000,
       ).toISOString(),
       content,
-      context: {
+      messageId,
+      senderId,
+      participantId,
+      new WhatsappMessageContext(
         chatType,
-        remoteJid: rawChatId,
-        participantId: rawParticipantId,
-        senderPhone: senderPhone ?? undefined,
-      },
-    };
+        rawChatId,
+        rawParticipantId,
+        senderPhone ?? undefined,
+      ),
+    );
   }
 
   public static getSkipReason(message: any): string | null {
@@ -73,11 +71,11 @@ export class BaileysMessageNormalizer {
 
   private static getChatType(jid: string): ChatType {
     if (jid.endsWith('@g.us')) {
-      return 'group';
+      return ChatType.Group;
     }
 
     if (jid.endsWith('@broadcast')) {
-      return 'broadcast';
+      return ChatType.Broadcast;
     }
 
     if (
@@ -85,13 +83,13 @@ export class BaileysMessageNormalizer {
       || jid.endsWith('@lid')
       || jid.endsWith('@hosted.lid')
     ) {
-      return 'direct';
+      return ChatType.Direct;
     }
 
-    return 'unknown';
+    return ChatType.Unknown;
   }
 
-  private static extractContent(message: any): IncomingMessage['content'] | null {
+  private static extractContent(message: any): MessageContent | null {
     const unwrapped = this.unwrapMessage(message);
     if (!unwrapped) {
       return null;
@@ -102,44 +100,32 @@ export class BaileysMessageNormalizer {
     }
 
     if (unwrapped.conversation || unwrapped.extendedTextMessage?.text) {
-      return {
-        type: 'text',
-        text: (unwrapped.conversation || unwrapped.extendedTextMessage?.text || '').trim(),
-      };
+      return MessageContent.text(
+        (unwrapped.conversation || unwrapped.extendedTextMessage?.text || '').trim(),
+      );
     }
 
     if (unwrapped.imageMessage) {
-      return {
-        type: 'image',
-        text: unwrapped.imageMessage.caption?.trim(),
-      };
+      return MessageContent.image(unwrapped.imageMessage.caption?.trim());
     }
 
     if (unwrapped.videoMessage) {
-      return {
-        type: 'video',
-        text: unwrapped.videoMessage.caption?.trim(),
-      };
+      return MessageContent.video(unwrapped.videoMessage.caption?.trim());
     }
 
     if (unwrapped.audioMessage) {
-      return {
-        type: 'audio',
-      };
+      return MessageContent.audio();
     }
 
     if (unwrapped.documentMessage) {
-      return {
-        type: 'document',
-        text: unwrapped.documentMessage.caption?.trim() || unwrapped.documentMessage.fileName,
-      };
+      return MessageContent.document(
+        unwrapped.documentMessage.caption?.trim() || unwrapped.documentMessage.fileName,
+        undefined,
+        unwrapped.documentMessage.fileName,
+      );
     }
 
-    return { type: 'other' };
-  }
-
-  private static isInternalMessage(message: any): boolean {
-    return Boolean(this.getInternalMessageReason(message));
+    return MessageContent.other();
   }
 
   private static getInternalMessageReason(message: any): string | null {

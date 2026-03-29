@@ -1,35 +1,151 @@
-import {
-  DeliveryResultEvent,
-  InboundEvent,
-  OutgoingMessageCommand,
-  ProviderId,
-  SessionAddress,
-  SessionStatusEvent,
-  WorkerCommand,
-  WorkerTransport,
-} from '../../shared/contracts/gateway.js';
 import { Codec, JSONCodec, Subscription } from 'nats';
+import { WorkerTransport } from '../../application/ports/WorkerTransport.js';
+import {
+  DeliveryResult,
+  DeliveryStatus,
+} from '../../domain/entities/messaging/DeliveryResult.js';
+import {
+  InboundEvent,
+  InboundEventType,
+  MessageReactionEvent,
+  MessageUpdatedEvent,
+  ReceivedMessageEvent,
+} from '../../domain/entities/messaging/InboundEvent.js';
+import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
+import { MessageContentType } from '../../domain/entities/messaging/MessageContentType.js';
+import { SendMessageCommand } from '../../domain/entities/messaging/SendMessageCommand.js';
+import { WhatsappMessage } from '../../domain/entities/messaging/WhatsappMessage.js';
+import {
+  ChatType,
+  WhatsappMessageContext,
+} from '../../domain/entities/messaging/WhatsappMessageContext.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
+import {
+  SessionStatus,
+  SessionStatusEvent,
+} from '../../domain/entities/operational/SessionStatus.js';
+import {
+  WorkerCommand,
+  WorkerCommandAction,
+} from '../../domain/entities/operational/WorkerCommand.js';
 import { NatsConnection } from './NatsConnection.js';
 import { NatsSubjectBuilder } from './NatsSubjectBuilder.js';
 
+type SessionPayload = {
+  provider: string;
+  workspaceId: number;
+  sessionId: string;
+};
+
+type MessageContentPayload = {
+  type: string;
+  text?: string;
+  mediaUrl?: string;
+  fileName?: string;
+};
+
+type MessageContextPayload = {
+  chatType: string;
+  remoteJid: string;
+  participantId?: string;
+  senderPhone?: string;
+};
+
+type WhatsappMessagePayload = {
+  chatId: string;
+  timestamp: string;
+  content: MessageContentPayload;
+  messageId?: string;
+  senderId?: string;
+  participantId?: string;
+  context?: MessageContextPayload;
+};
+
+type SendMessageCommandPayload = {
+  commandId: string;
+  session: SessionPayload;
+  message: WhatsappMessagePayload;
+};
+
+type WorkerCommandPayload = {
+  commandId: string;
+  action: string;
+  session: SessionPayload;
+};
+
+type SessionStatusPayload = {
+  session: SessionPayload;
+  workerId?: string;
+  status: string;
+  reason?: string;
+  timestamp: string;
+};
+
+type DeliveryResultPayload = {
+  commandId: string;
+  session: SessionPayload;
+  recipientId: string;
+  status: string;
+  providerMessageId?: string;
+  reason?: string;
+  timestamp: string;
+};
+
+type ReceivedMessageEventPayload = {
+  eventType: InboundEventType.MessageReceived;
+  session: SessionPayload;
+  timestamp: string;
+  message: WhatsappMessagePayload;
+};
+
+type MessageUpdatedEventPayload = {
+  eventType: InboundEventType.MessageUpdated;
+  session: SessionPayload;
+  timestamp: string;
+  messageId: string;
+  chatId: string;
+  senderId: string;
+  fromMe: boolean;
+  status?: number;
+  stubType?: number;
+  contentType?: string;
+  pollUpdateCount?: number;
+};
+
+type MessageReactionEventPayload = {
+  eventType: InboundEventType.MessageReaction;
+  session: SessionPayload;
+  timestamp: string;
+  messageId?: string;
+  chatId: string;
+  senderId: string;
+  fromMe: boolean;
+  reactionText?: string;
+  removed: boolean;
+};
+
+type InboundEventPayload =
+  | ReceivedMessageEventPayload
+  | MessageUpdatedEventPayload
+  | MessageReactionEventPayload;
+
 type WorkerCommandHandler = (command: WorkerCommand) => Promise<void>;
-type OutgoingHandler = (command: OutgoingMessageCommand) => Promise<void>;
+type OutgoingHandler = (command: SendMessageCommand) => Promise<void>;
 
 /**
- * NATS implementation of the shared channel transport contract.
- * Subjects are versioned to keep wire evolution explicit from day one.
+ * NATS implementation of the worker transport contract.
  */
 export class NatsChannelTransport implements WorkerTransport {
-  private readonly workerCommandCodec = JSONCodec<WorkerCommand>();
-  private readonly inboundCodec = JSONCodec<InboundEvent>();
-  private readonly outgoingCodec = JSONCodec<OutgoingMessageCommand>();
-  private readonly deliveryCodec = JSONCodec<DeliveryResultEvent>();
-  private readonly sessionStatusCodec = JSONCodec<SessionStatusEvent>();
+  private readonly workerCommandCodec = JSONCodec<WorkerCommandPayload>();
+  private readonly inboundCodec = JSONCodec<InboundEventPayload>();
+  private readonly outgoingCodec = JSONCodec<SendMessageCommandPayload>();
+  private readonly deliveryCodec = JSONCodec<DeliveryResultPayload>();
+  private readonly sessionStatusCodec = JSONCodec<SessionStatusPayload>();
 
   private workerSubscription?: Subscription;
   private readonly outgoingSubscriptions = new Map<string, Subscription>();
 
-  constructor(private readonly providerId: ProviderId) {}
+  constructor(private readonly providerId: string) {}
 
   public async connect(): Promise<void> {
     await NatsConnection.getClient();
@@ -42,6 +158,7 @@ export class NatsChannelTransport implements WorkerTransport {
     for (const subscription of this.outgoingSubscriptions.values()) {
       subscription.unsubscribe();
     }
+
     this.outgoingSubscriptions.clear();
     await NatsConnection.close();
   }
@@ -53,28 +170,42 @@ export class NatsChannelTransport implements WorkerTransport {
     const client = await NatsConnection.getClient();
 
     this.workerSubscription?.unsubscribe();
-    const subscription = client.subscribe(this.getWorkerControlSubject(workerId));
+    const subscription = client.subscribe(
+      NatsSubjectBuilder.getWorkerControlSubject(this.providerId, workerId),
+    );
     this.workerSubscription = subscription;
 
-    void this.consume(subscription, this.workerCommandCodec, handler, '[NATS] Failed to process worker command:');
+    void this.consume(
+      subscription,
+      this.workerCommandCodec,
+      payload => handler(this.mapWorkerCommand(payload)),
+      '[NATS] Failed to process worker command:',
+    );
   }
 
   public async subscribeOutgoing(
-    session: SessionAddress,
+    session: SessionReference,
     handler: OutgoingHandler,
   ): Promise<void> {
     const client = await NatsConnection.getClient();
-    const sessionKey = this.getSessionKey(session);
+    const sessionKey = session.toKey();
 
     this.outgoingSubscriptions.get(sessionKey)?.unsubscribe();
-    const subscription = client.subscribe(this.getSessionSubject(session, 'outgoing'));
+    const subscription = client.subscribe(
+      NatsSubjectBuilder.getSessionSubject(session, 'outgoing'),
+    );
     this.outgoingSubscriptions.set(sessionKey, subscription);
 
-    void this.consume(subscription, this.outgoingCodec, handler, '[NATS] Failed to process outbound command:');
+    void this.consume(
+      subscription,
+      this.outgoingCodec,
+      payload => handler(this.mapSendMessageCommand(payload)),
+      '[NATS] Failed to process outbound command:',
+    );
   }
 
-  public async disconnectSession(session: SessionAddress): Promise<void> {
-    const sessionKey = this.getSessionKey(session);
+  public async disconnectSession(session: SessionReference): Promise<void> {
+    const sessionKey = session.toKey();
     this.outgoingSubscriptions.get(sessionKey)?.unsubscribe();
     this.outgoingSubscriptions.delete(sessionKey);
   }
@@ -82,46 +213,162 @@ export class NatsChannelTransport implements WorkerTransport {
   public async publishInbound(event: InboundEvent): Promise<void> {
     const client = await NatsConnection.getClient();
     client.publish(
-      this.getSessionSubject(event.session, 'incoming'),
-      this.inboundCodec.encode(event),
+      NatsSubjectBuilder.getSessionSubject(event.session, 'incoming'),
+      this.inboundCodec.encode(this.mapInboundEventPayload(event)),
     );
   }
 
-  public async publishDelivery(event: DeliveryResultEvent): Promise<void> {
+  public async publishDelivery(event: DeliveryResult): Promise<void> {
     const client = await NatsConnection.getClient();
     client.publish(
-      this.getSessionSubject(event.session, 'delivery'),
-      this.deliveryCodec.encode(event),
+      NatsSubjectBuilder.getSessionSubject(event.session, 'delivery'),
+      this.deliveryCodec.encode({
+        commandId: event.commandId,
+        session: this.mapSessionPayload(event.session),
+        recipientId: event.recipientId,
+        status: event.status,
+        providerMessageId: event.providerMessageId,
+        reason: event.reason,
+        timestamp: event.timestamp,
+      }),
     );
   }
 
   public async publishSessionStatus(event: SessionStatusEvent): Promise<void> {
     const client = await NatsConnection.getClient();
     client.publish(
-      this.getSessionSubject(event.session, 'status'),
-      this.sessionStatusCodec.encode(event),
+      NatsSubjectBuilder.getSessionSubject(event.session, 'status'),
+      this.sessionStatusCodec.encode({
+        session: this.mapSessionPayload(event.session),
+        workerId: event.workerId,
+        status: event.status,
+        reason: event.reason,
+        timestamp: event.timestamp,
+      }),
     );
   }
 
-  private getWorkerControlSubject(workerId: string): string {
-    return NatsSubjectBuilder.getWorkerControlSubject(this.providerId, workerId);
+  private mapInboundEventPayload(event: InboundEvent): InboundEventPayload {
+    if (event instanceof ReceivedMessageEvent) {
+      return {
+        eventType: event.eventType,
+        session: this.mapSessionPayload(event.session),
+        timestamp: event.timestamp,
+        message: this.mapWhatsappMessagePayload(event.message),
+      };
+    }
+
+    if (event instanceof MessageUpdatedEvent) {
+      return {
+        eventType: event.eventType,
+        session: this.mapSessionPayload(event.session),
+        timestamp: event.timestamp,
+        messageId: event.messageId,
+        chatId: event.chatId,
+        senderId: event.senderId,
+        fromMe: event.fromMe,
+        status: event.status,
+        stubType: event.stubType,
+        contentType: event.contentType,
+        pollUpdateCount: event.pollUpdateCount,
+      };
+    }
+
+    return {
+      eventType: event.eventType,
+      session: this.mapSessionPayload(event.session),
+      timestamp: event.timestamp,
+      messageId: event.messageId,
+      chatId: event.chatId,
+      senderId: event.senderId,
+      fromMe: event.fromMe,
+      reactionText: event.reactionText,
+      removed: event.removed,
+    };
   }
 
-  private getSessionSubject(
-    session: SessionAddress,
-    eventType: 'incoming' | 'outgoing' | 'delivery' | 'status',
-  ): string {
-    return NatsSubjectBuilder.getSessionSubject(
-      {
-        ...session,
-        provider: this.providerId,
-      },
-      eventType,
+  private mapWorkerCommand(payload: WorkerCommandPayload): WorkerCommand {
+    return new WorkerCommand(
+      payload.commandId,
+      payload.action as WorkerCommandAction,
+      this.mapSession(payload.session),
     );
   }
 
-  private getSessionKey(session: SessionAddress): string {
-    return `${session.provider}:${session.workspaceId}:${session.sessionId}`;
+  private mapSendMessageCommand(payload: SendMessageCommandPayload): SendMessageCommand {
+    return new SendMessageCommand(
+      payload.commandId,
+      this.mapSession(payload.session),
+      this.mapWhatsappMessage(payload.message),
+    );
+  }
+
+  private mapSession(payload: SessionPayload): SessionReference {
+    return new SessionReference(payload.provider, payload.workspaceId, payload.sessionId);
+  }
+
+  private mapSessionPayload(session: SessionReference): SessionPayload {
+    return {
+      provider: session.provider,
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+    };
+  }
+
+  private mapWhatsappMessage(payload: WhatsappMessagePayload): WhatsappMessage {
+    return new WhatsappMessage(
+      payload.chatId,
+      payload.timestamp,
+      this.mapMessageContent(payload.content),
+      payload.messageId,
+      payload.senderId,
+      payload.participantId,
+      payload.context
+        ? new WhatsappMessageContext(
+            payload.context.chatType as ChatType,
+            payload.context.remoteJid,
+            payload.context.participantId,
+            payload.context.senderPhone,
+          )
+        : undefined,
+    );
+  }
+
+  private mapWhatsappMessagePayload(message: WhatsappMessage): WhatsappMessagePayload {
+    return {
+      chatId: message.chatId,
+      timestamp: message.timestamp,
+      content: this.mapMessageContentPayload(message.content),
+      messageId: message.messageId,
+      senderId: message.senderId,
+      participantId: message.participantId,
+      context: message.context
+        ? {
+            chatType: message.context.chatType,
+            remoteJid: message.context.remoteJid,
+            participantId: message.context.participantId,
+            senderPhone: message.context.senderPhone,
+          }
+        : undefined,
+    };
+  }
+
+  private mapMessageContent(payload: MessageContentPayload): MessageContent {
+    return new MessageContent(
+      payload.type as MessageContentType,
+      payload.text,
+      payload.mediaUrl,
+      payload.fileName,
+    );
+  }
+
+  private mapMessageContentPayload(content: MessageContent): MessageContentPayload {
+    return {
+      type: content.type,
+      text: content.text,
+      mediaUrl: content.mediaUrl,
+      fileName: content.fileName,
+    };
   }
 
   private async consume<T>(

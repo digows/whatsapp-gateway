@@ -3,13 +3,13 @@ async function bootstrapDev(): Promise<void> {
     { env },
     { CHANNEL_PROVIDER_ID },
     { SessionWorkerHost },
-    { SessionDescriptor },
+    { SessionReference },
     { installLibraryLogFilters },
   ] = await Promise.all([
     import('./application/config/env.js'),
     import('./application/config/provider.js'),
     import('./application/services/SessionWorkerHost.js'),
-    import('./domain/entities/SessionDescriptor.js'),
+    import('./domain/entities/operational/SessionReference.js'),
     import('./infrastructure/baileys/installLibraryLogFilters.js'),
   ]);
 
@@ -43,7 +43,7 @@ async function bootstrapDev(): Promise<void> {
   try {
     await host.start();
 
-    const devSession = new SessionDescriptor(
+    const devSession = new SessionReference(
       CHANNEL_PROVIDER_ID,
       env.DEV_WORKSPACE_ID,
       env.DEV_SESSION_ID,

@@ -1,7 +1,7 @@
 import { env } from '../../application/config/env.js';
-import { OutgoingMessageContent } from '../../shared/contracts/gateway.js';
-import { SessionDescriptor } from '../entities/SessionDescriptor.js';
-import { IAntiBanWarmUpStateRepository } from '../repositories/IAntiBanWarmUpStateRepository.js';
+import { WarmUpStateRepository } from '../../application/ports/WarmUpStateRepository.js';
+import { MessageContent } from '../entities/messaging/MessageContent.js';
+import { SessionReference } from '../entities/operational/SessionReference.js';
 import { ContentVariator } from './antiban/ContentVariator.js';
 import {
   BanRiskLevel,
@@ -17,7 +17,7 @@ export interface AntiBanDecision {
   preSendDelayMs: number;
   typingDelayMs: number;
   riskLevel: BanRiskLevel;
-  content: OutgoingMessageContent;
+  content: MessageContent;
   reason?: string;
   trackingKey?: string;
   health: HealthStatus;
@@ -69,13 +69,13 @@ export class AntiBanService {
   private initPromise?: Promise<void>;
 
   constructor(
-    private readonly session: SessionDescriptor,
-    private readonly warmUpRepository: IAntiBanWarmUpStateRepository,
+    private readonly session: SessionReference,
+    private readonly warmUpRepository: WarmUpStateRepository,
   ) {}
 
   public async beforeSend(
     recipientId: string,
-    content: OutgoingMessageContent,
+    content: MessageContent,
   ): Promise<AntiBanDecision> {
     await this.initialize();
 
@@ -167,7 +167,7 @@ export class AntiBanService {
 
   public async afterSend(
     recipientId: string,
-    content: OutgoingMessageContent,
+    content: MessageContent,
     trackingKey?: string,
   ): Promise<void> {
     await this.initialize();

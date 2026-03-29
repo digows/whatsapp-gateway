@@ -1,15 +1,11 @@
-import {
-  ProviderId,
-  WorkerHeartbeatContract,
-} from '../../shared/contracts/gateway.js';
 import { WorkerIdentity } from './WorkerIdentity.js';
 
 /**
- * Snapshot of the worker state shared with the Control Plane.
+ * Snapshot of the worker state shared with the control plane.
  */
 export class WorkerHeartbeat {
   public static capture(
-    provider: ProviderId,
+    provider: string,
     workerIdentity: WorkerIdentity,
     currentSessions: number,
     maxCapacity: number,
@@ -25,8 +21,8 @@ export class WorkerHeartbeat {
     );
   }
 
-  private constructor(
-    public readonly provider: ProviderId,
+  constructor(
+    public readonly provider: string,
     public readonly workerId: string,
     public readonly currentSessions: number,
     public readonly maxCapacity: number,
@@ -48,15 +44,4 @@ export class WorkerHeartbeat {
     };
   }
 
-  public toContract(): WorkerHeartbeatContract {
-    return {
-      provider: this.provider,
-      workerId: this.workerId,
-      currentSessions: this.currentSessions,
-      maxCapacity: this.maxCapacity,
-      cpuUsageMicros: this.cpuUsageMicros,
-      memoryUsageMb: this.memoryUsageMb,
-      lastPulse: this.lastPulse,
-    };
-  }
 }

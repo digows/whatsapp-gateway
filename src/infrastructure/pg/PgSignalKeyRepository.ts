@@ -1,23 +1,22 @@
 import { BufferJSON } from 'baileys';
+import { SignalKeyRepository } from '../../application/ports/SignalKeyRepository.js';
 import { env } from '../../application/config/env.js';
-import { ISignalKeyRepository } from '../../domain/repositories/ISignalKeyRepository.js';
+import { AuthStateKey } from '../../domain/entities/auth/AuthStateKey.js';
+import { AuthStateQuery } from '../../domain/entities/auth/AuthStateQuery.js';
+import { AuthStateRecord } from '../../domain/entities/auth/AuthStateRecord.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { PgConnection } from './PgConnection.js';
 
 /**
- * PostgreSQL implementation of the Signal Key Repository.
+ * PostgreSQL implementation of the signal key repository.
  * Uses Row Level Security (RLS) for tenant isolation.
  */
-export class PgSignalKeyRepository implements ISignalKeyRepository {
+export class PgSignalKeyRepository implements SignalKeyRepository {
   private readonly pool = PgConnection.getPool();
   private readonly binaryKeyTypes = new Set(['sender-key', 'identity-key']);
 
-  public async getKeys(
-    workspaceId: number,
-    sessionId: string,
-    type: string,
-    ids: string[],
-  ): Promise<any[]> {
-    if (ids.length === 0) {
+  public async findByQuery(query: AuthStateQuery): Promise<AuthStateRecord[]> {
+    if (query.keyIds.length === 0) {
       return [];
     }
 
@@ -25,18 +24,22 @@ export class PgSignalKeyRepository implements ISignalKeyRepository {
     try {
       await client.query('BEGIN');
       await client.query(`SELECT set_config('app.current_workspace_id', $1::text, true)`, [
-        workspaceId.toString(),
+        query.session.workspaceId.toString(),
       ]);
 
       const result = await client.query(
         `SELECT key_id as "keyId", serialized_data as "serializedData"
          FROM "${env.DB_SCHEMA}".authorization_keys
          WHERE session_id = $1 AND key_type = $2 AND key_id = ANY($3)`,
-        [sessionId, type, ids],
+        [query.session.sessionId, query.keyType, query.keyIds],
       );
 
       await client.query('COMMIT');
-      return result.rows;
+      return result.rows.map(row => new AuthStateRecord(
+        query.session,
+        new AuthStateKey(query.keyType, row.keyId),
+        row.serializedData,
+      ));
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -45,13 +48,29 @@ export class PgSignalKeyRepository implements ISignalKeyRepository {
     }
   }
 
-  public async saveKeys(
-    workspaceId: number,
-    sessionId: string,
-    type: string,
-    keys: { [id: string]: any },
-  ): Promise<void> {
-    if (Object.keys(keys).length === 0) {
+  public async save(records: readonly AuthStateRecord[]): Promise<void> {
+    if (records.length === 0) {
+      return;
+    }
+
+    const recordsBySession = new Map<string, AuthStateRecord[]>();
+    for (const record of records) {
+      const sessionKey = record.session.toKey();
+      const current = recordsBySession.get(sessionKey);
+      if (current) {
+        current.push(record);
+      } else {
+        recordsBySession.set(sessionKey, [record]);
+      }
+    }
+
+    for (const sessionRecords of recordsBySession.values()) {
+      await this.saveSessionRecords(sessionRecords);
+    }
+  }
+
+  public async removeByQuery(query: AuthStateQuery): Promise<void> {
+    if (query.keyIds.length === 0) {
       return;
     }
 
@@ -59,80 +78,73 @@ export class PgSignalKeyRepository implements ISignalKeyRepository {
     try {
       await client.query('BEGIN');
       await client.query(`SELECT set_config('app.current_workspace_id', $1::text, true)`, [
-        workspaceId.toString(),
+        query.session.workspaceId.toString(),
       ]);
 
-      for (const [id, value] of Object.entries(keys)) {
-        if (!value) {
-          continue;
-        }
+      await client.query(
+        `DELETE FROM "${env.DB_SCHEMA}".authorization_keys
+         WHERE session_id = $1 AND key_type = $2 AND key_id = ANY($3)`,
+        [query.session.sessionId, query.keyType, query.keyIds],
+      );
 
-        const data = this.serializeForPersistence(type, value);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 
+  public async removeAllForSession(session: SessionReference): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_workspace_id', $1::text, true)`, [
+        session.workspaceId.toString(),
+      ]);
+
+      await client.query(
+        `DELETE FROM "${env.DB_SCHEMA}".authorization_keys
+         WHERE session_id = $1`,
+        [session.sessionId],
+      );
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async saveSessionRecords(records: readonly AuthStateRecord[]): Promise<void> {
+    const session = records[0].session;
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_workspace_id', $1::text, true)`, [
+        session.workspaceId.toString(),
+      ]);
+
+      for (const record of records) {
         await client.query(
           `INSERT INTO "${env.DB_SCHEMA}".authorization_keys
            (workspace_id, session_id, key_type, key_id, serialized_data)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (workspace_id, session_id, key_type, key_id)
            DO UPDATE SET serialized_data = EXCLUDED.serialized_data, updated_at = NOW()`,
-          [workspaceId, sessionId, type, id, data],
+          [
+            record.session.workspaceId,
+            record.session.sessionId,
+            record.key.type,
+            record.key.id,
+            this.serializeForPersistence(record.key.type, record.serializedData),
+          ],
         );
       }
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  public async removeKeys(
-    workspaceId: number,
-    sessionId: string,
-    type: string,
-    ids: string[],
-  ): Promise<void> {
-    if (ids.length === 0) {
-      return;
-    }
-
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(`SELECT set_config('app.current_workspace_id', $1::text, true)`, [
-        workspaceId.toString(),
-      ]);
-
-      await client.query(
-        `DELETE FROM "${env.DB_SCHEMA}".authorization_keys
-         WHERE session_id = $1 AND key_type = $2 AND key_id = ANY($3)`,
-        [sessionId, type, ids],
-      );
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  public async removeAllKeys(workspaceId: number, sessionId: string): Promise<void> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(`SELECT set_config('app.current_workspace_id', $1::text, true)`, [
-        workspaceId.toString(),
-      ]);
-
-      await client.query(
-        `DELETE FROM "${env.DB_SCHEMA}".authorization_keys
-         WHERE session_id = $1`,
-        [sessionId],
-      );
 
       await client.query('COMMIT');
     } catch (error) {

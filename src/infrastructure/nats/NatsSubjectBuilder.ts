@@ -1,9 +1,9 @@
 import { env } from '../../application/config/env.js';
 import { renderConfigTemplate } from '../../application/config/renderConfigTemplate.js';
-import { ProviderId, SessionAddress } from '../../shared/contracts/gateway.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 
 export class NatsSubjectBuilder {
-  public static getWorkerControlSubject(providerId: ProviderId, workerId: string): string {
+  public static getWorkerControlSubject(providerId: string, workerId: string): string {
     return renderConfigTemplate(env.NATS_SUBJECT_CONTROL_TEMPLATE, {
       provider: providerId,
       workerId,
@@ -11,7 +11,7 @@ export class NatsSubjectBuilder {
   }
 
   public static getSessionSubject(
-    session: SessionAddress,
+    session: SessionReference,
     eventType: 'incoming' | 'outgoing' | 'delivery' | 'status',
   ): string {
     const template = this.getSessionTemplate(eventType);
@@ -22,7 +22,7 @@ export class NatsSubjectBuilder {
     });
   }
 
-  public static getActivationSubject(session: SessionAddress): string {
+  public static getActivationSubject(session: SessionReference): string {
     return renderConfigTemplate(env.NATS_SUBJECT_ACTIVATION_TEMPLATE, {
       provider: session.provider,
       workspaceId: session.workspaceId,

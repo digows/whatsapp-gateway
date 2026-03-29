@@ -1,6 +1,6 @@
 import { env } from '../../application/config/env.js';
-import { SessionDescriptor } from '../../domain/entities/SessionDescriptor.js';
-import { WorkerIdentity } from '../../domain/entities/WorkerIdentity.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
+import { WorkerIdentity } from '../../domain/entities/operational/WorkerIdentity.js';
 import { RedisConnection } from './RedisConnection.js';
 import { RedisKeyBuilder } from './RedisKeyBuilder.js';
 
@@ -10,7 +10,7 @@ import RedlockModule from 'redlock';
 const Redlock = (RedlockModule as any).default || RedlockModule;
 
 export interface SessionLease {
-  session: SessionDescriptor;
+  session: SessionReference;
   release(): Promise<void>;
   extend(ms: number): Promise<void>;
 }
@@ -33,7 +33,7 @@ export class RedisSessionCoordinator {
   }
 
   public async acquireSessionLock(
-    session: SessionDescriptor,
+    session: SessionReference,
     ttlMs: number,
   ): Promise<SessionLease> {
     if (env.DISABLE_REDLOCK) {
@@ -93,7 +93,7 @@ export class RedisSessionCoordinator {
     }
   }
 
-  public async getAssignedWorker(session: SessionDescriptor): Promise<string | null> {
+  public async getAssignedWorker(session: SessionReference): Promise<string | null> {
     return this.redis.hget(
       RedisKeyBuilder.getSessionWorkerRegistryKey(session),
       session.sessionId,
@@ -101,7 +101,7 @@ export class RedisSessionCoordinator {
   }
 
   private async clearOrphanedAssignment(
-    session: SessionDescriptor,
+    session: SessionReference,
     lockKey: string,
   ): Promise<void> {
     const assignedWorker = await this.getAssignedWorker(session);
@@ -128,7 +128,7 @@ export class RedisSessionCoordinator {
   }
 
   private async inspectLockFailure(
-    session: SessionDescriptor,
+    session: SessionReference,
     lockKey: string,
   ): Promise<string> {
     try {
@@ -155,7 +155,7 @@ export class RedisSessionCoordinator {
     return exists === 1;
   }
 
-  private async registerWorkerAssignment(session: SessionDescriptor): Promise<void> {
+  private async registerWorkerAssignment(session: SessionReference): Promise<void> {
     await this.redis.hset(
       RedisKeyBuilder.getSessionWorkerRegistryKey(session),
       session.sessionId,
@@ -166,7 +166,7 @@ export class RedisSessionCoordinator {
     );
   }
 
-  private async unregisterWorkerAssignment(session: SessionDescriptor): Promise<void> {
+  private async unregisterWorkerAssignment(session: SessionReference): Promise<void> {
     await this.redis.hdel(
       RedisKeyBuilder.getSessionWorkerRegistryKey(session),
       session.sessionId,

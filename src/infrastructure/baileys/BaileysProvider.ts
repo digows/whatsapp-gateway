@@ -1,20 +1,23 @@
 import makeWASocket, { DisconnectReason, proto } from 'baileys';
+import { DeliveryResult, DeliveryStatus } from '../../domain/entities/messaging/DeliveryResult.js';
 import {
-  DeliveryResultEvent,
-  IncomingMessage,
-  InboundEvent,
   MessageReactionEvent,
-  MessageReceivedEvent,
   MessageUpdatedEvent,
-  OutgoingMessageCommand,
-  SessionRuntime,
-  SessionRuntimeCallbacks,
+  ReceivedMessageEvent,
+} from '../../domain/entities/messaging/InboundEvent.js';
+import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
+import { MessageContentType } from '../../domain/entities/messaging/MessageContentType.js';
+import { SendMessageCommand } from '../../domain/entities/messaging/SendMessageCommand.js';
+import { WhatsappMessage } from '../../domain/entities/messaging/WhatsappMessage.js';
+import {
+  SessionStatus,
   SessionStatusEvent,
-} from '../../shared/contracts/gateway.js';
+} from '../../domain/entities/operational/SessionStatus.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import qrcode from 'qrcode-terminal';
 import { env } from '../../application/config/env.js';
-import { SessionDescriptor } from '../../domain/entities/SessionDescriptor.js';
+import { SessionRuntime, SessionRuntimeCallbacks } from '../../application/ports/SessionRuntime.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { AntiBanService } from '../../domain/services/AntiBanService.js';
 import { PgSignalKeyRepository } from '../pg/PgSignalKeyRepository.js';
 import { RedisAntiBanWarmUpStateRepository } from '../redis/RedisAntiBanWarmUpStateRepository.js';
@@ -23,11 +26,6 @@ import { RedisKeyBuilder } from '../redis/RedisKeyBuilder.js';
 import { BaileysAuthStateStore } from './BaileysAuthStateStore.js';
 import { createBaileysLogger } from './BaileysLogger.js';
 import { BaileysMessageNormalizer } from './BaileysMessageNormalizer.js';
-
-export interface BaileysProviderCallbacks {
-  onInboundEvent?: (event: InboundEvent) => Promise<void>;
-  onSessionStatus?: (event: SessionStatusEvent) => Promise<void>;
-}
 
 /**
  * Single-session Baileys runtime.
@@ -44,8 +42,8 @@ export class BaileysProvider implements SessionRuntime {
   private readonly authStateStore: BaileysAuthStateStore;
 
   constructor(
-    private readonly session: SessionDescriptor,
-    private readonly callbacks: SessionRuntimeCallbacks & Partial<BaileysProviderCallbacks>,
+    private readonly session: SessionReference,
+    private readonly callbacks: SessionRuntimeCallbacks,
   ) {
     const proxyUrl = env.RESIDENTIAL_PROXY_URL;
     if (proxyUrl) {
@@ -56,8 +54,7 @@ export class BaileysProvider implements SessionRuntime {
     }
 
     this.authStateStore = new BaileysAuthStateStore(
-      this.session.workspaceId,
-      this.session.sessionId,
+      this.session,
       new PgSignalKeyRepository(),
       RedisConnection.getClient(),
     );
@@ -106,22 +103,32 @@ export class BaileysProvider implements SessionRuntime {
     }
   }
 
-  public async send(command: OutgoingMessageCommand): Promise<DeliveryResultEvent> {
+  public async send(command: SendMessageCommand): Promise<DeliveryResult> {
     if (!this.sock) {
-      return this.buildDeliveryResult(command, 'failed', undefined, 'no active socket');
+      return this.buildDeliveryResult(
+        command,
+        DeliveryStatus.Failed,
+        undefined,
+        'no active socket',
+      );
     }
 
-    const recipientJid = this.normalizeRecipientId(command.message.recipientId);
+    const recipientJid = this.normalizeRecipientId(command.message.chatId);
     const decision = await this.antiBan.beforeSend(recipientJid, command.message.content);
     if (!decision.allowed) {
       console.warn(`[ANTIBAN] Outbound message blocked for ${recipientJid}: ${decision.reason}`);
-      return this.buildDeliveryResult(command, 'blocked', undefined, decision.reason);
+      return this.buildDeliveryResult(
+        command,
+        DeliveryStatus.Blocked,
+        undefined,
+        decision.reason,
+      );
     }
 
     const isGroup = recipientJid.endsWith('@g.us');
     await this.sleep(decision.preSendDelayMs);
 
-    if (decision.content.type === 'text' && !isGroup) {
+    if (decision.content.type === MessageContentType.Text && !isGroup) {
       await this.sock.presenceSubscribe(recipientJid).catch(() => {});
       await this.sock.sendPresenceUpdate('composing', recipientJid).catch(() => {});
     }
@@ -134,17 +141,21 @@ export class BaileysProvider implements SessionRuntime {
         this.toBaileysContent(decision.content),
       );
       await this.antiBan.afterSend(recipientJid, decision.content, decision.trackingKey);
-      return this.buildDeliveryResult(command, 'sent', response?.key?.id ?? undefined);
+      return this.buildDeliveryResult(
+        command,
+        DeliveryStatus.Sent,
+        response?.key?.id ?? undefined,
+      );
     } catch (error) {
       this.antiBan.afterSendFailed(error);
       return this.buildDeliveryResult(
         command,
-        'failed',
+        DeliveryStatus.Failed,
         undefined,
         error instanceof Error ? error.message : String(error),
       );
     } finally {
-      if (decision.content.type === 'text' && !isGroup && this.sock) {
+      if (decision.content.type === MessageContentType.Text && !isGroup && this.sock) {
         await this.sock.sendPresenceUpdate('paused' as any, recipientJid).catch(() => {});
       }
     }
@@ -201,7 +212,7 @@ export class BaileysProvider implements SessionRuntime {
     if (connection === 'open') {
       console.log(`[BaileysProvider] Connection opened for ${this.session.toLogLabel()}.`);
       this.antiBan.onReconnect();
-      await this.publishStatus('connected');
+      await this.publishStatus(SessionStatus.Connected);
       return;
     }
 
@@ -232,18 +243,18 @@ export class BaileysProvider implements SessionRuntime {
       await this.authStateStore.clearSession().catch(error => {
         console.error('[BaileysProvider] Fatal error cleaning session:', error);
       });
-      await this.publishStatus('logged_out', `disconnect:${statusCode}`);
+      await this.publishStatus(SessionStatus.LoggedOut, `disconnect:${statusCode}`);
     }
 
     if (shouldReconnect) {
-      await this.publishStatus('reconnecting', `disconnect:${statusCode}`);
+      await this.publishStatus(SessionStatus.Reconnecting, `disconnect:${statusCode}`);
       this.scheduleReconnect();
       return;
     }
 
     this.isStopping = false;
     if (!isIntentional) {
-      await this.publishStatus('failed', `disconnect:${statusCode}`);
+      await this.publishStatus(SessionStatus.Failed, `disconnect:${statusCode}`);
     }
     console.log(
       `[BaileysProvider] ${this.session.toLogLabel()} stopped (${isIntentional ? 'requested' : 'logged out'}).`,
@@ -268,8 +279,6 @@ export class BaileysProvider implements SessionRuntime {
 
       const normalized = await BaileysMessageNormalizer.normalize(
         msg,
-        this.session.workspaceId,
-        this.session.sessionId,
         this.resolveJidToE164.bind(this),
       );
 
@@ -293,12 +302,11 @@ export class BaileysProvider implements SessionRuntime {
         continue;
       }
 
-      const inboundEvent: MessageReceivedEvent = {
-        eventType: 'message.received',
-        session: this.session,
-        timestamp: normalized.timestamp,
-        message: normalized,
-      };
+      const inboundEvent = new ReceivedMessageEvent(
+        this.session,
+        normalized.timestamp,
+        normalized,
+      );
 
       await this.callbacks.onInboundEvent(inboundEvent);
     }
@@ -352,19 +360,18 @@ export class BaileysProvider implements SessionRuntime {
 
       console.log(`\n[MSG UPDATE] ${parts.join(' ')}`);
 
-      const inboundEvent: MessageUpdatedEvent = {
-        eventType: 'message.updated',
-        session: this.session,
-        timestamp: new Date().toISOString(),
+      const inboundEvent = new MessageUpdatedEvent(
+        this.session,
+        new Date().toISOString(),
         messageId,
         chatId,
         senderId,
-        fromMe: Boolean(key.fromMe),
-        status: typeof status === 'number' ? status : undefined,
-        stubType: typeof stubType === 'number' ? stubType : undefined,
-        contentType: hasMessage ? this.describeMessageContentType(update.message) : undefined,
-        pollUpdateCount: pollUpdateCount > 0 ? pollUpdateCount : undefined,
-      };
+        Boolean(key.fromMe),
+        typeof status === 'number' ? status : undefined,
+        typeof stubType === 'number' ? stubType : undefined,
+        hasMessage ? this.describeMessageContentType(update.message) : undefined,
+        pollUpdateCount > 0 ? pollUpdateCount : undefined,
+      );
 
       await this.callbacks.onInboundEvent(inboundEvent);
     }
@@ -383,17 +390,16 @@ export class BaileysProvider implements SessionRuntime {
         `\n[MSG REACTION] chat=${chatLabel} sender=${senderLabel} text=${reactionText}`,
       );
 
-      const inboundEvent: MessageReactionEvent = {
-        eventType: 'message.reaction',
-        session: this.session,
-        timestamp: new Date().toISOString(),
-        messageId: key.id || undefined,
+      const inboundEvent = new MessageReactionEvent(
+        this.session,
+        new Date().toISOString(),
         chatId,
         senderId,
-        fromMe: Boolean(key.fromMe),
-        reactionText: entry?.reaction?.text || undefined,
-        removed: !entry?.reaction?.text,
-      };
+        Boolean(key.fromMe),
+        !entry?.reaction?.text,
+        key.id || undefined,
+        entry?.reaction?.text || undefined,
+      );
 
       await this.callbacks.onInboundEvent(inboundEvent);
     }
@@ -415,7 +421,7 @@ export class BaileysProvider implements SessionRuntime {
   private logNormalizedMessage(
     direction: string,
     rawMessage: any,
-    normalized: IncomingMessage,
+    normalized: WhatsappMessage,
   ): void {
     const senderLabel = direction === 'OUT'
       ? 'self'
@@ -454,7 +460,7 @@ export class BaileysProvider implements SessionRuntime {
 
   private buildSenderLabel(
     rawMessage: any,
-    normalized: IncomingMessage,
+    normalized: WhatsappMessage,
   ): string {
     const senderPhone = normalized.context?.senderPhone;
     const senderName =
@@ -531,60 +537,63 @@ export class BaileysProvider implements SessionRuntime {
   }
 
   private buildDeliveryResult(
-    command: OutgoingMessageCommand,
-    status: DeliveryResultEvent['status'],
+    command: SendMessageCommand,
+    status: DeliveryStatus,
     providerMessageId?: string,
     reason?: string,
-  ): DeliveryResultEvent {
-    return {
-      commandId: command.commandId,
-      session: this.session,
-      recipientId: command.message.recipientId,
+  ): DeliveryResult {
+    return new DeliveryResult(
+      command.commandId,
+      this.session,
+      command.message.chatId,
       status,
+      new Date().toISOString(),
       providerMessageId,
       reason,
-      timestamp: new Date().toISOString(),
-    };
+    );
   }
 
   private async publishStatus(
-    status: SessionStatusEvent['status'],
+    status: SessionStatus,
     reason?: string,
   ): Promise<void> {
-    await this.callbacks.onSessionStatus({
-      session: this.session,
-      status,
-      reason,
-      timestamp: new Date().toISOString(),
-    });
+    await this.callbacks.onSessionStatus(
+      new SessionStatusEvent(
+        this.session,
+        status,
+        new Date().toISOString(),
+        undefined,
+        reason,
+      ),
+    );
   }
 
-  private toBaileysContent(content: OutgoingMessageCommand['message']['content']): any {
+  private toBaileysContent(content: MessageContent): any {
     switch (content.type) {
-      case 'text':
+      case MessageContentType.Text:
         return { text: content.text ?? '' };
-      case 'image':
+      case MessageContentType.Image:
         if (!content.mediaUrl) {
           throw new Error('image content requires mediaUrl');
         }
         return { image: { url: content.mediaUrl }, caption: content.text };
-      case 'audio':
+      case MessageContentType.Audio:
         if (!content.mediaUrl) {
           throw new Error('audio content requires mediaUrl');
         }
         return { audio: { url: content.mediaUrl } };
-      case 'video':
+      case MessageContentType.Video:
         if (!content.mediaUrl) {
           throw new Error('video content requires mediaUrl');
         }
         return { video: { url: content.mediaUrl }, caption: content.text };
-      case 'document':
+      case MessageContentType.Document:
         if (!content.mediaUrl) {
           throw new Error('document content requires mediaUrl');
         }
         return {
           document: { url: content.mediaUrl },
-          fileName: content.text ?? 'document',
+          fileName: content.fileName ?? content.text ?? 'document',
         };
       default:
         throw new Error(`Unsupported outbound content type: ${(content as any).type}`);
@@ -621,7 +630,7 @@ export class BaileysProvider implements SessionRuntime {
 
         if (lid && pn) {
           const redisKey = RedisKeyBuilder.getLidMappingKey(
-            this.session.workspaceId,
+            this.session,
             lid,
           );
           await redis.setex(redisKey, 86400 * 30, pn);
@@ -661,7 +670,7 @@ export class BaileysProvider implements SessionRuntime {
       try {
         const redis = RedisConnection.getClient();
         const mappedPn = await redis.get(
-          RedisKeyBuilder.getLidMappingKey(this.session.workspaceId, jid),
+          RedisKeyBuilder.getLidMappingKey(this.session, jid),
         );
         if (mappedPn) {
           return this.resolveJidToE164(mappedPn);
@@ -732,7 +741,7 @@ export class BaileysProvider implements SessionRuntime {
 
   private buildDebugContentSuffix(
     rawMessage: any,
-    normalized?: IncomingMessage,
+    normalized?: WhatsappMessage,
   ): string {
     if (!this.isDebugLoggingEnabled()) {
       return '';
@@ -860,24 +869,24 @@ export class BaileysProvider implements SessionRuntime {
   }
 
   private summarizeNormalizedContent(
-    content: IncomingMessage['content'],
+    content: MessageContent,
   ): Record<string, unknown> | null {
     switch (content.type) {
-      case 'text':
+      case MessageContentType.Text:
         return {
-          type: 'text',
+          type: MessageContentType.Text,
           text: this.truncateDebugText(content.text),
         };
-      case 'image':
-      case 'video':
-      case 'document':
+      case MessageContentType.Image:
+      case MessageContentType.Video:
+      case MessageContentType.Document:
         return {
           type: content.type,
           text: this.truncateDebugText(content.text),
         };
-      case 'audio':
+      case MessageContentType.Audio:
         return {
-          type: 'audio',
+          type: MessageContentType.Audio,
         };
       default:
         return {

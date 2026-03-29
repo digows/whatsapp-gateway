@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SessionDescriptor } from '../src/domain/entities/SessionDescriptor.js';
-import { WorkerHeartbeat } from '../src/domain/entities/WorkerHeartbeat.js';
-import { WorkerIdentity } from '../src/domain/entities/WorkerIdentity.js';
+import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
+import { WorkerHeartbeat } from '../src/domain/entities/operational/WorkerHeartbeat.js';
+import { WorkerIdentity } from '../src/domain/entities/operational/WorkerIdentity.js';
 
-test('SessionDescriptor exposes a stable key and log label', () => {
-  const session = new SessionDescriptor('whatsapp-web', 42, 'session-123');
+test('SessionReference exposes a stable key and log label', () => {
+  const session = new SessionReference('whatsapp-web', 42, 'session-123');
 
   assert.equal(session.toKey(), 'whatsapp-web:42:session-123');
   assert.equal(
@@ -14,7 +14,7 @@ test('SessionDescriptor exposes a stable key and log label', () => {
   );
 });
 
-test('WorkerHeartbeat exports the local contract payload', () => {
+test('WorkerHeartbeat exports the registry payload', () => {
   const workerIdentity = WorkerIdentity.current();
   const heartbeat = WorkerHeartbeat.capture(
     'whatsapp-web',
@@ -23,13 +23,13 @@ test('WorkerHeartbeat exports the local contract payload', () => {
     50,
   );
 
-  const contract = heartbeat.toContract();
+  const payload = heartbeat.toRegistryPayload();
 
-  assert.equal(contract.provider, 'whatsapp-web');
-  assert.equal(contract.workerId, workerIdentity.id);
-  assert.equal(contract.currentSessions, 3);
-  assert.equal(contract.maxCapacity, 50);
-  assert.ok(contract.cpuUsageMicros >= 0);
-  assert.ok(contract.memoryUsageMb >= 0);
-  assert.ok(contract.lastPulse > 0);
+  assert.equal(payload.provider, 'whatsapp-web');
+  assert.equal(payload.worker_id, workerIdentity.id);
+  assert.equal(payload.current_sessions, 3);
+  assert.equal(payload.max_capacity, 50);
+  assert.ok(Number(payload.cpu_usage) >= 0);
+  assert.ok(Number(payload.memory_usage_mb) >= 0);
+  assert.ok(Number(payload.last_pulse) > 0);
 });

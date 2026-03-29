@@ -1,9 +1,7 @@
-import { SessionAddress } from '../../shared/contracts/gateway.js';
-
 /**
  * Canonical identifier for a hosted WhatsApp session.
  */
-export class SessionDescriptor implements SessionAddress {
+export class SessionReference {
   constructor(
     public readonly provider: string,
     public readonly workspaceId: number,
@@ -16,5 +14,9 @@ export class SessionDescriptor implements SessionAddress {
 
   public toLogLabel(): string {
     return `${this.provider} session ${this.sessionId} (WS: ${this.workspaceId})`;
+  }
+
+  public belongsTo(providerId: string): boolean {
+    return this.provider === providerId;
   }
 }

@@ -3,8 +3,6 @@ import os from 'os';
 
 /**
  * Stable identity for the current worker process.
- * This belongs to the technical domain because session ownership and heartbeat
- * are first-class concepts of this microservice.
  */
 export class WorkerIdentity {
   private static currentIdentity?: WorkerIdentity;
@@ -19,11 +17,7 @@ export class WorkerIdentity {
     return this.currentIdentity;
   }
 
-  public static getId(): string {
-    return this.current().id;
-  }
-
-  private constructor(public readonly id: string) {}
+  constructor(public readonly id: string) {}
 
   public toString(): string {
     return this.id;

@@ -1,4 +1,4 @@
-import { AntiBanWarmUpState } from '../../entities/AntiBanWarmUpState.js';
+import { AntiBanWarmUpState } from '../../entities/antiban/AntiBanWarmUpState.js';
 
 export interface WarmUpPolicyConfig {
   enabled: boolean;
@@ -141,10 +141,7 @@ export class WarmUpPolicy {
 
   public exportState(): AntiBanWarmUpState {
     this.ensureHydrated();
-    return {
-      ...this.state,
-      dailyCounts: [...this.state.dailyCounts],
-    };
+    return this.state.clone();
   }
 
   private getDailyLimit(): number {
@@ -177,12 +174,12 @@ export class WarmUpPolicy {
 
   private createInitialState(): AntiBanWarmUpState {
     const now = Date.now();
-    return {
-      startedAt: now,
-      lastActiveAt: now,
-      dailyCounts: [],
-      graduated: this.config.missingStateMode === 'graduated' || !this.config.enabled,
-    };
+    return new AntiBanWarmUpState(
+      now,
+      now,
+      [],
+      this.config.missingStateMode === 'graduated' || !this.config.enabled,
+    );
   }
 
   private ensureHydrated(): void {

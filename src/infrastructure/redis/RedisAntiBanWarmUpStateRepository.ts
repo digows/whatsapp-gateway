@@ -1,21 +1,33 @@
 import { Redis } from 'ioredis';
+import { WarmUpStateRepository } from '../../application/ports/WarmUpStateRepository.js';
 import { env } from '../../application/config/env.js';
-import { AntiBanWarmUpState } from '../../domain/entities/AntiBanWarmUpState.js';
-import { SessionDescriptor } from '../../domain/entities/SessionDescriptor.js';
-import { IAntiBanWarmUpStateRepository } from '../../domain/repositories/IAntiBanWarmUpStateRepository.js';
+import { AntiBanWarmUpState } from '../../domain/entities/antiban/AntiBanWarmUpState.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { RedisKeyBuilder } from './RedisKeyBuilder.js';
 
-export class RedisAntiBanWarmUpStateRepository implements IAntiBanWarmUpStateRepository {
+export class RedisAntiBanWarmUpStateRepository implements WarmUpStateRepository {
   constructor(private readonly redis: Redis) {}
 
-  public async load(session: SessionDescriptor): Promise<AntiBanWarmUpState | null> {
-    const raw = await this.redis.get(this.getKey(session));
+  public async load(session: SessionReference): Promise<AntiBanWarmUpState | null> {
+    const raw = await this.redis.get(RedisKeyBuilder.getAntiBanWarmUpKey(session));
     if (!raw) {
       return null;
     }
 
     try {
-      return JSON.parse(raw) as AntiBanWarmUpState;
+      const payload = JSON.parse(raw) as {
+        startedAt: number;
+        lastActiveAt: number;
+        dailyCounts: number[];
+        graduated: boolean;
+      };
+
+      return new AntiBanWarmUpState(
+        payload.startedAt,
+        payload.lastActiveAt,
+        Array.isArray(payload.dailyCounts) ? payload.dailyCounts : [],
+        Boolean(payload.graduated),
+      );
     } catch (error) {
       console.warn(
         `[ANTIBAN] Failed to parse warm-up state for ${session.toLogLabel()}:`,
@@ -25,15 +37,16 @@ export class RedisAntiBanWarmUpStateRepository implements IAntiBanWarmUpStateRep
     }
   }
 
-  public async save(session: SessionDescriptor, state: AntiBanWarmUpState): Promise<void> {
+  public async save(session: SessionReference, state: AntiBanWarmUpState): Promise<void> {
     await this.redis.setex(
-      this.getKey(session),
+      RedisKeyBuilder.getAntiBanWarmUpKey(session),
       env.ANTI_BAN_WARMUP_STATE_TTL_SECONDS,
-      JSON.stringify(state),
+      JSON.stringify({
+        startedAt: state.startedAt,
+        lastActiveAt: state.lastActiveAt,
+        dailyCounts: state.dailyCounts,
+        graduated: state.graduated,
+      }),
     );
-  }
-
-  private getKey(session: SessionDescriptor): string {
-    return RedisKeyBuilder.getAntiBanWarmUpKey(session);
   }
 }

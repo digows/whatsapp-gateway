@@ -1,4 +1,4 @@
-import { OutgoingMessageContent } from '../../../shared/contracts/gateway.js';
+import { MessageContent } from '../../entities/messaging/MessageContent.js';
 
 export interface ContentVariatorConfig {
   maxIdenticalMessages: number;
@@ -11,7 +11,7 @@ const ZERO_WIDTH = ['\u200B', '\u200C', '\u200D', '\u2060'];
 export class ContentVariator {
   constructor(private readonly config: ContentVariatorConfig) {}
 
-  public getTrackingKey(content: OutgoingMessageContent): string | null {
+  public getTrackingKey(content: MessageContent): string | null {
     if (!content.text) {
       return null;
     }
@@ -20,9 +20,9 @@ export class ContentVariator {
   }
 
   public vary(
-    content: OutgoingMessageContent,
+    content: MessageContent,
     seenCount: number,
-  ): OutgoingMessageContent {
+  ): MessageContent {
     if (!content.text || seenCount < this.config.maxIdenticalMessages) {
       return content;
     }
@@ -38,10 +38,7 @@ export class ContentVariator {
       text = this.applyPunctuationVariation(text, variationIndex);
     }
 
-    return {
-      ...content,
-      text,
-    };
+    return new MessageContent(content.type, text, content.mediaUrl, content.fileName);
   }
 
   private applyZeroWidthVariation(text: string, variationIndex: number): string {

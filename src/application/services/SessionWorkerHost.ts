@@ -1,15 +1,17 @@
-import {
-  SessionAddress,
-  SessionRuntime,
-  SessionRuntimeCallbacks,
-  SessionStatus,
-  WorkerCommand,
-  WorkerTransport,
-} from '../../shared/contracts/gateway.js';
 import { env } from '../config/env.js';
 import { CHANNEL_PROVIDER_ID } from '../config/provider.js';
-import { SessionDescriptor } from '../../domain/entities/SessionDescriptor.js';
-import { WorkerIdentity } from '../../domain/entities/WorkerIdentity.js';
+import { SessionRuntime, SessionRuntimeCallbacks } from '../ports/SessionRuntime.js';
+import { WorkerTransport } from '../ports/WorkerTransport.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
+import {
+  SessionStatus,
+  SessionStatusEvent,
+} from '../../domain/entities/operational/SessionStatus.js';
+import {
+  WorkerCommand,
+  WorkerCommandAction,
+} from '../../domain/entities/operational/WorkerCommand.js';
+import { WorkerIdentity } from '../../domain/entities/operational/WorkerIdentity.js';
 import { BaileysProvider } from '../../infrastructure/baileys/BaileysProvider.js';
 import { NatsChannelTransport } from '../../infrastructure/nats/NatsChannelTransport.js';
 import { PgConnection } from '../../infrastructure/pg/PgConnection.js';
@@ -21,7 +23,7 @@ import {
 import { RedisWorkerHealthReporter } from '../../infrastructure/redis/RedisWorkerHealthReporter.js';
 
 interface HostedSession {
-  descriptor: SessionDescriptor;
+  session: SessionReference;
   runtime: SessionRuntime;
   lease: SessionLease;
   lockHeartbeat?: NodeJS.Timeout;
@@ -29,7 +31,7 @@ interface HostedSession {
 }
 
 type SessionRuntimeFactory = (
-  session: SessionDescriptor,
+  session: SessionReference,
   callbacks: SessionRuntimeCallbacks,
 ) => SessionRuntime;
 
@@ -62,7 +64,8 @@ export class SessionWorkerHost {
     this.providerId = options.providerId ?? CHANNEL_PROVIDER_ID;
     this.workerIdentity = options.workerIdentity ?? WorkerIdentity.current();
     this.transport = options.transport ?? new NatsChannelTransport(this.providerId);
-    this.runtimeFactory = options.runtimeFactory ?? ((session, callbacks) => new BaileysProvider(session, callbacks));
+    this.runtimeFactory = options.runtimeFactory
+      ?? ((session, callbacks) => new BaileysProvider(session, callbacks));
     this.sessionCoordinator = new RedisSessionCoordinator(this.workerIdentity);
     this.healthReporter = new RedisWorkerHealthReporter(
       this.providerId,
@@ -71,9 +74,6 @@ export class SessionWorkerHost {
     );
   }
 
-  /**
-   *
-   */
   public async start(): Promise<void> {
     if (this.started) {
       return;
@@ -98,10 +98,117 @@ export class SessionWorkerHost {
     }
 
     this.stopPromise = this.stopInternal();
+
     try {
       await this.stopPromise;
     } finally {
       this.stopPromise = undefined;
+    }
+  }
+
+  public async startSession(session: SessionReference): Promise<void> {
+    this.ensureStarted();
+
+    const sessionKey = session.toKey();
+
+    if (this.sessions.has(sessionKey) || this.startingSessions.has(sessionKey)) {
+      console.log(`[HOST] ${session.toLogLabel()} is already hosted on this worker.`);
+      return;
+    }
+
+    if (this.sessions.size + this.startingSessions.size >= env.MAX_CONCURRENT_SESSIONS) {
+      throw new Error(
+        `Worker capacity exceeded (${this.sessions.size + this.startingSessions.size}/${env.MAX_CONCURRENT_SESSIONS})`,
+      );
+    }
+
+    console.log(`[HOST] Starting ${session.toLogLabel()}...`);
+    this.startingSessions.add(sessionKey);
+
+    try {
+      const lease = await this.sessionCoordinator.acquireSessionLock(
+        session,
+        env.SESSION_LOCK_TTL_MS,
+      );
+      const runtime = this.runtimeFactory(session, {
+        onInboundEvent: async event => {
+          await this.transport.publishInbound(event);
+        },
+        onSessionStatus: async event => {
+          await this.transport.publishSessionStatus(
+            new SessionStatusEvent(
+              event.session,
+              event.status,
+              event.timestamp,
+              this.workerIdentity.id,
+              event.reason,
+            ),
+          );
+
+          if (event.status === SessionStatus.LoggedOut || event.status === SessionStatus.Failed) {
+            await this.stopSession(event.session);
+          }
+        },
+      });
+
+      const hostedSession: HostedSession = {
+        session,
+        runtime,
+        lease,
+      };
+
+      this.sessions.set(sessionKey, hostedSession);
+      await this.publishSessionStatus(session, SessionStatus.Starting);
+
+      await this.transport.subscribeOutgoing(session, async command => {
+        const currentSession = this.sessions.get(sessionKey);
+        if (!currentSession) {
+          throw new Error(`Session ${session.toLogLabel()} is no longer hosted.`);
+        }
+
+        const result = await currentSession.runtime.send(command);
+        await this.transport.publishDelivery(result);
+      });
+
+      hostedSession.lockHeartbeat = this.startLockHeartbeat(hostedSession);
+      await runtime.start();
+      console.log(`[HOST] ${session.toLogLabel()} is online.`);
+    } catch (error) {
+      const hostedSession = this.sessions.get(sessionKey);
+      this.sessions.delete(sessionKey);
+
+      if (hostedSession) {
+        await this.cleanupSession(hostedSession);
+      }
+
+      await this.publishSessionStatus(
+        session,
+        SessionStatus.Failed,
+        error instanceof Error ? error.message : String(error),
+      );
+      throw error;
+    } finally {
+      this.startingSessions.delete(sessionKey);
+    }
+  }
+
+  public async stopSession(session: SessionReference): Promise<void> {
+    const sessionKey = session.toKey();
+    const hostedSession = this.sessions.get(sessionKey);
+    if (!hostedSession || this.stoppingSessions.has(sessionKey)) {
+      return;
+    }
+
+    this.stoppingSessions.add(sessionKey);
+    this.sessions.delete(sessionKey);
+
+    try {
+      await this.publishSessionStatus(session, SessionStatus.Stopping);
+      console.log(`[HOST] Stopping ${session.toLogLabel()}...`);
+      await this.cleanupSession(hostedSession);
+      await this.publishSessionStatus(session, SessionStatus.Stopped);
+    } finally {
+      this.stoppingSessions.delete(sessionKey);
     }
   }
 
@@ -113,10 +220,10 @@ export class SessionWorkerHost {
     await this.withShutdownTimeout('stop health reporter', () => this.healthReporter.stop());
 
     const activeSessions = Array.from(this.sessions.values());
-    for (const session of activeSessions) {
+    for (const hostedSession of activeSessions) {
       await this.withShutdownTimeout(
-        `stop session ${session.descriptor.toLogLabel()}`,
-        () => this.stopSession(session.descriptor),
+        `stop session ${hostedSession.session.toLogLabel()}`,
+        () => this.stopSession(hostedSession.session),
       );
     }
 
@@ -129,133 +236,29 @@ export class SessionWorkerHost {
     this.started = false;
   }
 
-  public async startSession(session: SessionAddress): Promise<void> {
-    this.ensureStarted();
-
-    const descriptor = this.toDescriptor(session);
-    const sessionKey = descriptor.toKey();
-
-    if (this.sessions.has(sessionKey) || this.startingSessions.has(sessionKey)) {
-      console.log(`[HOST] ${descriptor.toLogLabel()} is already hosted on this worker.`);
-      return;
-    }
-
-    if (this.sessions.size + this.startingSessions.size >= env.MAX_CONCURRENT_SESSIONS) {
-      throw new Error(
-        `Worker capacity exceeded (${this.sessions.size + this.startingSessions.size}/${env.MAX_CONCURRENT_SESSIONS})`,
-      );
-    }
-
-    console.log(`[HOST] Starting ${descriptor.toLogLabel()}...`);
-    this.startingSessions.add(sessionKey);
-
-    try {
-      const lease = await this.sessionCoordinator.acquireSessionLock(
-        descriptor,
-        env.SESSION_LOCK_TTL_MS,
-      );
-      const runtime = this.runtimeFactory(descriptor, {
-        onInboundEvent: async event => {
-          await this.transport.publishInbound(event);
-        },
-        onSessionStatus: async event => {
-          await this.transport.publishSessionStatus({
-            ...event,
-            workerId: this.workerIdentity.id,
-          });
-
-          if (event.status === 'logged_out' || event.status === 'failed') {
-            await this.stopSession(event.session);
-          }
-        },
-      });
-
-      const hostedSession: HostedSession = {
-        descriptor,
-        runtime,
-        lease,
-      };
-
-      this.sessions.set(sessionKey, hostedSession);
-      await this.publishSessionStatus(descriptor, 'starting');
-
-      await this.transport.subscribeOutgoing(descriptor, async command => {
-        const currentSession = this.sessions.get(sessionKey);
-        if (!currentSession) {
-          throw new Error(`Session ${descriptor.toLogLabel()} is no longer hosted.`);
-        }
-
-        const result = await currentSession.runtime.send(command);
-        await this.transport.publishDelivery(result);
-      });
-
-      hostedSession.lockHeartbeat = this.startLockHeartbeat(hostedSession);
-      await runtime.start();
-      console.log(`[HOST] ${descriptor.toLogLabel()} is online.`);
-    } catch (error) {
-      const hostedSession = this.sessions.get(sessionKey);
-      this.sessions.delete(sessionKey);
-
-      if (hostedSession) {
-        await this.cleanupSession(hostedSession);
-      }
-
-      await this.publishSessionStatus(
-        descriptor,
-        'failed',
-        error instanceof Error ? error.message : String(error),
-      );
-      throw error;
-    } finally {
-      this.startingSessions.delete(sessionKey);
-    }
-  }
-
-  /**
-   *
-   * @param session
-   */
-  public async stopSession(session: SessionAddress): Promise<void> {
-    const descriptor = this.toDescriptor(session);
-    const sessionKey = descriptor.toKey();
-    const hostedSession = this.sessions.get(sessionKey);
-    if (!hostedSession || this.stoppingSessions.has(sessionKey)) {
-      return;
-    }
-
-    this.stoppingSessions.add(sessionKey);
-    this.sessions.delete(sessionKey);
-
-    try {
-      await this.publishSessionStatus(descriptor, 'stopping');
-      console.log(`[HOST] Stopping ${descriptor.toLogLabel()}...`);
-      await this.cleanupSession(hostedSession);
-      await this.publishSessionStatus(descriptor, 'stopped');
-    } finally {
-      this.stoppingSessions.delete(sessionKey);
-    }
-  }
-
-  private startLockHeartbeat(session: HostedSession): NodeJS.Timeout {
-    session.lockHeartbeatStopped = false;
+  private startLockHeartbeat(hostedSession: HostedSession): NodeJS.Timeout {
+    hostedSession.lockHeartbeatStopped = false;
 
     const scheduleNext = (): NodeJS.Timeout => {
       const timer = setTimeout(async () => {
-        if (session.lockHeartbeatStopped || !this.sessions.has(session.descriptor.toKey())) {
+        if (
+          hostedSession.lockHeartbeatStopped
+          || !this.sessions.has(hostedSession.session.toKey())
+        ) {
           return;
         }
 
         try {
-          await session.lease.extend(env.SESSION_LOCK_TTL_MS);
-          if (!session.lockHeartbeatStopped) {
-            session.lockHeartbeat = scheduleNext();
+          await hostedSession.lease.extend(env.SESSION_LOCK_TTL_MS);
+          if (!hostedSession.lockHeartbeatStopped) {
+            hostedSession.lockHeartbeat = scheduleNext();
           }
         } catch (error) {
           console.error(
-            `[HOST] Failed to extend lock for ${session.descriptor.toLogLabel()}:`,
+            `[HOST] Failed to extend lock for ${hostedSession.session.toLogLabel()}:`,
             error,
           );
-          void this.stopSession(session.descriptor);
+          void this.stopSession(hostedSession.session);
         }
       }, env.SESSION_LOCK_HEARTBEAT_MS);
 
@@ -266,39 +269,39 @@ export class SessionWorkerHost {
     return scheduleNext();
   }
 
-  private async cleanupSession(session: HostedSession): Promise<void> {
-    session.lockHeartbeatStopped = true;
-    if (session.lockHeartbeat) {
-      clearTimeout(session.lockHeartbeat);
-      session.lockHeartbeat = undefined;
+  private async cleanupSession(hostedSession: HostedSession): Promise<void> {
+    hostedSession.lockHeartbeatStopped = true;
+    if (hostedSession.lockHeartbeat) {
+      clearTimeout(hostedSession.lockHeartbeat);
+      hostedSession.lockHeartbeat = undefined;
     }
 
     const disconnectTransportPromise = this.withCleanupTimeout(
-      `disconnect transport for ${session.descriptor.toLogLabel()}`,
-      () => this.transport.disconnectSession(session.descriptor),
+      `disconnect transport for ${hostedSession.session.toLogLabel()}`,
+      () => this.transport.disconnectSession(hostedSession.session),
     ).catch(error => {
       console.warn(
-        `[HOST] Non-critical error disconnecting transport for ${session.descriptor.toLogLabel()}:`,
+        `[HOST] Non-critical error disconnecting transport for ${hostedSession.session.toLogLabel()}:`,
         error,
       );
     });
 
     const stopRuntimePromise = this.withCleanupTimeout(
-      `stop runtime for ${session.descriptor.toLogLabel()}`,
-      () => session.runtime.stop(),
+      `stop runtime for ${hostedSession.session.toLogLabel()}`,
+      () => hostedSession.runtime.stop(),
     ).catch(error => {
       console.warn(
-        `[HOST] Non-critical error stopping runtime for ${session.descriptor.toLogLabel()}:`,
+        `[HOST] Non-critical error stopping runtime for ${hostedSession.session.toLogLabel()}:`,
         error,
       );
     });
 
     await this.withCleanupTimeout(
-      `release lock for ${session.descriptor.toLogLabel()}`,
-      () => session.lease.release(),
+      `release lock for ${hostedSession.session.toLogLabel()}`,
+      () => hostedSession.lease.release(),
     ).catch(error => {
       console.warn(
-        `[HOST] Non-critical error releasing lock for ${session.descriptor.toLogLabel()}:`,
+        `[HOST] Non-critical error releasing lock for ${hostedSession.session.toLogLabel()}:`,
         error,
       );
     });
@@ -365,12 +368,12 @@ export class SessionWorkerHost {
       return;
     }
 
-    if (command.action === 'start_session') {
+    if (command.action === WorkerCommandAction.StartSession) {
       await this.startSession(command.session);
       return;
     }
 
-    if (command.action === 'stop_session') {
+    if (command.action === WorkerCommandAction.StopSession) {
       await this.stopSession(command.session);
       return;
     }
@@ -378,25 +381,23 @@ export class SessionWorkerHost {
     console.warn(`[HOST] Unknown worker command action ${(command as any).action}.`);
   };
 
-  private toDescriptor(session: SessionAddress): SessionDescriptor {
-    return new SessionDescriptor(
-      session.provider,
-      session.workspaceId,
-      session.sessionId,
-    );
-  }
-
   private async publishSessionStatus(
-    session: SessionDescriptor,
-    status: Extract<SessionStatus, 'starting' | 'stopping' | 'stopped' | 'failed'>,
+    session: SessionReference,
+    status:
+      | SessionStatus.Starting
+      | SessionStatus.Stopping
+      | SessionStatus.Stopped
+      | SessionStatus.Failed,
     reason?: string,
   ): Promise<void> {
-    await this.transport.publishSessionStatus({
-      session,
-      workerId: this.workerIdentity.id,
-      status,
-      reason,
-      timestamp: new Date().toISOString(),
-    });
+    await this.transport.publishSessionStatus(
+      new SessionStatusEvent(
+        session,
+        status,
+        new Date().toISOString(),
+        this.workerIdentity.id,
+        reason,
+      ),
+    );
   }
 }

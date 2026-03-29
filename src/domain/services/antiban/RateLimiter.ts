@@ -1,4 +1,4 @@
-import { OutgoingMessageContent } from '../../../shared/contracts/gateway.js';
+import { MessageContent } from '../../entities/messaging/MessageContent.js';
 
 export interface RateLimiterConfig {
   maxPerMinute: number;
@@ -35,7 +35,7 @@ export class RateLimiter {
 
   public getDelay(
     recipient: string,
-    content: OutgoingMessageContent,
+    content: MessageContent,
   ): RateLimitDecision {
     const now = Date.now();
     this.cleanup(now);
@@ -98,7 +98,7 @@ export class RateLimiter {
 
   public record(
     recipient: string,
-    content: OutgoingMessageContent,
+    content: MessageContent,
   ): void {
     const now = Date.now();
     this.resetBurstIfIdle(now);
@@ -178,7 +178,7 @@ export class RateLimiter {
     return Math.round(min + clamped * (max - min));
   }
 
-  private computeTypingDelay(content: OutgoingMessageContent): number {
+  private computeTypingDelay(content: MessageContent): number {
     const text = content.text ?? '';
     if (!text) {
       return 0;
@@ -188,7 +188,7 @@ export class RateLimiter {
     return this.jitter(typingDelay * 0.5, typingDelay);
   }
 
-  private fingerprint(content: OutgoingMessageContent): string {
-    return `${content.type}:${content.mediaUrl ?? ''}:${content.text ?? ''}`;
+  private fingerprint(content: MessageContent): string {
+    return `${content.type}:${content.mediaUrl ?? ''}:${content.fileName ?? ''}:${content.text ?? ''}`;
   }
 }

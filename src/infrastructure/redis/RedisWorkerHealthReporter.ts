@@ -1,18 +1,17 @@
 import { env } from '../../application/config/env.js';
-import { ProviderId } from '../../shared/contracts/gateway.js';
-import { WorkerHeartbeat } from '../../domain/entities/WorkerHeartbeat.js';
-import { WorkerIdentity } from '../../domain/entities/WorkerIdentity.js';
+import { WorkerHeartbeat } from '../../domain/entities/operational/WorkerHeartbeat.js';
+import { WorkerIdentity } from '../../domain/entities/operational/WorkerIdentity.js';
 import { RedisConnection } from './RedisConnection.js';
 import { RedisKeyBuilder } from './RedisKeyBuilder.js';
 
 /**
- * Redis adapter for the worker heartbeat registry consumed by the Control Plane.
+ * Redis adapter for the worker heartbeat registry consumed by the control plane.
  */
 export class RedisWorkerHealthReporter {
   private heartbeatTimer?: NodeJS.Timeout;
 
   constructor(
-    private readonly providerId: ProviderId,
+    private readonly providerId: string,
     private readonly workerIdentity: WorkerIdentity,
     private readonly getCurrentSessions: () => number,
   ) {}

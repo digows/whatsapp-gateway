@@ -6,7 +6,11 @@ import {
   proto,
 } from 'baileys';
 import { Redis } from 'ioredis';
-import { ISignalKeyRepository } from '../../domain/repositories/ISignalKeyRepository.js';
+import { SignalKeyRepository } from '../../application/ports/SignalKeyRepository.js';
+import { AuthStateKey } from '../../domain/entities/auth/AuthStateKey.js';
+import { AuthStateQuery } from '../../domain/entities/auth/AuthStateQuery.js';
+import { AuthStateRecord } from '../../domain/entities/auth/AuthStateRecord.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { RedisKeyBuilder } from '../redis/RedisKeyBuilder.js';
 
 const JSON_PARSE_FAILED = Symbol('json-parse-failed');
@@ -19,9 +23,8 @@ export class BaileysAuthStateStore {
   private readonly binaryKeyTypes = new Set(['sender-key', 'identity-key']);
 
   constructor(
-    private readonly workspaceId: number,
-    private readonly sessionId: string,
-    private readonly repository: ISignalKeyRepository,
+    private readonly session: SessionReference,
+    private readonly repository: SignalKeyRepository,
     private readonly redis: Redis,
   ) {}
 
@@ -29,34 +32,26 @@ export class BaileysAuthStateStore {
     state: AuthenticationState;
     saveCreds: () => Promise<void>;
   }> {
-    let creds: any;
-    const credKeys = await this.repository.getKeys(
-      this.workspaceId,
-      this.sessionId,
-      'creds',
-      ['default'],
-    );
+    let credentials: any;
+    const credentialsQuery = new AuthStateQuery(this.session, 'creds', ['default']);
+    const credentialRecords = await this.repository.findByQuery(credentialsQuery);
 
-    if (credKeys.length > 0) {
-      creds = this.deserializeStoredValue('creds', credKeys[0].serializedData);
+    if (credentialRecords.length > 0) {
+      credentials = this.deserializeStoredValue('creds', credentialRecords[0].serializedData);
     } else {
       console.log(
-        `[AUTH] No persistent credentials found for session ${this.sessionId}. Initializing new state.`,
+        `[AUTH] No persistent credentials found for ${this.session.toLogLabel()}. Initializing new state.`,
       );
-      creds = initAuthCreds();
+      credentials = initAuthCreds();
     }
 
     return {
       state: {
-        creds,
+        creds: credentials,
         keys: {
           get: async (type, ids) => {
             const result: SignalDataSet = {};
-            const cacheKeyPrefix = RedisKeyBuilder.getAuthRecordKeyPrefix(
-              this.workspaceId,
-              this.sessionId,
-              type,
-            );
+            const cacheKeyPrefix = RedisKeyBuilder.getAuthRecordKeyPrefix(this.session, type);
 
             const cachedValues = await this.redis.mget(
               ...ids.map(id => `${cacheKeyPrefix}${id}`),
@@ -74,19 +69,16 @@ export class BaileysAuthStateStore {
             }
 
             if (missingIds.length > 0) {
-              const dbRecords = await this.repository.getKeys(
-                this.workspaceId,
-                this.sessionId,
-                type,
-                missingIds,
+              const records = await this.repository.findByQuery(
+                new AuthStateQuery(this.session, type, missingIds),
               );
 
-              for (const record of dbRecords) {
+              for (const record of records) {
                 const parsed = this.deserializeStoredValue(type, record.serializedData);
-                (result as any)[record.keyId] = parsed;
+                (result as any)[record.key.id] = parsed;
 
                 await this.redis.setex(
-                  `${cacheKeyPrefix}${record.keyId}`,
+                  `${cacheKeyPrefix}${record.key.id}`,
                   this.cacheTtlSeconds,
                   this.serializeCacheValue(type, record.serializedData),
                 );
@@ -96,69 +88,65 @@ export class BaileysAuthStateStore {
             return result as any;
           },
           set: async data => {
+            const recordsToSave: AuthStateRecord[] = [];
+
             for (const [type, rawTypeData] of Object.entries(
               data as Record<string, Record<string, unknown> | undefined>,
             )) {
-              const typeData = rawTypeData;
-              if (!typeData) {
+              if (!rawTypeData) {
                 continue;
               }
 
-              await this.repository.saveKeys(
-                this.workspaceId,
-                this.sessionId,
-                type,
-                typeData,
-              );
-
-              const cacheKeyPrefix = RedisKeyBuilder.getAuthRecordKeyPrefix(
-                this.workspaceId,
-                this.sessionId,
-                type,
-              );
-              for (const [id, value] of Object.entries(typeData)) {
+              const cacheKeyPrefix = RedisKeyBuilder.getAuthRecordKeyPrefix(this.session, type);
+              for (const [id, value] of Object.entries(rawTypeData)) {
                 if (value) {
+                  recordsToSave.push(
+                    new AuthStateRecord(
+                      this.session,
+                      new AuthStateKey(type, id),
+                      value,
+                    ),
+                  );
+
                   await this.redis.setex(
                     `${cacheKeyPrefix}${id}`,
                     this.cacheTtlSeconds,
                     this.serializeCacheValue(type, value),
                   );
-                } else {
-                  await this.redis.del(`${cacheKeyPrefix}${id}`);
-                  await this.repository.removeKeys(this.workspaceId, this.sessionId, type, [id]);
+                  continue;
                 }
+
+                await this.redis.del(`${cacheKeyPrefix}${id}`);
+                await this.repository.removeByQuery(
+                  new AuthStateQuery(this.session, type, [id]),
+                );
               }
+            }
+
+            if (recordsToSave.length > 0) {
+              await this.repository.save(recordsToSave);
             }
           },
         },
       },
       saveCreds: async () => {
-        await this.repository.saveKeys(this.workspaceId, this.sessionId, 'creds', {
-          default: creds,
-        });
+        const credentialsKey = new AuthStateKey('creds', 'default');
+        await this.repository.save([
+          new AuthStateRecord(this.session, credentialsKey, credentials),
+        ]);
         await this.redis.del(
-          RedisKeyBuilder.getAuthRecordKey(
-            this.workspaceId,
-            this.sessionId,
-            'creds',
-            'default',
-          ),
+          RedisKeyBuilder.getAuthRecordKey(this.session, credentialsKey),
         );
       },
     };
   }
 
   public async clearSession(): Promise<void> {
-    console.warn(
-      `[AUTH] Wiping all persistent data for session ${this.sessionId} (WS: ${this.workspaceId})...`,
-    );
+    console.warn(`[AUTH] Wiping all persistent data for ${this.session.toLogLabel()}...`);
 
-    await this.repository.removeAllKeys(this.workspaceId, this.sessionId);
+    await this.repository.removeAllForSession(this.session);
 
-    const pattern = RedisKeyBuilder.getAuthSessionPattern(
-      this.workspaceId,
-      this.sessionId,
-    );
+    const pattern = RedisKeyBuilder.getAuthSessionPattern(this.session);
     const keys = await this.redis.keys(pattern);
     if (keys.length > 0) {
       await this.redis.del(...keys);

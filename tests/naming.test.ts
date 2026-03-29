@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { renderConfigTemplate } from '../src/application/config/renderConfigTemplate.js';
+import { AuthStateKey } from '../src/domain/entities/auth/AuthStateKey.js';
+import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
 import { NatsSubjectBuilder } from '../src/infrastructure/nats/NatsSubjectBuilder.js';
 import { RedisKeyBuilder } from '../src/infrastructure/redis/RedisKeyBuilder.js';
 
@@ -24,11 +26,7 @@ test('renderConfigTemplate replaces placeholders and fails on missing values', (
 });
 
 test('NatsSubjectBuilder uses the configured default subjects', () => {
-  const session = {
-    provider: 'whatsapp-web',
-    workspaceId: 7,
-    sessionId: 'session-a',
-  };
+  const session = new SessionReference('whatsapp-web', 7, 'session-a');
 
   assert.equal(
     NatsSubjectBuilder.getWorkerControlSubject('whatsapp-web', 'worker-1'),
@@ -57,11 +55,7 @@ test('NatsSubjectBuilder uses the configured default subjects', () => {
 });
 
 test('RedisKeyBuilder uses the configured default keys', () => {
-  const session = {
-    provider: 'whatsapp-web',
-    workspaceId: 7,
-    sessionId: 'session-a',
-  };
+  const session = new SessionReference('whatsapp-web', 7, 'session-a');
 
   assert.equal(
     RedisKeyBuilder.getSessionLockKey(session),
@@ -80,19 +74,19 @@ test('RedisKeyBuilder uses the configured default keys', () => {
     'wa:cluster:health',
   );
   assert.equal(
-    RedisKeyBuilder.getAuthRecordKey(7, 'session-a', 'creds', 'default'),
+    RedisKeyBuilder.getAuthRecordKey(session, new AuthStateKey('creds', 'default')),
     'wa:7:auth:session-a:creds:default',
   );
   assert.equal(
-    RedisKeyBuilder.getAuthRecordKeyPrefix(7, 'session-a', 'app-state-sync-key'),
+    RedisKeyBuilder.getAuthRecordKeyPrefix(session, 'app-state-sync-key'),
     'wa:7:auth:session-a:app-state-sync-key:',
   );
   assert.equal(
-    RedisKeyBuilder.getAuthSessionPattern(7, 'session-a'),
+    RedisKeyBuilder.getAuthSessionPattern(session),
     'wa:7:auth:session-a:*',
   );
   assert.equal(
-    RedisKeyBuilder.getLidMappingKey(7, '12345@lid'),
+    RedisKeyBuilder.getLidMappingKey(session, '12345@lid'),
     'wa:7:lid-mapping:12345@lid',
   );
   assert.equal(

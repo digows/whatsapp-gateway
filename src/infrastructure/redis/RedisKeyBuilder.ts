@@ -1,9 +1,10 @@
 import { env } from '../../application/config/env.js';
 import { renderConfigTemplate } from '../../application/config/renderConfigTemplate.js';
-import { SessionAddress } from '../../shared/contracts/gateway.js';
+import { AuthStateKey } from '../../domain/entities/auth/AuthStateKey.js';
+import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 
 export class RedisKeyBuilder {
-  public static getSessionLockKey(session: SessionAddress): string {
+  public static getSessionLockKey(session: SessionReference): string {
     return renderConfigTemplate(env.REDIS_KEY_SESSION_LOCK_TEMPLATE, {
       prefix: env.REDIS_KEY_PREFIX,
       workspaceId: session.workspaceId,
@@ -11,7 +12,7 @@ export class RedisKeyBuilder {
     });
   }
 
-  public static getSessionWorkerRegistryKey(session: SessionAddress): string {
+  public static getSessionWorkerRegistryKey(session: SessionReference): string {
     return renderConfigTemplate(env.REDIS_KEY_SESSION_WORKER_REGISTRY_TEMPLATE, {
       prefix: env.REDIS_KEY_PREFIX,
       workspaceId: session.workspaceId,
@@ -32,45 +33,48 @@ export class RedisKeyBuilder {
   }
 
   public static getAuthRecordKey(
-    workspaceId: number,
-    sessionId: string,
-    type: string,
-    id: string,
+    session: SessionReference,
+    key: AuthStateKey,
   ): string {
     return renderConfigTemplate(env.REDIS_KEY_AUTH_RECORD_TEMPLATE, {
       prefix: env.REDIS_KEY_PREFIX,
-      workspaceId,
-      sessionId,
-      type,
-      id,
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      type: key.type,
+      id: key.id,
     });
   }
 
   public static getAuthRecordKeyPrefix(
-    workspaceId: number,
-    sessionId: string,
-    type: string,
+    session: SessionReference,
+    keyType: string,
   ): string {
-    return this.getAuthRecordKey(workspaceId, sessionId, type, '');
-  }
-
-  public static getAuthSessionPattern(workspaceId: number, sessionId: string): string {
-    return renderConfigTemplate(env.REDIS_KEY_AUTH_SESSION_PATTERN_TEMPLATE, {
+    return renderConfigTemplate(env.REDIS_KEY_AUTH_RECORD_TEMPLATE, {
       prefix: env.REDIS_KEY_PREFIX,
-      workspaceId,
-      sessionId,
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      type: keyType,
+      id: '',
     });
   }
 
-  public static getLidMappingKey(workspaceId: number, jid: string): string {
+  public static getAuthSessionPattern(session: SessionReference): string {
+    return renderConfigTemplate(env.REDIS_KEY_AUTH_SESSION_PATTERN_TEMPLATE, {
+      prefix: env.REDIS_KEY_PREFIX,
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+    });
+  }
+
+  public static getLidMappingKey(session: SessionReference, jid: string): string {
     return renderConfigTemplate(env.REDIS_KEY_LID_MAPPING_TEMPLATE, {
       prefix: env.REDIS_KEY_PREFIX,
-      workspaceId,
+      workspaceId: session.workspaceId,
       jid,
     });
   }
 
-  public static getAntiBanWarmUpKey(session: SessionAddress): string {
+  public static getAntiBanWarmUpKey(session: SessionReference): string {
     return renderConfigTemplate(env.REDIS_KEY_ANTI_BAN_WARMUP_TEMPLATE, {
       prefix: env.REDIS_KEY_PREFIX,
       provider: session.provider,
