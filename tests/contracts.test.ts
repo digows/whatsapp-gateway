@@ -7,6 +7,12 @@ import {
 } from '../src/domain/entities/activation/ActivationCommand.js';
 import { ActivationMode, parseActivationMode } from '../src/domain/entities/activation/ActivationMode.js';
 import { AuthenticationStateType } from '../src/domain/entities/authentication/AuthenticationStateType.js';
+import {
+  parseButtonReplyType,
+  parseEventCallType,
+  parsePinMessageAction,
+  parsePinMessageDurationSeconds,
+} from '../src/domain/entities/messaging/MessageContent.js';
 import { parseMessageContentType } from '../src/domain/entities/messaging/MessageContentType.js';
 import { parseChatType } from '../src/domain/entities/messaging/MessageContext.js';
 import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
@@ -48,6 +54,12 @@ test('domain parsers reject unsupported external values', () => {
   assert.equal(parseWorkerCommandAction('start_session'), 'start_session');
   assert.equal(parseChatType('group'), 'group');
   assert.equal(parseMessageContentType('document'), 'document');
+  assert.equal(parseMessageContentType('poll'), 'poll');
+  assert.equal(parseMessageContentType('pin'), 'pin');
+  assert.equal(parseButtonReplyType('template'), 'template');
+  assert.equal(parseEventCallType('video'), 'video');
+  assert.equal(parsePinMessageAction('unpin_for_all'), 'unpin_for_all');
+  assert.equal(parsePinMessageDurationSeconds(604800), 604800);
 
   assert.throws(() => {
     parseWorkerCommandAction('restart_session');
@@ -58,8 +70,24 @@ test('domain parsers reject unsupported external values', () => {
   }, /Unsupported chat type/);
 
   assert.throws(() => {
-    parseMessageContentType('sticker');
+    parseMessageContentType('call');
   }, /Unsupported message content type/);
+
+  assert.throws(() => {
+    parseButtonReplyType('carousel');
+  }, /Unsupported button reply type/);
+
+  assert.throws(() => {
+    parseEventCallType('screen_share');
+  }, /Unsupported event call type/);
+
+  assert.throws(() => {
+    parsePinMessageAction('pin_for_me');
+  }, /Unsupported pin message action/);
+
+  assert.throws(() => {
+    parsePinMessageDurationSeconds(120);
+  }, /Unsupported pin duration/);
 });
 
 test('AuthenticationStateType centralizes known key kinds', () => {

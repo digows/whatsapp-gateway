@@ -179,7 +179,7 @@ export class RateLimiter {
   }
 
   private computeTypingDelay(content: MessageContent): number {
-    const text = content.text ?? '';
+    const text = content.getTextBody() ?? '';
     if (!text) {
       return 0;
     }
@@ -189,6 +189,6 @@ export class RateLimiter {
   }
 
   private fingerprint(content: MessageContent): string {
-    return `${content.type}:${content.mediaUrl ?? ''}:${content.fileName ?? ''}:${content.text ?? ''}`;
+    return content.fingerprint();
   }
 }

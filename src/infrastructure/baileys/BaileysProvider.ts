@@ -19,7 +19,34 @@ import {
   ReceivedMessageEvent,
 } from '../../domain/entities/messaging/InboundEvent.js';
 import { Message } from '../../domain/entities/messaging/Message.js';
-import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
+import {
+  AudioMessageContent,
+  ButtonReplyMessageContent,
+  ContactsMessageContent,
+  DeleteMessageContent,
+  DisappearingMessagesMessageContent,
+  DocumentMessageContent,
+  EventCallType,
+  EventMessageContent,
+  GroupInviteMessageContent,
+  ImageMessageContent,
+  InteractiveResponseMessageContent,
+  LimitSharingMessageContent,
+  ListReplyMessageContent,
+  LocationMessageContent,
+  MessageContent,
+  OtherMessageContent,
+  PinMessageAction,
+  PinMessageContent,
+  PollMessageContent,
+  ProductMessageContent,
+  ReactionMessageContent,
+  RequestPhoneNumberMessageContent,
+  SharePhoneNumberMessageContent,
+  StickerMessageContent,
+  TextMessageContent,
+  VideoMessageContent,
+} from '../../domain/entities/messaging/MessageContent.js';
 import { MessageContentType } from '../../domain/entities/messaging/MessageContentType.js';
 import { SendMessageCommand } from '../../domain/entities/messaging/SendMessageCommand.js';
 import {
@@ -169,7 +196,7 @@ export class BaileysProvider implements SessionRuntime {
     const isGroup = recipientJid.endsWith('@g.us');
     await this.sleep(decision.preSendDelayMs);
 
-    if (decision.content.type === MessageContentType.Text && !isGroup) {
+    if (decision.content instanceof TextMessageContent && !isGroup) {
       await this.sock.presenceSubscribe(recipientJid).catch(() => {});
       await this.sock.sendPresenceUpdate('composing', recipientJid).catch(() => {});
     }
@@ -179,7 +206,7 @@ export class BaileysProvider implements SessionRuntime {
     try {
       const response = await this.sock.sendMessage(
         recipientJid,
-        this.toBaileysContent(decision.content),
+        this.toBaileysContent(command.message),
       );
       await this.antiBan.afterSend(recipientJid, decision.content, decision.trackingKey);
       return this.buildDeliveryResult(
@@ -196,7 +223,7 @@ export class BaileysProvider implements SessionRuntime {
         error instanceof Error ? error.message : String(error),
       );
     } finally {
-      if (decision.content.type === MessageContentType.Text && !isGroup && this.sock) {
+      if (decision.content instanceof TextMessageContent && !isGroup && this.sock) {
         await this.sock.sendPresenceUpdate('paused', recipientJid).catch(() => {});
       }
     }
@@ -720,36 +747,275 @@ export class BaileysProvider implements SessionRuntime {
     );
   }
 
-  private toBaileysContent(content: MessageContent): any {
-    switch (content.type) {
-      case MessageContentType.Text:
-        return { text: content.text ?? '' };
-      case MessageContentType.Image:
-        if (!content.mediaUrl) {
-          throw new Error('image content requires mediaUrl');
-        }
-        return { image: { url: content.mediaUrl }, caption: content.text };
-      case MessageContentType.Audio:
-        if (!content.mediaUrl) {
-          throw new Error('audio content requires mediaUrl');
-        }
-        return { audio: { url: content.mediaUrl } };
-      case MessageContentType.Video:
-        if (!content.mediaUrl) {
-          throw new Error('video content requires mediaUrl');
-        }
-        return { video: { url: content.mediaUrl }, caption: content.text };
-      case MessageContentType.Document:
-        if (!content.mediaUrl) {
-          throw new Error('document content requires mediaUrl');
-        }
-        return {
-          document: { url: content.mediaUrl },
-          fileName: content.fileName ?? content.text ?? 'document',
-        };
-      default:
-        throw new Error(`Unsupported outbound content type: ${String(content.type)}`);
+  private toBaileysContent(message: Message): any {
+    const { content } = message;
+    let payload: Record<string, unknown>;
+
+    if (content instanceof TextMessageContent) {
+      payload = { text: content.text };
+    } else if (content instanceof ImageMessageContent) {
+      if (!content.mediaUrl) {
+        throw new Error('image content requires mediaUrl');
+      }
+
+      payload = {
+        image: { url: content.mediaUrl },
+        caption: content.caption,
+        mimetype: content.mimeType,
+        width: content.width,
+        height: content.height,
+      };
+    } else if (content instanceof AudioMessageContent) {
+      if (!content.mediaUrl) {
+        throw new Error('audio content requires mediaUrl');
+      }
+
+      payload = {
+        audio: { url: content.mediaUrl },
+        mimetype: content.mimeType,
+        seconds: content.durationSeconds,
+        ptt: content.voiceNote,
+      };
+    } else if (content instanceof VideoMessageContent) {
+      if (!content.mediaUrl) {
+        throw new Error('video content requires mediaUrl');
+      }
+
+      payload = {
+        video: { url: content.mediaUrl },
+        caption: content.caption,
+        mimetype: content.mimeType,
+        width: content.width,
+        height: content.height,
+        gifPlayback: content.gifPlayback,
+        ptv: content.videoNote,
+      };
+    } else if (content instanceof DocumentMessageContent) {
+      if (!content.mediaUrl) {
+        throw new Error('document content requires mediaUrl');
+      }
+
+      payload = {
+        document: { url: content.mediaUrl },
+        mimetype: content.mimeType,
+        fileName: content.fileName ?? content.caption ?? 'document',
+        caption: content.caption,
+      };
+    } else if (content instanceof StickerMessageContent) {
+      if (!content.mediaUrl) {
+        throw new Error('sticker content requires mediaUrl');
+      }
+
+      payload = {
+        sticker: { url: content.mediaUrl },
+        mimetype: content.mimeType,
+        isAnimated: content.animated,
+        width: content.width,
+        height: content.height,
+      };
+    } else if (content instanceof ContactsMessageContent) {
+      payload = {
+        contacts: {
+          displayName: content.displayName ?? content.contacts[0]?.displayName,
+          contacts: content.contacts.map(contact => ({
+            displayName: contact.displayName,
+            vcard: contact.vcard,
+          })),
+        },
+      };
+    } else if (content instanceof LocationMessageContent) {
+      payload = {
+        location: {
+          degreesLatitude: content.latitude,
+          degreesLongitude: content.longitude,
+          name: content.name,
+          address: content.address,
+          url: content.url,
+          comment: content.comment,
+          isLive: content.live,
+          accuracyInMeters: content.accuracyInMeters,
+          speedInMps: content.speedInMetersPerSecond,
+          degreesClockwiseFromMagneticNorth: content.degreesClockwiseFromMagneticNorth,
+        },
+      };
+    } else if (content instanceof ReactionMessageContent) {
+      payload = {
+        react: {
+          key: {
+            id: content.targetMessage.messageId,
+            remoteJid: content.targetMessage.remoteJid
+              ?? this.normalizeRecipientId(message.chatId),
+            participant: content.targetMessage.participantId,
+          },
+          text: content.removed ? '' : content.reactionText,
+        },
+      };
+    } else if (content instanceof PollMessageContent) {
+      payload = {
+        poll: {
+          name: content.name,
+          values: content.options.map(option => option.name),
+          selectableCount: content.selectableCount,
+        },
+      };
+    } else if (content instanceof ButtonReplyMessageContent) {
+      payload = {
+        buttonReply: {
+          displayText: content.displayText,
+          id: content.buttonId,
+          index: content.buttonIndex ?? 0,
+        },
+        type: content.replyType,
+      };
+    } else if (content instanceof ListReplyMessageContent) {
+      payload = {
+        listReply: {
+          title: content.title,
+          description: content.description,
+          singleSelectReply: {
+            selectedRowId: content.selectedRowId,
+          },
+        },
+      };
+    } else if (content instanceof GroupInviteMessageContent) {
+      if (!content.groupJid.trim() || !content.inviteCode.trim()) {
+        throw new Error('group invite content requires groupJid and inviteCode');
+      }
+
+      payload = {
+        groupInvite: {
+          jid: content.groupJid,
+          inviteCode: content.inviteCode,
+          inviteExpiration: content.inviteExpiration ?? 0,
+          subject: content.groupName ?? '',
+          text: content.caption ?? '',
+        },
+      };
+    } else if (content instanceof EventMessageContent) {
+      payload = {
+        event: {
+          name: content.name,
+          description: content.description,
+          startDate: content.startTimestamp ? new Date(content.startTimestamp) : new Date(),
+          endDate: content.endTimestamp ? new Date(content.endTimestamp) : undefined,
+          location: content.location
+            ? {
+                degreesLatitude: content.location.latitude,
+                degreesLongitude: content.location.longitude,
+                name: content.location.name,
+                address: content.location.address,
+                url: content.location.url,
+              }
+            : undefined,
+          call: content.callType === EventCallType.Audio
+            ? 'audio'
+            : content.callType === EventCallType.Video
+              ? 'video'
+              : undefined,
+          isCancelled: content.cancelled,
+          isScheduleCall: content.scheduledCall,
+          extraGuestsAllowed: content.extraGuestsAllowed,
+        },
+      };
+    } else if (content instanceof ProductMessageContent) {
+      if (!content.productImageUrl) {
+        throw new Error('product content requires productImageUrl');
+      }
+
+      payload = {
+        product: {
+          productId: content.productId,
+          title: content.title,
+          description: content.description,
+          currencyCode: content.currencyCode,
+          priceAmount1000: content.priceAmount1000,
+          retailerId: content.retailerId,
+          url: content.url,
+          productImage: { url: content.productImageUrl },
+        },
+        businessOwnerJid: content.businessOwnerJid,
+        body: content.body,
+        footer: content.footer,
+      };
+    } else if (content instanceof RequestPhoneNumberMessageContent) {
+      payload = { requestPhoneNumber: true };
+    } else if (content instanceof SharePhoneNumberMessageContent) {
+      payload = { sharePhoneNumber: true };
+    } else if (content instanceof DeleteMessageContent) {
+      payload = {
+        delete: {
+          id: content.targetMessage.messageId,
+          remoteJid: content.targetMessage.remoteJid ?? this.normalizeRecipientId(message.chatId),
+          participant: content.targetMessage.participantId,
+        },
+      };
+    } else if (content instanceof PinMessageContent) {
+      payload = {
+        pin: {
+          id: content.targetMessage.messageId,
+          remoteJid: content.targetMessage.remoteJid ?? this.normalizeRecipientId(message.chatId),
+          participant: content.targetMessage.participantId,
+        },
+        type: content.action === PinMessageAction.UnpinForAll
+          ? proto.PinInChat.Type.UNPIN_FOR_ALL
+          : proto.PinInChat.Type.PIN_FOR_ALL,
+        time: content.durationSeconds,
+      };
+    } else if (content instanceof DisappearingMessagesMessageContent) {
+      payload = {
+        disappearingMessagesInChat: content.expirationSeconds,
+      };
+    } else if (content instanceof LimitSharingMessageContent) {
+      payload = {
+        limitSharing: content.sharingLimited,
+      };
+    } else if (content instanceof InteractiveResponseMessageContent) {
+      throw new Error('interactive response content is inbound-only in this gateway');
+    } else if (content instanceof OtherMessageContent) {
+      throw new Error(
+        `Unsupported outbound content type: ${content.description ?? MessageContentType.Other}`,
+      );
+    } else {
+      throw new Error(`Unsupported outbound content type: ${String(content.type)}`);
     }
+
+    return this.applyCommonOutboundOptions(message, payload);
+  }
+
+  private applyCommonOutboundOptions(
+    message: Message,
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const mentionedJids = message.context?.mentionedJids
+      .map(jid => this.normalizeRecipientId(jid))
+      .filter(Boolean);
+
+    if (
+      mentionedJids?.length
+      && (
+        payload.text
+        || payload.image
+        || payload.video
+        || payload.document
+        || payload.poll
+      )
+    ) {
+      payload.mentions = mentionedJids;
+    }
+
+    if (message.context?.viewOnce) {
+      payload.viewOnce = true;
+    }
+
+    if (message.context?.editTarget) {
+      payload.edit = {
+        id: message.context.editTarget.messageId,
+        remoteJid: message.context.editTarget.remoteJid ?? this.normalizeRecipientId(message.chatId),
+        participant: message.context.editTarget.participantId,
+      };
+    }
+
+    return payload;
   }
 
   private normalizeRecipientId(recipientId: string): string {
@@ -1145,28 +1411,158 @@ export class BaileysProvider implements SessionRuntime {
   private summarizeNormalizedContent(
     content: MessageContent,
   ): Record<string, unknown> | null {
-    switch (content.type) {
-      case MessageContentType.Text:
-        return {
-          type: MessageContentType.Text,
-          text: this.truncateDebugText(content.text),
-        };
-      case MessageContentType.Image:
-      case MessageContentType.Video:
-      case MessageContentType.Document:
-        return {
-          type: content.type,
-          text: this.truncateDebugText(content.text),
-        };
-      case MessageContentType.Audio:
-        return {
-          type: MessageContentType.Audio,
-        };
-      default:
-        return {
-          type: content.type,
-        };
+    if (content instanceof TextMessageContent) {
+      return {
+        type: MessageContentType.Text,
+        text: this.truncateDebugText(content.text),
+        title: this.truncateDebugText(content.title),
+      };
     }
+
+    if (
+      content instanceof ImageMessageContent
+      || content instanceof VideoMessageContent
+      || content instanceof DocumentMessageContent
+    ) {
+      return {
+        type: content.type,
+        text: this.truncateDebugText(content.getTextBody()),
+        mimeType: content.mimeType,
+      };
+    }
+
+    if (content instanceof AudioMessageContent) {
+      return {
+        type: MessageContentType.Audio,
+        durationSeconds: content.durationSeconds,
+        voiceNote: content.voiceNote,
+      };
+    }
+
+    if (content instanceof StickerMessageContent) {
+      return {
+        type: MessageContentType.Sticker,
+        animated: content.animated,
+      };
+    }
+
+    if (content instanceof ContactsMessageContent) {
+      return {
+        type: MessageContentType.Contacts,
+        count: content.contacts.length,
+        displayName: content.displayName,
+      };
+    }
+
+    if (content instanceof LocationMessageContent) {
+      return {
+        type: MessageContentType.Location,
+        latitude: content.latitude,
+        longitude: content.longitude,
+        live: content.live,
+        name: content.name,
+      };
+    }
+
+    if (content instanceof ReactionMessageContent) {
+      return {
+        type: MessageContentType.Reaction,
+        messageId: content.targetMessage.messageId,
+        text: content.reactionText,
+        removed: content.removed,
+      };
+    }
+
+    if (content instanceof PollMessageContent) {
+      return {
+        type: MessageContentType.Poll,
+        name: this.truncateDebugText(content.name),
+        options: content.options.length,
+      };
+    }
+
+    if (content instanceof ButtonReplyMessageContent) {
+      return {
+        type: MessageContentType.ButtonReply,
+        buttonId: content.buttonId,
+        displayText: this.truncateDebugText(content.displayText),
+        replyType: content.replyType,
+      };
+    }
+
+    if (content instanceof ListReplyMessageContent) {
+      return {
+        type: MessageContentType.ListReply,
+        selectedRowId: content.selectedRowId,
+        title: this.truncateDebugText(content.title),
+      };
+    }
+
+    if (content instanceof GroupInviteMessageContent) {
+      return {
+        type: MessageContentType.GroupInvite,
+        groupJid: content.groupJid,
+        groupName: content.groupName,
+      };
+    }
+
+    if (content instanceof EventMessageContent) {
+      return {
+        type: MessageContentType.Event,
+        name: this.truncateDebugText(content.name),
+        startTimestamp: content.startTimestamp,
+      };
+    }
+
+    if (content instanceof ProductMessageContent) {
+      return {
+        type: MessageContentType.Product,
+        productId: content.productId,
+        title: this.truncateDebugText(content.title),
+      };
+    }
+
+    if (content instanceof InteractiveResponseMessageContent) {
+      return {
+        type: MessageContentType.InteractiveResponse,
+        bodyText: this.truncateDebugText(content.bodyText),
+        flowName: content.flowName,
+      };
+    }
+
+    if (content instanceof DeleteMessageContent) {
+      return {
+        type: MessageContentType.Delete,
+        messageId: content.targetMessage.messageId,
+      };
+    }
+
+    if (content instanceof PinMessageContent) {
+      return {
+        type: MessageContentType.Pin,
+        messageId: content.targetMessage.messageId,
+        action: content.action,
+        durationSeconds: content.durationSeconds,
+      };
+    }
+
+    if (content instanceof DisappearingMessagesMessageContent) {
+      return {
+        type: MessageContentType.DisappearingMessages,
+        expirationSeconds: content.expirationSeconds,
+      };
+    }
+
+    if (content instanceof LimitSharingMessageContent) {
+      return {
+        type: MessageContentType.LimitSharing,
+        sharingLimited: content.sharingLimited,
+      };
+    }
+
+    return {
+      type: content.type,
+    };
   }
 
   private isDebugLoggingEnabled(): boolean {

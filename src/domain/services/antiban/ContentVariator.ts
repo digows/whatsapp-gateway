@@ -12,23 +12,29 @@ export class ContentVariator {
   constructor(private readonly config: ContentVariatorConfig) {}
 
   public getTrackingKey(content: MessageContent): string | null {
-    if (!content.text) {
+    if (!content.canVaryText()) {
       return null;
     }
 
-    return this.normalizeText(content.text);
+    const text = content.getTextBody();
+    if (!text) {
+      return null;
+    }
+
+    return this.normalizeText(text);
   }
 
   public vary(
     content: MessageContent,
     seenCount: number,
   ): MessageContent {
-    if (!content.text || seenCount < this.config.maxIdenticalMessages) {
+    const originalText = content.getTextBody();
+    if (!content.canVaryText() || !originalText || seenCount < this.config.maxIdenticalMessages) {
       return content;
     }
 
     const variationIndex = seenCount - this.config.maxIdenticalMessages;
-    let text = content.text;
+    let text = originalText;
 
     if (this.config.zeroWidthVariationEnabled) {
       text = this.applyZeroWidthVariation(text, variationIndex);
@@ -38,7 +44,7 @@ export class ContentVariator {
       text = this.applyPunctuationVariation(text, variationIndex);
     }
 
-    return new MessageContent(content.type, text, content.mediaUrl, content.fileName);
+    return content.withTextBody(text);
   }
 
   private applyZeroWidthVariation(text: string, variationIndex: number): string {
