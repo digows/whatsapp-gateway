@@ -5,10 +5,10 @@ import {
   MessageUpdatedEvent,
   ReceivedMessageEvent,
 } from '../../domain/entities/messaging/InboundEvent.js';
+import { Message } from '../../domain/entities/messaging/Message.js';
 import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
 import { MessageContentType } from '../../domain/entities/messaging/MessageContentType.js';
 import { SendMessageCommand } from '../../domain/entities/messaging/SendMessageCommand.js';
-import { WhatsappMessage } from '../../domain/entities/messaging/WhatsappMessage.js';
 import {
   SessionStatus,
   SessionStatusEvent,
@@ -16,14 +16,14 @@ import {
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import qrcode from 'qrcode-terminal';
 import { env } from '../../application/config/env.js';
-import { SessionRuntime, SessionRuntimeCallbacks } from '../../application/ports/SessionRuntime.js';
+import { SessionRuntime, SessionRuntimeCallbacks } from '../../application/contracts/SessionRuntime.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { AntiBanService } from '../../domain/services/AntiBanService.js';
 import { PgSignalKeyRepository } from '../pg/PgSignalKeyRepository.js';
 import { RedisAntiBanWarmUpStateRepository } from '../redis/RedisAntiBanWarmUpStateRepository.js';
 import { RedisConnection } from '../redis/RedisConnection.js';
 import { RedisKeyBuilder } from '../redis/RedisKeyBuilder.js';
-import { BaileysAuthStateStore } from './BaileysAuthStateStore.js';
+import { BaileysAuthenticationStateStore } from './BaileysAuthenticationStateStore.js';
 import { createBaileysLogger } from './BaileysLogger.js';
 import { BaileysMessageNormalizer } from './BaileysMessageNormalizer.js';
 
@@ -39,7 +39,7 @@ export class BaileysProvider implements SessionRuntime {
 
   private readonly proxyAgent?: HttpsProxyAgent<string>;
   private readonly antiBan: AntiBanService;
-  private readonly authStateStore: BaileysAuthStateStore;
+  private readonly authenticationStateStore: BaileysAuthenticationStateStore;
 
   constructor(
     private readonly session: SessionReference,
@@ -53,7 +53,7 @@ export class BaileysProvider implements SessionRuntime {
       console.log('[PROXY] No residential proxy configured. Running via local IP.');
     }
 
-    this.authStateStore = new BaileysAuthStateStore(
+    this.authenticationStateStore = new BaileysAuthenticationStateStore(
       this.session,
       new PgSignalKeyRepository(),
       RedisConnection.getClient(),
@@ -76,7 +76,7 @@ export class BaileysProvider implements SessionRuntime {
       return;
     }
 
-    const { state, saveCreds } = await this.authStateStore.getAuthState();
+    const { state, saveCreds } = await this.authenticationStateStore.getAuthenticationState();
 
     this.sock = makeWASocket({
       auth: state,
@@ -240,7 +240,7 @@ export class BaileysProvider implements SessionRuntime {
       console.error(
         `[BaileysProvider] Permanent logout detected for ${this.session.toLogLabel()}. Cleaning up session state.`,
       );
-      await this.authStateStore.clearSession().catch(error => {
+      await this.authenticationStateStore.clearSession().catch(error => {
         console.error('[BaileysProvider] Fatal error cleaning session:', error);
       });
       await this.publishStatus(SessionStatus.LoggedOut, `disconnect:${statusCode}`);
@@ -421,7 +421,7 @@ export class BaileysProvider implements SessionRuntime {
   private logNormalizedMessage(
     direction: string,
     rawMessage: any,
-    normalized: WhatsappMessage,
+    normalized: Message,
   ): void {
     const senderLabel = direction === 'OUT'
       ? 'self'
@@ -460,7 +460,7 @@ export class BaileysProvider implements SessionRuntime {
 
   private buildSenderLabel(
     rawMessage: any,
-    normalized: WhatsappMessage,
+    normalized: Message,
   ): string {
     const senderPhone = normalized.context?.senderPhone;
     const senderName =
@@ -741,7 +741,7 @@ export class BaileysProvider implements SessionRuntime {
 
   private buildDebugContentSuffix(
     rawMessage: any,
-    normalized?: WhatsappMessage,
+    normalized?: Message,
   ): string {
     if (!this.isDebugLoggingEnabled()) {
       return '';

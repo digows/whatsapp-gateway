@@ -1,9 +1,9 @@
 import {
   ChatType,
-  WhatsappMessageContext,
-} from '../../domain/entities/messaging/WhatsappMessageContext.js';
+  MessageContext,
+} from '../../domain/entities/messaging/MessageContext.js';
+import { Message } from '../../domain/entities/messaging/Message.js';
 import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
-import { WhatsappMessage } from '../../domain/entities/messaging/WhatsappMessage.js';
 
 type ResolvePhoneFn = (
   jid: string | null | undefined,
@@ -14,7 +14,7 @@ export class BaileysMessageNormalizer {
   public static async normalize(
     message: any,
     resolvePhone: ResolvePhoneFn,
-  ): Promise<WhatsappMessage | null> {
+  ): Promise<Message | null> {
     const rawChatId = message?.key?.remoteJid;
     const messageId = message?.key?.id;
     if (!rawChatId || !messageId) {
@@ -42,7 +42,7 @@ export class BaileysMessageNormalizer {
       return null;
     }
 
-    return new WhatsappMessage(
+    return new Message(
       chatId,
       new Date(
         Number(message.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000,
@@ -51,7 +51,7 @@ export class BaileysMessageNormalizer {
       messageId,
       senderId,
       participantId,
-      new WhatsappMessageContext(
+      new MessageContext(
         chatType,
         rawChatId,
         rawParticipantId,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { renderConfigTemplate } from '../src/application/config/renderConfigTemplate.js';
-import { AuthStateKey } from '../src/domain/entities/auth/AuthStateKey.js';
+import { AuthenticationStateKey } from '../src/domain/entities/authentication/AuthenticationStateKey.js';
 import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
 import { NatsSubjectBuilder } from '../src/infrastructure/nats/NatsSubjectBuilder.js';
 import { RedisKeyBuilder } from '../src/infrastructure/redis/RedisKeyBuilder.js';
@@ -74,15 +74,18 @@ test('RedisKeyBuilder uses the configured default keys', () => {
     'wa:cluster:health',
   );
   assert.equal(
-    RedisKeyBuilder.getAuthRecordKey(session, new AuthStateKey('creds', 'default')),
+    RedisKeyBuilder.getAuthenticationRecordKey(
+      session,
+      new AuthenticationStateKey('creds', 'default'),
+    ),
     'wa:7:auth:session-a:creds:default',
   );
   assert.equal(
-    RedisKeyBuilder.getAuthRecordKeyPrefix(session, 'app-state-sync-key'),
+    RedisKeyBuilder.getAuthenticationRecordKeyPrefix(session, 'app-state-sync-key'),
     'wa:7:auth:session-a:app-state-sync-key:',
   );
   assert.equal(
-    RedisKeyBuilder.getAuthSessionPattern(session),
+    RedisKeyBuilder.getAuthenticationSessionPattern(session),
     'wa:7:auth:session-a:*',
   );
   assert.equal(

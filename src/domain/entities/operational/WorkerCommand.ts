@@ -5,6 +5,9 @@ export enum WorkerCommandAction {
   StopSession = 'stop_session',
 }
 
+/**
+ * Control-plane command addressed to one worker process.
+ */
 export class WorkerCommand {
   constructor(
     public readonly commandId: string,

@@ -1,7 +1,7 @@
 import { env } from '../../application/config/env.js';
-import { WarmUpStateRepository } from '../../application/ports/WarmUpStateRepository.js';
 import { MessageContent } from '../entities/messaging/MessageContent.js';
 import { SessionReference } from '../entities/operational/SessionReference.js';
+import { WarmUpStateRepository } from '../repositories/antiban/WarmUpStateRepository.js';
 import { ContentVariator } from './antiban/ContentVariator.js';
 import {
   BanRiskLevel,

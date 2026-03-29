@@ -1,7 +1,6 @@
 import { env } from '../config/env.js';
-import { CHANNEL_PROVIDER_ID } from '../config/provider.js';
-import { SessionRuntime, SessionRuntimeCallbacks } from '../ports/SessionRuntime.js';
-import { WorkerTransport } from '../ports/WorkerTransport.js';
+import { SessionRuntime, SessionRuntimeCallbacks } from '../contracts/SessionRuntime.js';
+import { WorkerTransport } from '../contracts/WorkerTransport.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import {
   SessionStatus,
@@ -43,8 +42,9 @@ interface SessionWorkerHostOptions {
 }
 
 /**
- * Process-level runtime for the Node worker.
- * It owns NATS connectivity, worker heartbeat, capacity and hosted sessions.
+ * Application service for one worker process.
+ * It coordinates transport, leases, runtime instances and process lifecycle concerns.
+ * This is not a domain service because it orchestrates infrastructure-heavy behavior.
  */
 export class SessionWorkerHost {
   private readonly providerId: string;
@@ -61,7 +61,7 @@ export class SessionWorkerHost {
   private stopPromise?: Promise<void>;
 
   constructor(options: SessionWorkerHostOptions = {}) {
-    this.providerId = options.providerId ?? CHANNEL_PROVIDER_ID;
+    this.providerId = options.providerId ?? env.CHANNEL_PROVIDER_ID;
     this.workerIdentity = options.workerIdentity ?? WorkerIdentity.current();
     this.transport = options.transport ?? new NatsChannelTransport(this.providerId);
     this.runtimeFactory = options.runtimeFactory

@@ -6,19 +6,19 @@ import {
   proto,
 } from 'baileys';
 import { Redis } from 'ioredis';
-import { SignalKeyRepository } from '../../application/ports/SignalKeyRepository.js';
-import { AuthStateKey } from '../../domain/entities/auth/AuthStateKey.js';
-import { AuthStateQuery } from '../../domain/entities/auth/AuthStateQuery.js';
-import { AuthStateRecord } from '../../domain/entities/auth/AuthStateRecord.js';
+import { AuthenticationStateKey } from '../../domain/entities/authentication/AuthenticationStateKey.js';
+import { AuthenticationStateQuery } from '../../domain/entities/authentication/AuthenticationStateQuery.js';
+import { AuthenticationStateRecord } from '../../domain/entities/authentication/AuthenticationStateRecord.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
+import { SignalKeyRepository } from '../../domain/repositories/authentication/SignalKeyRepository.js';
 import { RedisKeyBuilder } from '../redis/RedisKeyBuilder.js';
 
 const JSON_PARSE_FAILED = Symbol('json-parse-failed');
 
 /**
- * Maps Baileys auth state to our PostgreSQL + Redis persistence model.
+ * Maps Baileys authentication state to our PostgreSQL + Redis persistence model.
  */
-export class BaileysAuthStateStore {
+export class BaileysAuthenticationStateStore {
   private readonly cacheTtlSeconds = 3600;
   private readonly binaryKeyTypes = new Set(['sender-key', 'identity-key']);
 
@@ -28,12 +28,12 @@ export class BaileysAuthStateStore {
     private readonly redis: Redis,
   ) {}
 
-  public async getAuthState(): Promise<{
+  public async getAuthenticationState(): Promise<{
     state: AuthenticationState;
     saveCreds: () => Promise<void>;
   }> {
     let credentials: any;
-    const credentialsQuery = new AuthStateQuery(this.session, 'creds', ['default']);
+    const credentialsQuery = new AuthenticationStateQuery(this.session, 'creds', ['default']);
     const credentialRecords = await this.repository.findByQuery(credentialsQuery);
 
     if (credentialRecords.length > 0) {
@@ -51,7 +51,7 @@ export class BaileysAuthStateStore {
         keys: {
           get: async (type, ids) => {
             const result: SignalDataSet = {};
-            const cacheKeyPrefix = RedisKeyBuilder.getAuthRecordKeyPrefix(this.session, type);
+            const cacheKeyPrefix = RedisKeyBuilder.getAuthenticationRecordKeyPrefix(this.session, type);
 
             const cachedValues = await this.redis.mget(
               ...ids.map(id => `${cacheKeyPrefix}${id}`),
@@ -70,7 +70,7 @@ export class BaileysAuthStateStore {
 
             if (missingIds.length > 0) {
               const records = await this.repository.findByQuery(
-                new AuthStateQuery(this.session, type, missingIds),
+                new AuthenticationStateQuery(this.session, type, missingIds),
               );
 
               for (const record of records) {
@@ -88,7 +88,7 @@ export class BaileysAuthStateStore {
             return result as any;
           },
           set: async data => {
-            const recordsToSave: AuthStateRecord[] = [];
+            const recordsToSave: AuthenticationStateRecord[] = [];
 
             for (const [type, rawTypeData] of Object.entries(
               data as Record<string, Record<string, unknown> | undefined>,
@@ -97,13 +97,13 @@ export class BaileysAuthStateStore {
                 continue;
               }
 
-              const cacheKeyPrefix = RedisKeyBuilder.getAuthRecordKeyPrefix(this.session, type);
+              const cacheKeyPrefix = RedisKeyBuilder.getAuthenticationRecordKeyPrefix(this.session, type);
               for (const [id, value] of Object.entries(rawTypeData)) {
                 if (value) {
                   recordsToSave.push(
-                    new AuthStateRecord(
+                    new AuthenticationStateRecord(
                       this.session,
-                      new AuthStateKey(type, id),
+                      new AuthenticationStateKey(type, id),
                       value,
                     ),
                   );
@@ -118,7 +118,7 @@ export class BaileysAuthStateStore {
 
                 await this.redis.del(`${cacheKeyPrefix}${id}`);
                 await this.repository.removeByQuery(
-                  new AuthStateQuery(this.session, type, [id]),
+                  new AuthenticationStateQuery(this.session, type, [id]),
                 );
               }
             }
@@ -130,12 +130,12 @@ export class BaileysAuthStateStore {
         },
       },
       saveCreds: async () => {
-        const credentialsKey = new AuthStateKey('creds', 'default');
+        const credentialsKey = new AuthenticationStateKey('creds', 'default');
         await this.repository.save([
-          new AuthStateRecord(this.session, credentialsKey, credentials),
+          new AuthenticationStateRecord(this.session, credentialsKey, credentials),
         ]);
         await this.redis.del(
-          RedisKeyBuilder.getAuthRecordKey(this.session, credentialsKey),
+          RedisKeyBuilder.getAuthenticationRecordKey(this.session, credentialsKey),
         );
       },
     };
@@ -146,7 +146,7 @@ export class BaileysAuthStateStore {
 
     await this.repository.removeAllForSession(this.session);
 
-    const pattern = RedisKeyBuilder.getAuthSessionPattern(this.session);
+    const pattern = RedisKeyBuilder.getAuthenticationSessionPattern(this.session);
     const keys = await this.redis.keys(pattern);
     if (keys.length > 0) {
       await this.redis.del(...keys);

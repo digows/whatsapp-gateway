@@ -1,5 +1,5 @@
 import { Codec, JSONCodec, Subscription } from 'nats';
-import { WorkerTransport } from '../../application/ports/WorkerTransport.js';
+import { WorkerTransport } from '../../application/contracts/WorkerTransport.js';
 import {
   DeliveryResult,
   DeliveryStatus,
@@ -11,14 +11,14 @@ import {
   MessageUpdatedEvent,
   ReceivedMessageEvent,
 } from '../../domain/entities/messaging/InboundEvent.js';
+import { Message } from '../../domain/entities/messaging/Message.js';
 import { MessageContent } from '../../domain/entities/messaging/MessageContent.js';
 import { MessageContentType } from '../../domain/entities/messaging/MessageContentType.js';
 import { SendMessageCommand } from '../../domain/entities/messaging/SendMessageCommand.js';
-import { WhatsappMessage } from '../../domain/entities/messaging/WhatsappMessage.js';
 import {
   ChatType,
-  WhatsappMessageContext,
-} from '../../domain/entities/messaging/WhatsappMessageContext.js';
+  MessageContext,
+} from '../../domain/entities/messaging/MessageContext.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import {
   SessionStatus,
@@ -51,7 +51,7 @@ type MessageContextPayload = {
   senderPhone?: string;
 };
 
-type WhatsappMessagePayload = {
+type MessagePayload = {
   chatId: string;
   timestamp: string;
   content: MessageContentPayload;
@@ -64,7 +64,7 @@ type WhatsappMessagePayload = {
 type SendMessageCommandPayload = {
   commandId: string;
   session: SessionPayload;
-  message: WhatsappMessagePayload;
+  message: MessagePayload;
 };
 
 type WorkerCommandPayload = {
@@ -95,7 +95,7 @@ type ReceivedMessageEventPayload = {
   eventType: InboundEventType.MessageReceived;
   session: SessionPayload;
   timestamp: string;
-  message: WhatsappMessagePayload;
+  message: MessagePayload;
 };
 
 type MessageUpdatedEventPayload = {
@@ -254,7 +254,7 @@ export class NatsChannelTransport implements WorkerTransport {
         eventType: event.eventType,
         session: this.mapSessionPayload(event.session),
         timestamp: event.timestamp,
-        message: this.mapWhatsappMessagePayload(event.message),
+        message: this.mapMessagePayload(event.message),
       };
     }
 
@@ -299,7 +299,7 @@ export class NatsChannelTransport implements WorkerTransport {
     return new SendMessageCommand(
       payload.commandId,
       this.mapSession(payload.session),
-      this.mapWhatsappMessage(payload.message),
+      this.mapMessage(payload.message),
     );
   }
 
@@ -315,8 +315,8 @@ export class NatsChannelTransport implements WorkerTransport {
     };
   }
 
-  private mapWhatsappMessage(payload: WhatsappMessagePayload): WhatsappMessage {
-    return new WhatsappMessage(
+  private mapMessage(payload: MessagePayload): Message {
+    return new Message(
       payload.chatId,
       payload.timestamp,
       this.mapMessageContent(payload.content),
@@ -324,7 +324,7 @@ export class NatsChannelTransport implements WorkerTransport {
       payload.senderId,
       payload.participantId,
       payload.context
-        ? new WhatsappMessageContext(
+        ? new MessageContext(
             payload.context.chatType as ChatType,
             payload.context.remoteJid,
             payload.context.participantId,
@@ -334,7 +334,7 @@ export class NatsChannelTransport implements WorkerTransport {
     );
   }
 
-  private mapWhatsappMessagePayload(message: WhatsappMessage): WhatsappMessagePayload {
+  private mapMessagePayload(message: Message): MessagePayload {
     return {
       chatId: message.chatId,
       timestamp: message.timestamp,

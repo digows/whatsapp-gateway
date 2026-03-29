@@ -7,12 +7,18 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const envSchema = z.object({
   /**
+   * Logical provider identifier carried by worker commands and session references.
+   * This project is WhatsApp-specific, so the default stays explicit.
+   */
+  CHANNEL_PROVIDER_ID: z.string().default('whatsapp-web'),
+
+  /**
    * If omitted, the application connects directly via the machine's native IP (Dev).
    */
   RESIDENTIAL_PROXY_URL: z.string().url().or(z.literal('')).optional(),
 
   /**
-   * PostgreSQL connection string for persistent AuthState storage.
+   * PostgreSQL connection string for persistent authentication state storage.
    */
   POSTGRES_URL: z.string().url().default('postgresql://localhost:5432/jarvix'),
 

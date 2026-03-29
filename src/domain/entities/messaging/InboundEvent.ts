@@ -1,5 +1,5 @@
 import { SessionReference } from '../operational/SessionReference.js';
-import { WhatsappMessage } from './WhatsappMessage.js';
+import { Message } from './Message.js';
 
 export enum InboundEventType {
   MessageReceived = 'message.received',
@@ -13,7 +13,7 @@ export class ReceivedMessageEvent {
   constructor(
     public readonly session: SessionReference,
     public readonly timestamp: string,
-    public readonly message: WhatsappMessage,
+    public readonly message: Message,
   ) {}
 }
 

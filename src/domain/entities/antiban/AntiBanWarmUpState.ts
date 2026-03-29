@@ -1,3 +1,6 @@
+/**
+ * Persistent warm-up progression for one hosted session.
+ */
 export class AntiBanWarmUpState {
   constructor(
     public startedAt: number,

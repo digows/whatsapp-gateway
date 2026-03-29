@@ -1,8 +1,8 @@
 import { Redis } from 'ioredis';
-import { WarmUpStateRepository } from '../../application/ports/WarmUpStateRepository.js';
 import { env } from '../../application/config/env.js';
 import { AntiBanWarmUpState } from '../../domain/entities/antiban/AntiBanWarmUpState.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
+import { WarmUpStateRepository } from '../../domain/repositories/antiban/WarmUpStateRepository.js';
 import { RedisKeyBuilder } from './RedisKeyBuilder.js';
 
 export class RedisAntiBanWarmUpStateRepository implements WarmUpStateRepository {

@@ -1,5 +1,9 @@
 import { MessageContentType } from './MessageContentType.js';
 
+/**
+ * Content payload for one WhatsApp message.
+ * The same entity is reused for inbound normalization and outbound sending.
+ */
 export class MessageContent {
   constructor(
     public readonly type: MessageContentType,

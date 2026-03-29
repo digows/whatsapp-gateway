@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MessageContentType } from '../src/domain/entities/messaging/MessageContentType.js';
-import { ChatType } from '../src/domain/entities/messaging/WhatsappMessageContext.js';
+import { ChatType } from '../src/domain/entities/messaging/MessageContext.js';
 import { BaileysMessageNormalizer } from '../src/infrastructure/baileys/BaileysMessageNormalizer.js';
 
 test('BaileysMessageNormalizer normalizes a direct text WhatsApp message', async () => {

@@ -1,3 +1,9 @@
+/**
+ * Resolves environment-defined key/subject templates such as:
+ * "gateway.{provider}.{workspaceId}.{sessionId}".
+ *
+ * Missing placeholders are treated as configuration bugs and fail fast.
+ */
 export function renderConfigTemplate(
   template: string,
   values: Record<string, string | number>,

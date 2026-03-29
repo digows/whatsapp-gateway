@@ -5,7 +5,10 @@ export enum ChatType {
   Unknown = 'unknown',
 }
 
-export class WhatsappMessageContext {
+/**
+ * Messaging metadata extracted from WhatsApp-specific addressing details.
+ */
+export class MessageContext {
   constructor(
     public readonly chatType: ChatType,
     public readonly remoteJid: string,

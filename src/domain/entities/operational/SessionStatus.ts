@@ -10,6 +10,9 @@ export enum SessionStatus {
   LoggedOut = 'logged_out',
 }
 
+/**
+ * Operational state transition emitted by the session host/runtime lifecycle.
+ */
 export class SessionStatusEvent {
   constructor(
     public readonly session: SessionReference,

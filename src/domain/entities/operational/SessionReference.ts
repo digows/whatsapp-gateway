@@ -1,5 +1,6 @@
 /**
  * Canonical identifier for a hosted WhatsApp session.
+ * The provider value comes from worker configuration or from a control-plane command payload.
  */
 export class SessionReference {
   constructor(

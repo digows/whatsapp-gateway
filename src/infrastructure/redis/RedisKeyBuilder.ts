@@ -1,6 +1,6 @@
 import { env } from '../../application/config/env.js';
 import { renderConfigTemplate } from '../../application/config/renderConfigTemplate.js';
-import { AuthStateKey } from '../../domain/entities/auth/AuthStateKey.js';
+import { AuthenticationStateKey } from '../../domain/entities/authentication/AuthenticationStateKey.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 
 export class RedisKeyBuilder {
@@ -32,9 +32,9 @@ export class RedisKeyBuilder {
     });
   }
 
-  public static getAuthRecordKey(
+  public static getAuthenticationRecordKey(
     session: SessionReference,
-    key: AuthStateKey,
+    key: AuthenticationStateKey,
   ): string {
     return renderConfigTemplate(env.REDIS_KEY_AUTH_RECORD_TEMPLATE, {
       prefix: env.REDIS_KEY_PREFIX,
@@ -45,7 +45,7 @@ export class RedisKeyBuilder {
     });
   }
 
-  public static getAuthRecordKeyPrefix(
+  public static getAuthenticationRecordKeyPrefix(
     session: SessionReference,
     keyType: string,
   ): string {
@@ -58,7 +58,7 @@ export class RedisKeyBuilder {
     });
   }
 
-  public static getAuthSessionPattern(session: SessionReference): string {
+  public static getAuthenticationSessionPattern(session: SessionReference): string {
     return renderConfigTemplate(env.REDIS_KEY_AUTH_SESSION_PATTERN_TEMPLATE, {
       prefix: env.REDIS_KEY_PREFIX,
       workspaceId: session.workspaceId,

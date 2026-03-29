@@ -6,6 +6,9 @@ export enum DeliveryStatus {
   Blocked = 'blocked',
 }
 
+/**
+ * Result emitted after an outbound send attempt finishes inside a session runtime.
+ */
 export class DeliveryResult {
   constructor(
     public readonly commandId: string,

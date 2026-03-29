@@ -1,9 +1,9 @@
 import { BufferJSON } from 'baileys';
-import { SignalKeyRepository } from '../../application/ports/SignalKeyRepository.js';
+import { SignalKeyRepository } from '../../domain/repositories/authentication/SignalKeyRepository.js';
 import { env } from '../../application/config/env.js';
-import { AuthStateKey } from '../../domain/entities/auth/AuthStateKey.js';
-import { AuthStateQuery } from '../../domain/entities/auth/AuthStateQuery.js';
-import { AuthStateRecord } from '../../domain/entities/auth/AuthStateRecord.js';
+import { AuthenticationStateKey } from '../../domain/entities/authentication/AuthenticationStateKey.js';
+import { AuthenticationStateQuery } from '../../domain/entities/authentication/AuthenticationStateQuery.js';
+import { AuthenticationStateRecord } from '../../domain/entities/authentication/AuthenticationStateRecord.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { PgConnection } from './PgConnection.js';
 
@@ -15,7 +15,7 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
   private readonly pool = PgConnection.getPool();
   private readonly binaryKeyTypes = new Set(['sender-key', 'identity-key']);
 
-  public async findByQuery(query: AuthStateQuery): Promise<AuthStateRecord[]> {
+  public async findByQuery(query: AuthenticationStateQuery): Promise<AuthenticationStateRecord[]> {
     if (query.keyIds.length === 0) {
       return [];
     }
@@ -35,9 +35,9 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
       );
 
       await client.query('COMMIT');
-      return result.rows.map(row => new AuthStateRecord(
+      return result.rows.map(row => new AuthenticationStateRecord(
         query.session,
-        new AuthStateKey(query.keyType, row.keyId),
+        new AuthenticationStateKey(query.keyType, row.keyId),
         row.serializedData,
       ));
     } catch (error) {
@@ -48,12 +48,12 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
     }
   }
 
-  public async save(records: readonly AuthStateRecord[]): Promise<void> {
+  public async save(records: readonly AuthenticationStateRecord[]): Promise<void> {
     if (records.length === 0) {
       return;
     }
 
-    const recordsBySession = new Map<string, AuthStateRecord[]>();
+    const recordsBySession = new Map<string, AuthenticationStateRecord[]>();
     for (const record of records) {
       const sessionKey = record.session.toKey();
       const current = recordsBySession.get(sessionKey);
@@ -69,7 +69,7 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
     }
   }
 
-  public async removeByQuery(query: AuthStateQuery): Promise<void> {
+  public async removeByQuery(query: AuthenticationStateQuery): Promise<void> {
     if (query.keyIds.length === 0) {
       return;
     }
@@ -119,7 +119,7 @@ export class PgSignalKeyRepository implements SignalKeyRepository {
     }
   }
 
-  private async saveSessionRecords(records: readonly AuthStateRecord[]): Promise<void> {
+  private async saveSessionRecords(records: readonly AuthenticationStateRecord[]): Promise<void> {
     const session = records[0].session;
     const client = await this.pool.connect();
 

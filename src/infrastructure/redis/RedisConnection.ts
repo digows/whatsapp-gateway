@@ -5,7 +5,7 @@ type RedisRole = 'data' | 'coordination';
 
 /**
  * Dedicated Redis clients per responsibility.
- * Signal/AuthState traffic can be noisy during sync, so lease/heartbeat should
+ * Signal/authentication traffic can be noisy during sync, so lease/heartbeat should
  * not share the same connection.
  */
 export class RedisConnection {

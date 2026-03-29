@@ -5,6 +5,10 @@ import { SessionReference } from '../../domain/entities/operational/SessionRefer
 import { SessionStatusEvent } from '../../domain/entities/operational/SessionStatus.js';
 import { WorkerCommand } from '../../domain/entities/operational/WorkerCommand.js';
 
+/**
+ * Application-level transport contract used by the worker host.
+ * NATS is the current adapter, but the host should not depend on its wire details.
+ */
 export interface WorkerTransport {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
