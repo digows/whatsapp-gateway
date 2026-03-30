@@ -315,6 +315,7 @@ export class NatsChannelTransport implements WorkerTransport {
     const options = consumerOpts();
     options.bindStream(env.NATS_JETSTREAM_STREAM_NAME);
     options.durable(durableName);
+    options.deliverTo(this.buildJetStreamDeliverSubject(durableName));
     options.deliverNew();
     options.ackExplicit();
     options.manualAck();
@@ -1240,6 +1241,10 @@ export class NatsChannelTransport implements WorkerTransport {
 
   private sanitizeConsumerName(value: string): string {
     return value.replace(/[^a-zA-Z0-9_-]/g, '_');
+  }
+
+  private buildJetStreamDeliverSubject(durableName: string): string {
+    return `_INBOX.gateway.${this.providerId}.${durableName}`;
   }
 
   private buildActivationEventMessageId(event: ActivationEvent): string {
