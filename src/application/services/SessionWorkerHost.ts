@@ -201,6 +201,31 @@ export class SessionWorkerHost {
     }
   }
 
+  public async ensureSessionStarted(session: SessionReference): Promise<BaileysProvider> {
+    await this.startSession(session);
+
+    const sessionKey = session.toKey();
+    while (this.startingSessions.has(sessionKey) && !this.sessions.has(sessionKey)) {
+      await this.delay(25);
+    }
+
+    const hostedSession = this.sessions.get(sessionKey);
+    if (!hostedSession) {
+      throw new Error(`Failed to host ${session.toLogLabel()} on this worker.`);
+    }
+
+    return hostedSession.provider;
+  }
+
+  public getHostedProvider(session: SessionReference): BaileysProvider {
+    const hostedSession = this.sessions.get(session.toKey());
+    if (!hostedSession) {
+      throw new Error(`${session.toLogLabel()} is not hosted on this worker.`);
+    }
+
+    return hostedSession.provider;
+  }
+
   public async stopSession(session: SessionReference): Promise<void> {
     const sessionKey = session.toKey();
     const hostedSession = this.sessions.get(sessionKey);

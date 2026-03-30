@@ -1,4 +1,5 @@
 import makeWASocket, { DisconnectReason, proto } from 'baileys';
+import crypto from 'crypto';
 import {
   ActivationCancelledEvent,
   ActivationCompletedEvent,
@@ -74,6 +75,13 @@ interface ActiveActivation {
   pairingCodeSequence: number;
 }
 
+interface PendingActivationFirstResult {
+  activationId: string;
+  resolve: (event: ActivationEvent) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
 /**
  * Callback contract implemented by the host that owns one Baileys session instance.
  */
@@ -95,6 +103,7 @@ export class BaileysProvider {
   private readonly loggedCiphertextIssues = new Set<string>();
   private activeActivation?: ActiveActivation;
   private latestQrCode?: string;
+  private pendingActivationFirstResult?: PendingActivationFirstResult;
 
   private readonly proxyAgent?: HttpsProxyAgent<string>;
   private readonly antiBan: AntiBanService;
@@ -166,6 +175,40 @@ export class BaileysProvider {
       this.sock.end(new Error('Intentional Shutdown'));
       this.sock = null;
     }
+  }
+
+  public async requestQrCodeActivation(waitTimeoutMs = 30000): Promise<ActivationEvent> {
+    return this.requestActivation(
+      this.createActiveActivation(
+        crypto.randomUUID(),
+        crypto.randomUUID(),
+        crypto.randomUUID(),
+        ActivationMode.QrCode,
+      ),
+      waitTimeoutMs,
+    );
+  }
+
+  public async requestPairingCodeActivation(
+    phoneNumber: string,
+    customPairingCode?: string,
+    waitTimeoutMs = 30000,
+  ): Promise<ActivationEvent> {
+    if (!phoneNumber.trim()) {
+      throw new Error('Pairing code activation requires a non-empty phoneNumber.');
+    }
+
+    return this.requestActivation(
+      this.createActiveActivation(
+        crypto.randomUUID(),
+        crypto.randomUUID(),
+        crypto.randomUUID(),
+        ActivationMode.PairingCode,
+        phoneNumber,
+      ),
+      waitTimeoutMs,
+      customPairingCode,
+    );
   }
 
   public async send(command: SendMessageCommand): Promise<DeliveryResult> {
@@ -347,13 +390,43 @@ export class BaileysProvider {
     );
   }
 
+  private async requestActivation(
+    activation: ActiveActivation,
+    waitTimeoutMs: number,
+    customPairingCode?: string,
+  ): Promise<ActivationEvent> {
+    if (waitTimeoutMs <= 0) {
+      throw new Error('Activation wait timeout must be greater than zero.');
+    }
+
+    if (this.activeActivation) {
+      await this.cancelActivation(this.activeActivation, 'superseded_by_new_request');
+    }
+
+    const firstResultPromise = this.createPendingActivationFirstResult(
+      activation.activationId,
+      waitTimeoutMs,
+    );
+
+    try {
+      await this.startActivation(activation, customPairingCode);
+      return await firstResultPromise;
+    } catch (error) {
+      this.rejectPendingActivationFirstResult(
+        activation.activationId,
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      throw error;
+    }
+  }
+
   private async startActivation(
     activation: ActiveActivation,
     customPairingCode?: string,
   ): Promise<void> {
     this.activeActivation = activation;
 
-    await this.callbacks.onActivationEvent(
+    await this.emitActivationEvent(
       new ActivationStartedEvent(
         activation.commandId,
         activation.correlationId,
@@ -403,7 +476,7 @@ export class BaileysProvider {
       }
 
       activation.pairingCodeSequence += 1;
-      await this.callbacks.onActivationEvent(
+      await this.emitActivationEvent(
         new ActivationPairingCodeUpdatedEvent(
           activation.commandId,
           activation.correlationId,
@@ -1186,13 +1259,88 @@ export class BaileysProvider {
     return this.activeActivation?.activationId === activation.activationId;
   }
 
+  private createPendingActivationFirstResult(
+    activationId: string,
+    waitTimeoutMs: number,
+  ): Promise<ActivationEvent> {
+    if (this.pendingActivationFirstResult) {
+      clearTimeout(this.pendingActivationFirstResult.timer);
+      this.pendingActivationFirstResult.reject(
+        new Error('Activation first result waiter was replaced before completion.'),
+      );
+      this.pendingActivationFirstResult = undefined;
+    }
+
+    return new Promise<ActivationEvent>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingActivationFirstResult?.activationId === activationId) {
+          this.pendingActivationFirstResult = undefined;
+        }
+
+        reject(
+          new Error(`Activation ${activationId} did not produce an initial result within ${waitTimeoutMs}ms.`),
+        );
+      }, waitTimeoutMs);
+      timer.unref();
+
+      this.pendingActivationFirstResult = {
+        activationId,
+        resolve,
+        reject,
+        timer,
+      };
+    });
+  }
+
+  private resolvePendingActivationFirstResult(event: ActivationEvent): void {
+    if (!this.pendingActivationFirstResult) {
+      return;
+    }
+
+    if (this.pendingActivationFirstResult.activationId !== event.activationId) {
+      return;
+    }
+
+    if (event instanceof ActivationStartedEvent) {
+      return;
+    }
+
+    clearTimeout(this.pendingActivationFirstResult.timer);
+    const { resolve } = this.pendingActivationFirstResult;
+    this.pendingActivationFirstResult = undefined;
+    resolve(event);
+  }
+
+  private rejectPendingActivationFirstResult(activationId: string, error: Error): void {
+    if (!this.pendingActivationFirstResult) {
+      return;
+    }
+
+    if (this.pendingActivationFirstResult.activationId !== activationId) {
+      return;
+    }
+
+    clearTimeout(this.pendingActivationFirstResult.timer);
+    const { reject } = this.pendingActivationFirstResult;
+    this.pendingActivationFirstResult = undefined;
+    reject(error);
+  }
+
+  private async emitActivationEvent(event: ActivationEvent): Promise<void> {
+    try {
+      await this.callbacks.onActivationEvent(event);
+    } finally {
+      this.resolvePendingActivationFirstResult(event);
+    }
+  }
+
   private async publishCurrentQrCode(activation: ActiveActivation): Promise<void> {
     if (!this.latestQrCode || !this.isCurrentActivation(activation)) {
       return;
     }
 
     activation.qrSequence += 1;
-    await this.callbacks.onActivationEvent(
+    await this.emitActivationEvent(
       new ActivationQrCodeUpdatedEvent(
         activation.commandId,
         activation.correlationId,
@@ -1206,7 +1354,7 @@ export class BaileysProvider {
   }
 
   private async publishActivationCompleted(activation: ActiveActivation): Promise<void> {
-    await this.callbacks.onActivationEvent(
+    await this.emitActivationEvent(
       new ActivationCompletedEvent(
         activation.commandId,
         activation.correlationId,
@@ -1222,7 +1370,7 @@ export class BaileysProvider {
     activation: ActiveActivation,
     reason: string,
   ): Promise<void> {
-    await this.callbacks.onActivationEvent(
+    await this.emitActivationEvent(
       new ActivationFailedEvent(
         activation.commandId,
         activation.correlationId,
@@ -1238,7 +1386,7 @@ export class BaileysProvider {
     activation: ActiveActivation,
     reason: string,
   ): Promise<void> {
-    await this.callbacks.onActivationEvent(
+    await this.emitActivationEvent(
       new ActivationCancelledEvent(
         activation.commandId,
         activation.correlationId,
