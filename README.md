@@ -109,3 +109,90 @@ Configure the `.env` based on the `.env.example` template. The application uses 
 - `REDIS_COMMAND_PROCESSING_TTL_SECONDS`: TTL for the transient dedupe claim while a command is executing.
 - `REDIS_COMMAND_COMPLETED_TTL_SECONDS`: TTL for the completed-command marker used to suppress duplicates.
 - `LOG_LEVEL`: Engine verbosity. Default: `info` (for deep WebSocket protocol debugging, set to `debug` or `trace`).
+
+---
+
+## Current Boundary & Service Shape
+
+This repository currently implements the **session worker/runtime** side of the gateway.
+
+What is already present:
+- Multi-session WhatsApp runtime hosting with distributed single-owner leases.
+- Gateway-owned NATS contract for worker control, outbound, inbound, delivery, status and activation rails.
+- Redis-backed worker heartbeat and ownership registry.
+- PostgreSQL + Redis auth-state persistence.
+- Activation handling over NATS instead of terminal-only onboarding.
+
+What is **not** present in this repository today:
+- A persisted session catalog or desired-state store.
+- A reconciliation loop that decides which sessions should be running.
+- A scheduler or placement engine that chooses the best worker for a session.
+- A read/query surface for external systems.
+- Media download/storage pipeline for agent consumption.
+- Docker/Helm/Kubernetes deployment assets.
+
+This means the project is already a solid **runtime microservice**, but not yet a full **self-managing gateway platform**.
+
+## How Self-Sufficient Can This Become?
+
+A separate control-plane product is **not mandatory**.
+
+There are three valid operating modes:
+
+1. **Standalone worker**
+   - Best for local development or very small deployments.
+   - An external service still tells the worker which session to start or stop.
+
+2. **Self-managed gateway**
+   - Recommended for the first production version.
+   - This same repository gains an internal controller/reconciler module.
+   - The controller owns session desired state, placement and retry logic, while the existing worker host continues to own WhatsApp runtime execution.
+
+3. **Split control plane + worker plane**
+   - Better for larger fleets and stricter operational separation.
+   - Useful only when the extra deployment and coordination complexity is worth it.
+
+For this codebase and target use case, the recommended direction is **self-managed gateway first**, not a separate control-plane service by default.
+
+## What Still Needs To Be Built For External Infrastructure Use
+
+If the goal is to deploy this as a microservice that other microservices and agents can rely on, the next missing pieces are:
+
+1. **Session catalog**
+   - Source of truth for `provider + workspaceId + sessionId`.
+   - Must persist desired state, actual state, assigned worker, activation state and last operational error.
+
+2. **Controller / reconciler**
+   - Periodically compares desired state vs. observed runtime state.
+   - Starts, stops, retries and repairs sessions automatically.
+
+3. **Placement logic**
+   - Uses worker heartbeat/capacity data already emitted by the runtime.
+   - First-fit or least-loaded is enough for the first implementation.
+
+4. **Operational read model**
+   - Needed by external services that must query session state instead of reconstructing everything from events.
+
+5. **DLQ / replay / poison-message handling**
+   - `jetstream` durability exists, but full operator-grade recovery flows still need to be added.
+
+6. **Media pipeline**
+   - External agent consumers will eventually need downloadable image/audio/document content, not only message metadata.
+
+7. **Packaging and observability**
+   - Dockerfile, Kubernetes/Helm assets, metrics, tracing and formal readiness/liveness strategy are still missing.
+
+8. **Authorization boundary**
+   - Multi-tenant identity already exists in the runtime model, but external command authorization still needs to be enforced by the surrounding gateway layer.
+
+## Recommended Next Direction
+
+The recommended near-term architecture is:
+
+- Keep this repository as the **authoritative WhatsApp runtime**.
+- Add a **controller module inside this same project** instead of creating a second service immediately.
+- Keep **NATS as the main command/event boundary**.
+- Add a **query/read model** for the rest of the infrastructure.
+- Delay HTTP/gRPC/MCP until there is a concrete consumer that needs them.
+
+For implementation guidance aimed at another coding agent or a future session, see [INFRA_INTEGRATION_GUIDE.md](./INFRA_INTEGRATION_GUIDE.md).
