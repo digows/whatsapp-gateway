@@ -1,6 +1,6 @@
-# WhatsApp Gateway (Baileys)
+# WhatsApp Gateway
 
-This project is a WhatsApp gateway worker focused on multi-session, multi-tenant and horizontally scalable operation over Baileys. It is WhatsApp-specific at the runtime layer, but its control and messaging boundaries are gateway-owned rather than tied to a Jarvix SDK contract.
+This project is a WhatsApp gateway worker focused on multi-session, multi-tenant and horizontally scalable operation over a custom Baileys. It is WhatsApp-specific at the runtime layer, but its control and messaging boundaries are gateway-owned rather than tied to a Jarvix SDK contract.
 
 ## The Anti-Ban Triad (Operational Shield)
 
