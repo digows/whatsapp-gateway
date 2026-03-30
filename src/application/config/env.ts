@@ -76,6 +76,12 @@ const envSchema = z.object({
   NATS_SUBJECT_ACTIVATION_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.activation'),
 
   /**
+   * REST API bind configuration for synchronous operations such as activation.
+   */
+  HTTP_HOST: z.string().default('0.0.0.0'),
+  HTTP_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+
+  /**
    * Redis key namespace and templates.
    * Supported placeholders:
    * {prefix} {provider} {workerId} {workspaceId} {sessionId} {type} {id} {jid} {kind} {identifier}

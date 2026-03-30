@@ -5,6 +5,7 @@ import {
   SessionStatus,
   SessionStatusEvent,
 } from '../../domain/entities/operational/SessionStatus.js';
+import { HostedSessionSnapshot } from '../../domain/entities/operational/HostedSessionSnapshot.js';
 import {
   WorkerCommand,
   WorkerCommandAction,
@@ -27,6 +28,10 @@ interface HostedSession {
   session: SessionReference;
   provider: BaileysProvider;
   lease: SessionLease;
+  status: SessionStatus;
+  hostedAt: string;
+  updatedAt: string;
+  reason?: string;
   lockHeartbeat?: NodeJS.Timeout;
   lockHeartbeatStopped?: boolean;
 }
@@ -84,6 +89,22 @@ export class SessionWorkerHost {
     console.log(`[HOST] Worker host online as ${this.workerIdentity.id} for ${this.providerId}`);
   }
 
+  public isStarted(): boolean {
+    return this.started;
+  }
+
+  public getProviderId(): string {
+    return this.providerId;
+  }
+
+  public getWorkerId(): string {
+    return this.workerIdentity.id;
+  }
+
+  public getHostedSessionCount(): number {
+    return this.sessions.size;
+  }
+
   public async stop(): Promise<void> {
     if (this.stopPromise) {
       await this.stopPromise;
@@ -137,6 +158,12 @@ export class SessionWorkerHost {
           );
         },
         onSessionStatus: async event => {
+          this.updateHostedSessionStatus(
+            event.session,
+            event.status,
+            event.timestamp,
+            event.reason,
+          );
           await this.publishNonCritical(
             `session status ${event.status} for ${event.session.toLogLabel()}`,
             () => this.transport.publishSessionStatus(
@@ -156,15 +183,19 @@ export class SessionWorkerHost {
         },
       };
       const provider = new BaileysProvider(session, callbacks);
+      const hostedAt = new Date().toISOString();
 
       const hostedSession: HostedSession = {
         session,
         provider,
         lease,
+        status: SessionStatus.Starting,
+        hostedAt,
+        updatedAt: hostedAt,
       };
 
       this.sessions.set(sessionKey, hostedSession);
-      await this.publishSessionStatus(session, SessionStatus.Starting);
+      await this.publishSessionStatus(session, SessionStatus.Starting, undefined, hostedAt);
 
       await this.transport.subscribeOutgoing(session, async command => {
         const currentSession = this.sessions.get(sessionKey);
@@ -226,6 +257,22 @@ export class SessionWorkerHost {
     return hostedSession.provider;
   }
 
+  public getHostedSessionSnapshot(
+    session: SessionReference,
+  ): HostedSessionSnapshot | undefined {
+    const hostedSession = this.sessions.get(session.toKey());
+    if (!hostedSession) {
+      return undefined;
+    }
+
+    return this.createHostedSessionSnapshot(hostedSession);
+  }
+
+  public listHostedSessionSnapshots(): HostedSessionSnapshot[] {
+    return Array.from(this.sessions.values())
+      .map(hostedSession => this.createHostedSessionSnapshot(hostedSession));
+  }
+
   public async stopSession(session: SessionReference): Promise<void> {
     const sessionKey = session.toKey();
     const hostedSession = this.sessions.get(sessionKey);
@@ -234,14 +281,15 @@ export class SessionWorkerHost {
     }
 
     this.stoppingSessions.add(sessionKey);
-    this.sessions.delete(sessionKey);
 
     try {
       await this.publishSessionStatus(session, SessionStatus.Stopping);
       console.log(`[HOST] Stopping ${session.toLogLabel()}...`);
       await this.cleanupSession(hostedSession);
+      this.sessions.delete(sessionKey);
       await this.publishSessionStatus(session, SessionStatus.Stopped);
     } finally {
+      this.sessions.delete(sessionKey);
       this.stoppingSessions.delete(sessionKey);
     }
   }
@@ -423,18 +471,47 @@ export class SessionWorkerHost {
       | SessionStatus.Stopped
       | SessionStatus.Failed,
     reason?: string,
+    timestamp = new Date().toISOString(),
   ): Promise<void> {
+    this.updateHostedSessionStatus(session, status, timestamp, reason);
     await this.publishNonCritical(
       `session status ${status} for ${session.toLogLabel()}`,
       () => this.transport.publishSessionStatus(
         new SessionStatusEvent(
           session,
           status,
-          new Date().toISOString(),
+          timestamp,
           this.workerIdentity.id,
           reason,
         ),
       ),
+    );
+  }
+
+  private updateHostedSessionStatus(
+    session: SessionReference,
+    status: SessionStatus,
+    timestamp: string,
+    reason?: string,
+  ): void {
+    const hostedSession = this.sessions.get(session.toKey());
+    if (!hostedSession) {
+      return;
+    }
+
+    hostedSession.status = status;
+    hostedSession.updatedAt = timestamp;
+    hostedSession.reason = reason;
+  }
+
+  private createHostedSessionSnapshot(hostedSession: HostedSession): HostedSessionSnapshot {
+    return new HostedSessionSnapshot(
+      hostedSession.session,
+      hostedSession.status,
+      this.workerIdentity.id,
+      hostedSession.hostedAt,
+      hostedSession.updatedAt,
+      hostedSession.reason,
     );
   }
 

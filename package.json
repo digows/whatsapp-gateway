@@ -13,6 +13,7 @@
   "dependencies": {
     "baileys": "github:digows/baileys",
     "dotenv": "^16.4.5",
+    "fastify": "^5.8.4",
     "https-proxy-agent": "^7.0.4",
     "ioredis": "^5.4.1",
     "nats": "^2.28.2",

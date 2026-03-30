@@ -13,16 +13,18 @@ The repository already contains:
 - Redis-backed worker heartbeat/registry.
 - NATS-based command/event transport.
 - PostgreSQL + Redis auth-state persistence.
-- Activation flow over NATS.
+- A synchronous REST API for activation.
+- A local-worker REST API for health and session inspection.
+- Docker/Kubernetes packaging.
 
 The repository does **not** currently contain:
 - A session catalog.
 - Desired-state persistence.
 - A controller/reconciler.
 - Placement or rebalancing logic.
-- A query/read surface.
+- A global query/read surface.
 - Media download/storage abstraction.
-- Docker/Kubernetes packaging.
+- Owner-aware synchronous routing across multiple worker pods.
 
 ## Architectural Rule
 
@@ -48,7 +50,26 @@ These should be preserved unless the product direction changes explicitly:
 4. Session identity remains `provider + workspaceId + sessionId`.
 5. Redis continues to own leases, liveness and short-lived coordination.
 6. PostgreSQL continues to own durable session/auth records.
-7. Another layer, not the Baileys runtime itself, should own authorization and infrastructure-facing queries.
+7. Synchronous operational calls may use REST, but lifecycle fanout remains event-driven.
+8. Another layer, not the Baileys runtime itself, should own authorization and global infrastructure-facing queries.
+
+## Verified HTTP Surface
+
+The worker now exposes:
+- `GET /healthz`
+- `GET /readyz`
+- `POST /api/v1/workspaces/:workspaceId/activations`
+- `GET /api/v1/workspaces/:workspaceId/sessions`
+- `GET /api/v1/workspaces/:workspaceId/sessions/:sessionId`
+- `DELETE /api/v1/workspaces/:workspaceId/sessions/:sessionId`
+
+Important limitation:
+- session routes expose the **local worker view only**
+- they do not resolve ownership across pods
+- they do not read from a global catalog
+
+This is enough for direct pod/service operation and Kubernetes health checks.
+It is not yet a replacement for a real controller/read-model layer.
 
 ## Recommended Target Topology
 
@@ -154,14 +175,16 @@ If agents or downstream services need image/audio/document bytes:
 
 Do not couple long-lived media storage to Redis.
 
-## NATS Integration Guidance
+## REST And NATS Integration Guidance
 
-Keep NATS as the main boundary.
+Use both boundaries intentionally:
+- REST for synchronous operational requests that need an immediate result.
+- NATS for lifecycle fanout and asynchronous integration.
 
 Recommended usage by surrounding infrastructure:
-- publish commands,
-- consume events,
-- use a read model for queries.
+- call REST to request activation and inspect or stop locally hosted sessions,
+- consume NATS activation, status, inbound and delivery events,
+- use a read model for cross-worker or historical queries.
 
 Do not make external consumers depend on internal runtime classes directly.
 
@@ -177,21 +200,40 @@ Avoid these mistakes:
 - do not make the worker responsible for business authorization decisions,
 - do not hide session ownership logic outside Redis without a replacement plan.
 
+## Highest-Value Missing Piece
+
+The next real architecture gap is not another endpoint.
+
+It is ownership-aware synchronous routing and a session catalog.
+
+Without that:
+- activation creation works because the session can be created on the pod that received the request,
+- local session queries work,
+- but any future synchronous operation against an already hosted session can hit the wrong pod.
+
+That is why the next major milestone should add:
+- durable session catalog,
+- controller/reconciler,
+- worker placement,
+- owner-aware routing or query indirection.
+
 ## Suggested Implementation Order
 
 1. Add the session catalog and its repository.
 2. Add controller role bootstrap and leader election.
 3. Add reconciler loop with simple placement.
 4. Add read model updates from status/delivery/activation events.
-5. Add DLQ and replay support.
-6. Add media pipeline if downstream consumers require content bytes.
-7. Add packaging, metrics and deployment assets.
+5. Add owner-aware synchronous routing for existing sessions.
+6. Add DLQ and replay support.
+7. Add media pipeline if downstream consumers require content bytes.
+8. Add metrics and richer operational tooling.
 
 ## Expected Outcome
 
 After these additions, this repository becomes:
 - a self-managed gateway microservice,
 - deployable as one logical platform component,
+- usable through REST for synchronous operations,
 - still NATS-first,
 - still WhatsApp/Baileys-specific,
 - usable by other microservices and agents without depending on a separate legacy control plane.
