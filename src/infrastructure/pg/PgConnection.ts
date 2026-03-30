@@ -9,10 +9,28 @@ const { Pool } = pg;
 export class PgConnection {
   private static pool?: pg.Pool;
 
+  private static buildSslConfig(): pg.PoolConfig['ssl'] | undefined {
+    if (!env.POSTGRES_SSL_ENABLED) {
+      return undefined;
+    }
+
+    if (env.POSTGRES_SSL_CA?.trim()) {
+      return {
+        ca: env.POSTGRES_SSL_CA,
+        rejectUnauthorized: env.POSTGRES_SSL_REJECT_UNAUTHORIZED,
+      };
+    }
+
+    return {
+      rejectUnauthorized: env.POSTGRES_SSL_REJECT_UNAUTHORIZED,
+    };
+  }
+
   public static getPool(): pg.Pool {
     if (!this.pool) {
       this.pool = new Pool({
         connectionString: env.POSTGRES_URL,
+        ssl: this.buildSslConfig(),
         max: 20,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
@@ -22,7 +40,9 @@ export class PgConnection {
         console.error('[DB] Unexpected error on idle client', err);
       });
 
-      console.log(`[DB] PostgreSQL pool initialized with search_path="${env.DB_SCHEMA}"`);
+      console.log(
+        `[DB] PostgreSQL pool initialized with search_path="${env.DB_SCHEMA}" ssl=${env.POSTGRES_SSL_ENABLED}`,
+      );
     }
 
     return this.pool;

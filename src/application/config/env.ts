@@ -23,6 +23,14 @@ const envSchema = z.object({
   POSTGRES_URL: z.string().url().default('postgresql://localhost:5432/whatsapp_gateway'),
 
   /**
+   * PostgreSQL TLS settings.
+   * Managed databases often reject non-encrypted client connections.
+   */
+  POSTGRES_SSL_ENABLED: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
+  POSTGRES_SSL_REJECT_UNAUTHORIZED: z.preprocess((v) => v !== 'false' && v !== false, z.boolean().default(true)),
+  POSTGRES_SSL_CA: z.string().optional(),
+
+  /**
    * PostgreSQL Schema name for this provider.
    */
   DB_SCHEMA: z.string().default('channel_provider_whatsapp_web'),
