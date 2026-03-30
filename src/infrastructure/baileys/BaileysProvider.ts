@@ -1,11 +1,8 @@
 import makeWASocket, { DisconnectReason, proto } from 'baileys';
 import {
-  ActivationCommand,
-  ActivationCommandAction,
-} from '../../domain/entities/activation/ActivationCommand.js';
-import {
   ActivationCancelledEvent,
   ActivationCompletedEvent,
+  ActivationEvent,
   ActivationFailedEvent,
   ActivationPairingCodeUpdatedEvent,
   ActivationQrCodeUpdatedEvent,
@@ -14,6 +11,7 @@ import {
 import { ActivationMode } from '../../domain/entities/activation/ActivationMode.js';
 import { DeliveryResult, DeliveryStatus } from '../../domain/entities/messaging/DeliveryResult.js';
 import {
+  InboundEvent,
   MessageReactionEvent,
   MessageUpdatedEvent,
   ReceivedMessageEvent,
@@ -56,7 +54,6 @@ import {
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import qrcode from 'qrcode-terminal';
 import { env } from '../../application/config/env.js';
-import { SessionRuntime, SessionRuntimeCallbacks } from '../../application/contracts/SessionRuntime.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import { AntiBanService } from '../../domain/services/AntiBanService.js';
 import { PgSignalKeyRepository } from '../pg/PgSignalKeyRepository.js';
@@ -78,10 +75,19 @@ interface ActiveActivation {
 }
 
 /**
+ * Callback contract implemented by the host that owns one Baileys session instance.
+ */
+export interface BaileysProviderCallbacks {
+  onActivationEvent(event: ActivationEvent): Promise<void>;
+  onInboundEvent(event: InboundEvent): Promise<void>;
+  onSessionStatus(event: SessionStatusEvent): Promise<void>;
+}
+
+/**
  * Single-session Baileys runtime.
  * It owns the WhatsApp socket, auth state, message normalization and anti-ban behavior.
  */
-export class BaileysProvider implements SessionRuntime {
+export class BaileysProvider {
   private sock: ReturnType<typeof makeWASocket> | null = null;
   private reconnectTimer?: NodeJS.Timeout;
   private isStopping = false;
@@ -96,7 +102,7 @@ export class BaileysProvider implements SessionRuntime {
 
   constructor(
     private readonly session: SessionReference,
-    private readonly callbacks: SessionRuntimeCallbacks,
+    private readonly callbacks: BaileysProviderCallbacks,
   ) {
     const proxyUrl = env.RESIDENTIAL_PROXY_URL;
     if (proxyUrl) {
@@ -160,15 +166,6 @@ export class BaileysProvider implements SessionRuntime {
       this.sock.end(new Error('Intentional Shutdown'));
       this.sock = null;
     }
-  }
-
-  public async handleActivationCommand(command: ActivationCommand): Promise<void> {
-    if (command.action === ActivationCommandAction.Start) {
-      await this.startActivation(command);
-      return;
-    }
-
-    await this.cancelActivation(command);
   }
 
   public async send(command: SendMessageCommand): Promise<DeliveryResult> {
@@ -350,8 +347,10 @@ export class BaileysProvider implements SessionRuntime {
     );
   }
 
-  private async startActivation(command: ActivationCommand): Promise<void> {
-    const activation = this.createActiveActivation(command);
+  private async startActivation(
+    activation: ActiveActivation,
+    customPairingCode?: string,
+  ): Promise<void> {
     this.activeActivation = activation;
 
     await this.callbacks.onActivationEvent(
@@ -396,7 +395,7 @@ export class BaileysProvider implements SessionRuntime {
     try {
       const pairingCode = await this.sock.requestPairingCode(
         this.normalizePhoneNumberForPairingCode(activation.phoneNumber ?? ''),
-        command.customPairingCode,
+        customPairingCode,
       );
 
       if (!this.isCurrentActivation(activation)) {
@@ -428,12 +427,11 @@ export class BaileysProvider implements SessionRuntime {
     }
   }
 
-  private async cancelActivation(command: ActivationCommand): Promise<void> {
-    const activation = this.isCurrentActivationById(command.activationId)
-      ? this.activeActivation!
-      : this.createActiveActivation(command);
-
-    await this.publishActivationCancelled(activation, 'cancelled_by_command');
+  private async cancelActivation(
+    activation: ActiveActivation,
+    reason = 'cancelled_by_request',
+  ): Promise<void> {
+    await this.publishActivationCancelled(activation, reason);
 
     if (this.isCurrentActivation(activation)) {
       this.activeActivation = undefined;
@@ -1166,13 +1164,19 @@ export class BaileysProvider implements SessionRuntime {
     return contentKeys[0] ?? 'unknown';
   }
 
-  private createActiveActivation(command: ActivationCommand): ActiveActivation {
+  private createActiveActivation(
+    commandId: string,
+    correlationId: string,
+    activationId: string,
+    mode: ActivationMode,
+    phoneNumber?: string,
+  ): ActiveActivation {
     return {
-      commandId: command.commandId,
-      correlationId: command.correlationId,
-      activationId: command.activationId,
-      mode: command.mode ?? ActivationMode.QrCode,
-      phoneNumber: command.phoneNumber,
+      commandId,
+      correlationId,
+      activationId,
+      mode,
+      phoneNumber,
       qrSequence: 0,
       pairingCodeSequence: 0,
     };
@@ -1180,10 +1184,6 @@ export class BaileysProvider implements SessionRuntime {
 
   private isCurrentActivation(activation: ActiveActivation): boolean {
     return this.activeActivation?.activationId === activation.activationId;
-  }
-
-  private isCurrentActivationById(activationId: string): boolean {
-    return this.activeActivation?.activationId === activationId;
   }
 
   private async publishCurrentQrCode(activation: ActiveActivation): Promise<void> {

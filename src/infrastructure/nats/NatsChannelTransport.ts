@@ -13,7 +13,6 @@ import {
 } from 'nats';
 import {env} from '../../application/config/env.js';
 import {WorkerTransport} from '../../application/contracts/WorkerTransport.js';
-import {ActivationCommand, parseActivationCommandAction,} from '../../domain/entities/activation/ActivationCommand.js';
 import {
   ActivationCompletedEvent,
   ActivationEvent,
@@ -78,7 +77,6 @@ import {RedisConnection} from '../redis/RedisConnection.js';
 
 type WorkerCommandHandler = (command: WorkerCommand) => Promise<void>;
 type OutgoingHandler = (command: SendMessageCommand) => Promise<void>;
-type ActivationHandler = (command: ActivationCommand) => Promise<void>;
 type BrokerSubscription = Subscription | JetStreamSubscription;
 type BrokerMessageHandling = 'ack' | 'retry';
 
@@ -96,7 +94,6 @@ export class NatsChannelTransport implements WorkerTransport {
 
   private workerSubscription?: BrokerSubscription;
   private readonly outboundSubscriptions = new Map<string, BrokerSubscription>();
-  private readonly activationSubscriptions = new Map<string, BrokerSubscription>();
   private jetStreamClient?: JetStreamClient;
   private jetStreamManager?: JetStreamManager;
   private commandDeduplicator?: RedisCommandDeduplicator;
@@ -123,12 +120,7 @@ export class NatsChannelTransport implements WorkerTransport {
       this.unsubscribe(subscription);
     }
 
-    for (const subscription of this.activationSubscriptions.values()) {
-      this.unsubscribe(subscription);
-    }
-
     this.outboundSubscriptions.clear();
-    this.activationSubscriptions.clear();
     this.jetStreamClient = undefined;
     this.jetStreamManager = undefined;
     await NatsConnection.close();
@@ -207,55 +199,10 @@ export class NatsChannelTransport implements WorkerTransport {
     );
   }
 
-  public async subscribeActivation(
-    session: SessionReference,
-    handler: ActivationHandler,
-  ): Promise<void> {
-    const subject = NatsSubjectBuilder.getActivationSubject(session);
-    const sessionKey = session.toKey();
-
-    this.unsubscribe(this.activationSubscriptions.get(sessionKey));
-
-    if (env.NATS_MODE === 'jetstream') {
-      const subscription = await this.subscribeJetStream(
-        subject,
-        this.buildSessionConsumerName('activation', session),
-      );
-      this.activationSubscriptions.set(sessionKey, subscription);
-
-      void this.consumeJetStream(
-        subscription,
-        this.activationCodec,
-        payload => this.handleActivationPayload(payload, handler),
-        '[NATS] Failed to process activation command:',
-      );
-      return;
-    }
-
-    const client = await NatsConnection.getClient();
-    const subscription = client.subscribe(subject);
-    this.activationSubscriptions.set(sessionKey, subscription);
-
-    void this.consume(
-      subscription,
-      this.activationCodec,
-      async payload => {
-        if (!this.isActivationCommandPayload(payload)) {
-          return;
-        }
-
-        await handler(this.parseActivationCommand(payload));
-      },
-      '[NATS] Failed to process activation command:',
-    );
-  }
-
   public async disconnectSession(session: SessionReference): Promise<void> {
     const sessionKey = session.toKey();
     this.unsubscribe(this.outboundSubscriptions.get(sessionKey));
     this.outboundSubscriptions.delete(sessionKey);
-    this.unsubscribe(this.activationSubscriptions.get(sessionKey));
-    this.activationSubscriptions.delete(sessionKey);
   }
 
   public async publishActivation(event: ActivationEvent): Promise<void> {
@@ -437,28 +384,6 @@ export class NatsChannelTransport implements WorkerTransport {
     }
   }
 
-  private async handleActivationPayload(
-    payload: unknown,
-    handler: ActivationHandler,
-  ): Promise<BrokerMessageHandling> {
-    if (!this.isActivationCommandPayload(payload)) {
-      return 'ack';
-    }
-
-    try {
-      const command = this.parseActivationCommand(payload);
-      return this.runDeduplicatedCommand(
-        command.session,
-        CommandKind.Activation,
-        command.activationId,
-        () => handler(command),
-      );
-    } catch (error) {
-      console.error('[NATS] Invalid activation command payload. Acknowledging message.', error);
-      return 'ack';
-    }
-  }
-
   private async runDeduplicatedCommand(
     session: SessionReference,
     commandKind: CommandKind,
@@ -625,30 +550,6 @@ export class NatsChannelTransport implements WorkerTransport {
       this.parseSession(payloadRecord.session, 'outgoing command session'),
       this.parseMessage(payloadRecord.message, 'outgoing command message'),
     );
-  }
-
-  private parseActivationCommand(payload: unknown): ActivationCommand {
-    const payloadRecord = this.requireRecord(payload, 'activation command');
-    const action = parseActivationCommandAction(
-      this.readRequiredString(payloadRecord, 'action', 'activation command'),
-    );
-    const rawMode = this.readOptionalString(payloadRecord, 'mode', 'activation command');
-    const mode = rawMode ? parseActivationMode(rawMode) : undefined;
-
-    return new ActivationCommand(
-      this.readRequiredString(payloadRecord, 'commandId', 'activation command'),
-      this.readRequiredString(payloadRecord, 'correlationId', 'activation command'),
-      this.readRequiredString(payloadRecord, 'activationId', 'activation command'),
-      this.parseSession(payloadRecord.session, 'activation command session'),
-      action,
-      mode,
-      this.readOptionalString(payloadRecord, 'phoneNumber', 'activation command'),
-      this.readOptionalString(payloadRecord, 'customPairingCode', 'activation command'),
-    );
-  }
-
-  private isActivationCommandPayload(payload: unknown): boolean {
-    return this.isRecord(payload) && typeof payload.action === 'string';
   }
 
   private parseSession(payload: unknown, label: string): SessionReference {

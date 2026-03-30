@@ -1,10 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  ActivationCommand,
-  ActivationCommandAction,
-  parseActivationCommandAction,
-} from '../src/domain/entities/activation/ActivationCommand.js';
 import { ActivationMode, parseActivationMode } from '../src/domain/entities/activation/ActivationMode.js';
 import { AuthenticationStateType } from '../src/domain/entities/authentication/AuthenticationStateType.js';
 import {
@@ -103,43 +98,11 @@ test('AuthenticationStateType centralizes known key kinds', () => {
   );
 });
 
-test('activation domain validates commands and parses supported values', () => {
-  const session = new SessionReference('whatsapp-web', 9, 'activation-a');
-
-  assert.equal(parseActivationCommandAction('start'), ActivationCommandAction.Start);
+test('activation mode parser accepts supported strategies and rejects unsupported values', () => {
   assert.equal(parseActivationMode('pairing_code'), ActivationMode.PairingCode);
-
-  const command = new ActivationCommand(
-    'cmd-activation-1',
-    'corr-activation-1',
-    'act-activation-1',
-    session,
-    ActivationCommandAction.Start,
-    ActivationMode.PairingCode,
-    '+5511999999999',
-  );
-
-  assert.equal(command.mode, ActivationMode.PairingCode);
-  assert.equal(command.phoneNumber, '+5511999999999');
+  assert.equal(parseActivationMode('qr'), ActivationMode.QrCode);
 
   assert.throws(() => {
-    new ActivationCommand(
-      'cmd-activation-2',
-      'corr-activation-2',
-      'act-activation-2',
-      session,
-      ActivationCommandAction.Start,
-    );
-  }, /requires an activation mode/);
-
-  assert.throws(() => {
-    new ActivationCommand(
-      'cmd-activation-3',
-      'corr-activation-3',
-      'act-activation-3',
-      session,
-      ActivationCommandAction.Start,
-      ActivationMode.PairingCode,
-    );
-  }, /requires a phoneNumber/);
+    parseActivationMode('email_link');
+  }, /Unsupported activation mode/);
 });

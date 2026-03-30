@@ -1,7 +1,5 @@
 import { env } from '../config/env.js';
-import { SessionRuntime, SessionRuntimeCallbacks } from '../contracts/SessionRuntime.js';
 import { WorkerTransport } from '../contracts/WorkerTransport.js';
-import { ActivationMessaging } from './ActivationMessaging.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import {
   SessionStatus,
@@ -12,7 +10,10 @@ import {
   WorkerCommandAction,
 } from '../../domain/entities/operational/WorkerCommand.js';
 import { WorkerIdentity } from '../../domain/entities/operational/WorkerIdentity.js';
-import { BaileysProvider } from '../../infrastructure/baileys/BaileysProvider.js';
+import {
+  BaileysProvider,
+  BaileysProviderCallbacks,
+} from '../../infrastructure/baileys/BaileysProvider.js';
 import { NatsChannelTransport } from '../../infrastructure/nats/NatsChannelTransport.js';
 import { PgConnection } from '../../infrastructure/pg/PgConnection.js';
 import { RedisConnection } from '../../infrastructure/redis/RedisConnection.js';
@@ -24,21 +25,15 @@ import { RedisWorkerHealthReporter } from '../../infrastructure/redis/RedisWorke
 
 interface HostedSession {
   session: SessionReference;
-  runtime: SessionRuntime;
+  provider: BaileysProvider;
   lease: SessionLease;
   lockHeartbeat?: NodeJS.Timeout;
   lockHeartbeatStopped?: boolean;
 }
 
-type SessionRuntimeFactory = (
-  session: SessionReference,
-  callbacks: SessionRuntimeCallbacks,
-) => SessionRuntime;
-
 interface SessionWorkerHostOptions {
   providerId?: string;
   transport?: WorkerTransport;
-  runtimeFactory?: SessionRuntimeFactory;
   workerIdentity?: WorkerIdentity;
 }
 
@@ -51,8 +46,6 @@ export class SessionWorkerHost {
   private readonly providerId: string;
   private readonly workerIdentity: WorkerIdentity;
   private readonly transport: WorkerTransport;
-  private readonly activationMessaging: ActivationMessaging;
-  private readonly runtimeFactory: SessionRuntimeFactory;
   private readonly sessionCoordinator: RedisSessionCoordinator;
   private readonly healthReporter: RedisWorkerHealthReporter;
   private readonly sessions = new Map<string, HostedSession>();
@@ -66,9 +59,6 @@ export class SessionWorkerHost {
     this.providerId = options.providerId ?? env.CHANNEL_PROVIDER_ID;
     this.workerIdentity = options.workerIdentity ?? WorkerIdentity.current();
     this.transport = options.transport ?? new NatsChannelTransport(this.providerId);
-    this.activationMessaging = new ActivationMessaging(this.transport);
-    this.runtimeFactory = options.runtimeFactory
-      ?? ((session, callbacks) => new BaileysProvider(session, callbacks));
     this.sessionCoordinator = new RedisSessionCoordinator(this.workerIdentity);
     this.healthReporter = new RedisWorkerHealthReporter(
       this.providerId,
@@ -133,11 +123,11 @@ export class SessionWorkerHost {
         session,
         env.SESSION_LOCK_TTL_MS,
       );
-      const runtime = this.runtimeFactory(session, {
+      const callbacks: BaileysProviderCallbacks = {
         onActivationEvent: async event => {
           await this.publishNonCritical(
             `activation event ${event.eventType} for ${event.session.toLogLabel()}`,
-            () => this.activationMessaging.publish(event),
+            () => this.transport.publishActivation(event),
           );
         },
         onInboundEvent: async event => {
@@ -164,11 +154,12 @@ export class SessionWorkerHost {
             await this.stopSession(event.session);
           }
         },
-      });
+      };
+      const provider = new BaileysProvider(session, callbacks);
 
       const hostedSession: HostedSession = {
         session,
-        runtime,
+        provider,
         lease,
       };
 
@@ -181,24 +172,15 @@ export class SessionWorkerHost {
           throw new Error(`Session ${session.toLogLabel()} is no longer hosted.`);
         }
 
-        const result = await currentSession.runtime.send(command);
+        const result = await currentSession.provider.send(command);
         await this.publishNonCritical(
           `delivery result for command ${result.commandId}`,
           () => this.transport.publishDelivery(result),
         );
       });
 
-      await this.activationMessaging.subscribe(session, async command => {
-        const currentSession = this.sessions.get(sessionKey);
-        if (!currentSession) {
-          throw new Error(`Session ${session.toLogLabel()} is no longer hosted.`);
-        }
-
-        await currentSession.runtime.handleActivationCommand(command);
-      });
-
       hostedSession.lockHeartbeat = this.startLockHeartbeat(hostedSession);
-      await runtime.start();
+      await provider.start();
       console.log(`[HOST] ${session.toLogLabel()} is online.`);
     } catch (error) {
       const hostedSession = this.sessions.get(sessionKey);
@@ -314,11 +296,11 @@ export class SessionWorkerHost {
     });
 
     const stopRuntimePromise = this.withCleanupTimeout(
-      `stop runtime for ${hostedSession.session.toLogLabel()}`,
-      () => hostedSession.runtime.stop(),
+      `stop provider for ${hostedSession.session.toLogLabel()}`,
+      () => hostedSession.provider.stop(),
     ).catch(error => {
       console.warn(
-        `[HOST] Non-critical error stopping runtime for ${hostedSession.session.toLogLabel()}:`,
+        `[HOST] Non-critical error stopping provider for ${hostedSession.session.toLogLabel()}:`,
         error,
       );
     });

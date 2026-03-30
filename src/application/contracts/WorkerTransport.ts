@@ -1,4 +1,3 @@
-import { ActivationCommand } from '../../domain/entities/activation/ActivationCommand.js';
 import { ActivationEvent } from '../../domain/entities/activation/ActivationEvent.js';
 import { DeliveryResult } from '../../domain/entities/messaging/DeliveryResult.js';
 import { InboundEvent } from '../../domain/entities/messaging/InboundEvent.js';
@@ -21,10 +20,6 @@ export interface WorkerTransport {
   subscribeOutgoing(
     session: SessionReference,
     handler: (command: SendMessageCommand) => Promise<void>,
-  ): Promise<void>;
-  subscribeActivation(
-    session: SessionReference,
-    handler: (command: ActivationCommand) => Promise<void>,
   ): Promise<void>;
   disconnectSession(session: SessionReference): Promise<void>;
   publishActivation(event: ActivationEvent): Promise<void>;

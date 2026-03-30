@@ -6,7 +6,6 @@ import { RedisKeyBuilder } from './RedisKeyBuilder.js';
 export enum CommandKind {
   Worker = 'worker',
   Outbound = 'outbound',
-  Activation = 'activation',
 }
 
 export enum CommandClaimStatus {

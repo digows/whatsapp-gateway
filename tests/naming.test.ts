@@ -117,7 +117,7 @@ test('RedisKeyBuilder uses the configured default keys', () => {
     'wa:whatsapp-web:7:command:processing:session-a:outbound:cmd-1',
   );
   assert.equal(
-    RedisKeyBuilder.getCommandCompletedKey(session, CommandKind.Activation, 'activation-1'),
-    'wa:whatsapp-web:7:command:completed:session-a:activation:activation-1',
+    RedisKeyBuilder.getCommandCompletedKey(session, CommandKind.Outbound, 'activation-1'),
+    'wa:whatsapp-web:7:command:completed:session-a:outbound:activation-1',
   );
 });
