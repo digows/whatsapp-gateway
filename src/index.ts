@@ -5,7 +5,6 @@ import { HealthResource } from './application/restful/HealthResource.js';
 import { SessionResource } from './application/restful/SessionResource.js';
 import { SessionWorkerHost } from './application/services/SessionWorkerHost.js';
 import { ActivationService } from './domain/services/ActivationService.js';
-import { SessionService } from './domain/services/SessionService.js';
 import { installLibraryLogFilters } from './infrastructure/baileys/installLibraryLogFilters.js';
 
 async function bootstrapMain(): Promise<void> {
@@ -14,7 +13,6 @@ async function bootstrapMain(): Promise<void> {
 
   const host = new SessionWorkerHost();
   const activationService = new ActivationService(host);
-  const sessionService = new SessionService(host);
   const httpServer = Fastify({
     logger: false,
     disableRequestLogging: true,
@@ -22,7 +20,7 @@ async function bootstrapMain(): Promise<void> {
 
   new HealthResource(host).register(httpServer);
   new ActivationResource(activationService).register(httpServer);
-  new SessionResource(sessionService).register(httpServer);
+  new SessionResource(host).register(httpServer);
 
   let shuttingDown = false;
 

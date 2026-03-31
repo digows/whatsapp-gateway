@@ -6,7 +6,6 @@ import { SessionResource } from '../src/application/restful/SessionResource.js';
 import { HostedSessionSnapshot } from '../src/domain/entities/operational/HostedSessionSnapshot.js';
 import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
 import { SessionStatus } from '../src/domain/entities/operational/SessionStatus.js';
-import { SessionService } from '../src/domain/services/SessionService.js';
 
 class FakeWorkerHost {
   public stoppedSessions: SessionReference[] = [];
@@ -67,10 +66,9 @@ function createHostedSessionSnapshot(
 
 async function createServer(workerHost: FakeWorkerHost) {
   const server = Fastify();
-  const sessionService = new SessionService(workerHost);
 
   new HealthResource(workerHost).register(server);
-  new SessionResource(sessionService).register(server);
+  new SessionResource(workerHost).register(server);
 
   await server.ready();
   return server;
