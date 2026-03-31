@@ -88,6 +88,10 @@ interface PendingActivationFirstResult {
 export interface BaileysProviderCallbacks {
   onActivationEvent(event: ActivationEvent): Promise<void>;
   onInboundEvent(event: InboundEvent): Promise<void>;
+  onPersistedCredentialsChanged(
+    hasPersistedCredentials: boolean,
+    timestamp: string,
+  ): Promise<void>;
   onSessionStatus(event: SessionStatusEvent): Promise<void>;
 }
 
@@ -125,6 +129,14 @@ export class BaileysProvider {
       this.session,
       new PgSignalKeyRepository(),
       RedisConnection.getClient(),
+      {
+        onPersistedCredentialsChanged: async (hasPersistedCredentials, timestamp) => {
+          await this.callbacks.onPersistedCredentialsChanged(
+            hasPersistedCredentials,
+            timestamp,
+          );
+        },
+      },
     );
     this.antiBan = new AntiBanService(
       this.session,

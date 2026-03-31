@@ -3,18 +3,25 @@ async function bootstrapDev(): Promise<void> {
     { env },
     { SessionWorkerHost },
     { SessionReference },
+    { SessionLifecycleService },
     { installLibraryLogFilters },
+    { PgSessionRepository },
   ] = await Promise.all([
     import('./application/config/env.js'),
     import('./application/services/SessionWorkerHost.js'),
     import('./domain/entities/operational/SessionReference.js'),
+    import('./domain/services/SessionLifecycleService.js'),
     import('./infrastructure/baileys/installLibraryLogFilters.js'),
+    import('./infrastructure/pg/PgSessionRepository.js'),
   ]);
 
   console.log('Starting WhatsApp Gateway (dev entrypoint)...');
   installLibraryLogFilters();
 
-  const host = new SessionWorkerHost();
+  const sessionLifecycleService = new SessionLifecycleService(new PgSessionRepository());
+  const host = new SessionWorkerHost({
+    sessionLifecycleService,
+  });
 
   const shutdown = async (signal: string) => {
     console.log(`[DEV] Received ${signal}. Shutting down worker host...`);

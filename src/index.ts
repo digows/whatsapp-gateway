@@ -5,14 +5,19 @@ import { HealthResource } from './application/restful/HealthResource.js';
 import { SessionResource } from './application/restful/SessionResource.js';
 import { SessionWorkerHost } from './application/services/SessionWorkerHost.js';
 import { ActivationService } from './domain/services/ActivationService.js';
+import { SessionLifecycleService } from './domain/services/SessionLifecycleService.js';
 import { installLibraryLogFilters } from './infrastructure/baileys/installLibraryLogFilters.js';
+import { PgSessionRepository } from './infrastructure/pg/PgSessionRepository.js';
 
 async function bootstrapMain(): Promise<void> {
   console.log('Starting WhatsApp Gateway...');
   installLibraryLogFilters();
 
-  const host = new SessionWorkerHost();
-  const activationService = new ActivationService(host);
+  const sessionLifecycleService = new SessionLifecycleService(new PgSessionRepository());
+  const host = new SessionWorkerHost({
+    sessionLifecycleService,
+  });
+  const activationService = new ActivationService(host, sessionLifecycleService);
   const httpServer = Fastify({
     logger: false,
     disableRequestLogging: true,

@@ -55,6 +55,33 @@ export class PgConnection {
       console.log(`[DB] Ensuring schema "${env.DB_SCHEMA}" exists...`);
       await client.query(`CREATE SCHEMA IF NOT EXISTS "${env.DB_SCHEMA}"`);
 
+      console.log('[DB] Configuring table "sessions" with RLS...');
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS "${env.DB_SCHEMA}".sessions (
+          provider TEXT NOT NULL,
+          workspace_id BIGINT NOT NULL,
+          session_id TEXT NOT NULL,
+          desired_state TEXT NOT NULL,
+          runtime_state TEXT NOT NULL,
+          activation_state TEXT NOT NULL,
+          has_persisted_credentials BOOLEAN NOT NULL DEFAULT FALSE,
+          assigned_worker_id TEXT,
+          phone_number TEXT,
+          whatsapp_jid TEXT,
+          last_error TEXT,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          last_connected_at TIMESTAMP WITH TIME ZONE,
+          last_disconnected_at TIMESTAMP WITH TIME ZONE,
+          PRIMARY KEY (provider, workspace_id, session_id)
+        );
+      `);
+
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS sessions_recovery_idx
+        ON "${env.DB_SCHEMA}".sessions (workspace_id, desired_state, has_persisted_credentials, runtime_state);
+      `);
+
       console.log('[DB] Configuring table "authorization_keys" with BYTEA and RLS...');
       await client.query(`
         CREATE TABLE IF NOT EXISTS "${env.DB_SCHEMA}".authorization_keys (
@@ -70,12 +97,23 @@ export class PgConnection {
 
       console.log('[DB] Enabling Row Level Security (RLS)...');
       await client.query(
+        `ALTER TABLE "${env.DB_SCHEMA}".sessions ENABLE ROW LEVEL SECURITY;`,
+      );
+      await client.query(
         `ALTER TABLE "${env.DB_SCHEMA}".authorization_keys ENABLE ROW LEVEL SECURITY;`,
       );
 
       await client.query(
+        `DROP POLICY IF EXISTS workspace_isolation_policy ON "${env.DB_SCHEMA}".sessions;`,
+      );
+      await client.query(
         `DROP POLICY IF EXISTS workspace_isolation_policy ON "${env.DB_SCHEMA}".authorization_keys;`,
       );
+
+      await client.query(`
+        CREATE POLICY workspace_isolation_policy ON "${env.DB_SCHEMA}".sessions
+        USING (workspace_id = current_setting('app.current_workspace_id')::bigint);
+      `);
 
       await client.query(`
         CREATE POLICY workspace_isolation_policy ON "${env.DB_SCHEMA}".authorization_keys

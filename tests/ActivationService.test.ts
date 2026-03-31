@@ -12,6 +12,9 @@ import { DeliveryResult, DeliveryStatus } from '../src/domain/entities/messaging
 import { SendMessageCommand } from '../src/domain/entities/messaging/SendMessageCommand.js';
 import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
 import { ActivationService } from '../src/domain/services/ActivationService.js';
+import { SessionActivationState } from '../src/domain/entities/session/SessionActivationState.js';
+import { SessionLifecycleService } from '../src/domain/services/SessionLifecycleService.js';
+import { InMemorySessionRepository } from './support/InMemorySessionRepository.js';
 
 class FakeBaileysProvider {
   constructor(
@@ -56,6 +59,8 @@ function createFakeHost(
 
 test('ActivationService generates a session id and returns QR code base64', async () => {
   let ensuredSession: SessionReference | undefined;
+  const sessionRepository = new InMemorySessionRepository();
+  const sessionLifecycleService = new SessionLifecycleService(sessionRepository);
   const provider = new FakeBaileysProvider(
     async () => {
       if (!ensuredSession) {
@@ -80,9 +85,11 @@ test('ActivationService generates a session id and returns QR code base64', asyn
     createFakeHost(provider, session => {
       ensuredSession = session;
     }),
+    sessionLifecycleService,
   );
 
   const activation = await service.requestQrCode(11);
+  const mirroredSession = await sessionRepository.findByReference(activation.session);
 
   assert.equal(activation.mode, ActivationMode.QrCode);
   assert.equal(activation.status, ActivationStatus.QrCodeReady);
@@ -91,6 +98,7 @@ test('ActivationService generates a session id and returns QR code base64', asyn
   assert.doesNotMatch(activation.qrCodeBase64 ?? '', /^data:/);
   assert.ok(activation.session.sessionId.length > 0);
   assert.equal(activation.session.sessionId, ensuredSession?.sessionId);
+  assert.equal(mirroredSession?.activationState, SessionActivationState.AwaitingQrCode);
   assert.equal(
     activation.eventSubject,
     `gateway.v1.channel.whatsapp-web.session.11.${activation.session.sessionId}.activation`,
@@ -98,6 +106,8 @@ test('ActivationService generates a session id and returns QR code base64', asyn
 });
 
 test('ActivationService preserves explicit session id and returns pairing code', async () => {
+  const sessionRepository = new InMemorySessionRepository();
+  const sessionLifecycleService = new SessionLifecycleService(sessionRepository);
   const session = new SessionReference('whatsapp-web', 12, 'session-pairing');
   const provider = new FakeBaileysProvider(
     async () => {
@@ -114,7 +124,7 @@ test('ActivationService preserves explicit session id and returns pairing code',
       '+5511999999999',
     ),
   );
-  const service = new ActivationService(createFakeHost(provider));
+  const service = new ActivationService(createFakeHost(provider), sessionLifecycleService);
 
   const activation = await service.requestPairingCode(
     12,
@@ -128,10 +138,16 @@ test('ActivationService preserves explicit session id and returns pairing code',
   assert.equal(activation.session.sessionId, 'session-pairing');
   assert.equal(activation.pairingCode, '123-456');
   assert.equal(activation.phoneNumber, '+5511999999999');
+  assert.equal(
+    (await sessionRepository.findByReference(session))?.activationState,
+    SessionActivationState.AwaitingPairingCode,
+  );
   assert.equal(activation.eventSubject, 'gateway.v1.channel.whatsapp-web.session.12.session-pairing.activation');
 });
 
 test('ActivationService returns completed activation when session is already connected', async () => {
+  const sessionRepository = new InMemorySessionRepository();
+  const sessionLifecycleService = new SessionLifecycleService(sessionRepository);
   const session = new SessionReference('whatsapp-web', 13, 'connected-session');
   const provider = new FakeBaileysProvider(
     async () => new ActivationQrCodeUpdatedEvent(
@@ -163,7 +179,7 @@ test('ActivationService returns completed activation when session is already con
     ActivationMode.QrCode,
   );
 
-  const service = new ActivationService(createFakeHost(provider));
+  const service = new ActivationService(createFakeHost(provider), sessionLifecycleService);
   const activation = await service.requestQrCode(13, 'connected-session');
 
   assert.equal(activation.status, ActivationStatus.Completed);
@@ -171,6 +187,8 @@ test('ActivationService returns completed activation when session is already con
 });
 
 test('ActivationService returns failed activation with reason', async () => {
+  const sessionRepository = new InMemorySessionRepository();
+  const sessionLifecycleService = new SessionLifecycleService(sessionRepository);
   const session = new SessionReference('whatsapp-web', 14, 'failed-session');
   const provider = new FakeBaileysProvider(
     async () => new ActivationQrCodeUpdatedEvent(
@@ -195,10 +213,35 @@ test('ActivationService returns failed activation with reason', async () => {
     'activation socket unavailable',
   );
 
-  const service = new ActivationService(createFakeHost(provider));
+  const service = new ActivationService(createFakeHost(provider), sessionLifecycleService);
   const activation = await service.requestQrCode(14, 'failed-session');
 
   assert.equal(activation.status, ActivationStatus.Failed);
   assert.equal(activation.failureReason, 'activation socket unavailable');
   assert.equal(activation.mode, ActivationMode.QrCode);
+});
+
+test('ActivationService mirrors activation failure when host startup throws before provider responds', async () => {
+  const sessionRepository = new InMemorySessionRepository();
+  const sessionLifecycleService = new SessionLifecycleService(sessionRepository);
+  const service = new ActivationService(
+    {
+      async ensureSessionStarted(): Promise<FakeBaileysProvider> {
+        throw new Error('worker capacity exceeded');
+      },
+    },
+    sessionLifecycleService,
+  );
+
+  await assert.rejects(
+    () => service.requestQrCode(15, 'startup-failed-session'),
+    /worker capacity exceeded/,
+  );
+
+  const mirroredSession = await sessionRepository.findByReference(
+    new SessionReference('whatsapp-web', 15, 'startup-failed-session'),
+  );
+
+  assert.equal(mirroredSession?.activationState, SessionActivationState.Failed);
+  assert.equal(mirroredSession?.lastError, 'worker capacity exceeded');
 });

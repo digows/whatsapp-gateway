@@ -18,6 +18,7 @@ import {
 import { ActivationMode } from '../entities/activation/ActivationMode.js';
 import { SessionReference } from '../entities/operational/SessionReference.js';
 import { NatsSubjectBuilder } from '../../infrastructure/nats/NatsSubjectBuilder.js';
+import { SessionLifecycleService } from './SessionLifecycleService.js';
 
 type BaileysActivationSupport = Pick<
   BaileysProvider,
@@ -36,6 +37,7 @@ type ActivationSessionHost = {
 export class ActivationService {
   constructor(
     private readonly sessionHost: ActivationSessionHost,
+    private readonly sessionLifecycleService: SessionLifecycleService,
     private readonly providerId = env.CHANNEL_PROVIDER_ID,
   ) {}
 
@@ -45,9 +47,21 @@ export class ActivationService {
     waitTimeoutMs = 30000,
   ): Promise<Activation> {
     const session = this.createSessionReference(workspaceId, sessionId);
-    const provider = await this.sessionHost.ensureSessionStarted(session);
-    const event = await provider.requestQrCodeActivation(waitTimeoutMs);
-    return this.buildActivation(event, ActivationMode.QrCode);
+    await this.sessionLifecycleService.ensureSession(session, new Date().toISOString());
+    await this.sessionLifecycleService.beginQrCodeActivation(session, new Date().toISOString());
+
+    try {
+      const provider = await this.sessionHost.ensureSessionStarted(session);
+      const event = await provider.requestQrCodeActivation(waitTimeoutMs);
+      return this.buildActivation(event, ActivationMode.QrCode);
+    } catch (error) {
+      await this.sessionLifecycleService.failActivation(
+        session,
+        error instanceof Error ? error.message : String(error),
+        new Date().toISOString(),
+      );
+      throw error;
+    }
   }
 
   public async requestPairingCode(
@@ -62,13 +76,29 @@ export class ActivationService {
     }
 
     const session = this.createSessionReference(workspaceId, sessionId);
-    const provider = await this.sessionHost.ensureSessionStarted(session);
-    const event = await provider.requestPairingCodeActivation(
+    await this.sessionLifecycleService.ensureSession(session, new Date().toISOString());
+    await this.sessionLifecycleService.beginPairingCodeActivation(
+      session,
       phoneNumber,
-      customPairingCode,
-      waitTimeoutMs,
+      new Date().toISOString(),
     );
-    return this.buildActivation(event, ActivationMode.PairingCode);
+
+    try {
+      const provider = await this.sessionHost.ensureSessionStarted(session);
+      const event = await provider.requestPairingCodeActivation(
+        phoneNumber,
+        customPairingCode,
+        waitTimeoutMs,
+      );
+      return this.buildActivation(event, ActivationMode.PairingCode);
+    } catch (error) {
+      await this.sessionLifecycleService.failActivation(
+        session,
+        error instanceof Error ? error.message : String(error),
+        new Date().toISOString(),
+      );
+      throw error;
+    }
   }
 
   private createSessionReference(workspaceId: number, sessionId?: string): SessionReference {

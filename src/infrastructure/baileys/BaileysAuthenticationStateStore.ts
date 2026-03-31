@@ -10,6 +10,13 @@ import {RedisKeyBuilder} from '../redis/RedisKeyBuilder.js';
 
 const JSON_PARSE_FAILED = Symbol('json-parse-failed');
 
+export interface BaileysAuthenticationStateStoreCallbacks {
+  onPersistedCredentialsChanged(
+    hasPersistedCredentials: boolean,
+    occurredAt: string,
+  ): Promise<void>;
+}
+
 /**
  * Maps Baileys authentication state to our PostgreSQL + Redis persistence model.
  */
@@ -20,6 +27,7 @@ export class BaileysAuthenticationStateStore {
     private readonly session: SessionReference,
     private readonly repository: SignalKeyRepository,
     private readonly redis: Redis,
+    private readonly callbacks?: BaileysAuthenticationStateStoreCallbacks,
   ) {}
 
   public async getAuthenticationState(): Promise<{
@@ -151,6 +159,7 @@ export class BaileysAuthenticationStateStore {
         await this.redis.del(
           RedisKeyBuilder.getAuthenticationRecordKey(this.session, credentialsKey),
         );
+        await this.notifyPersistedCredentialsChanged(true);
       },
     };
   }
@@ -165,6 +174,8 @@ export class BaileysAuthenticationStateStore {
     if (keys.length > 0) {
       await this.redis.del(...keys);
     }
+
+    await this.notifyPersistedCredentialsChanged(false);
   }
 
   private deserializeStoredValue(type: AuthenticationStateType, data: unknown): unknown {
@@ -273,5 +284,25 @@ export class BaileysAuthenticationStateStore {
 
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  private async notifyPersistedCredentialsChanged(
+    hasPersistedCredentials: boolean,
+  ): Promise<void> {
+    if (!this.callbacks) {
+      return;
+    }
+
+    try {
+      await this.callbacks.onPersistedCredentialsChanged(
+        hasPersistedCredentials,
+        new Date().toISOString(),
+      );
+    } catch (error) {
+      console.warn(
+        `[AUTH] Failed to mirror persisted credential state for ${this.session.toLogLabel()}.`,
+        error,
+      );
+    }
   }
 }

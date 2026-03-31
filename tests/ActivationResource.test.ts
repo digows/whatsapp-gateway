@@ -5,6 +5,8 @@ import { ActivationResource } from '../src/application/restful/ActivationResourc
 import { ActivationPairingCodeUpdatedEvent, ActivationQrCodeUpdatedEvent } from '../src/domain/entities/activation/ActivationEvent.js';
 import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
 import { ActivationService } from '../src/domain/services/ActivationService.js';
+import { SessionLifecycleService } from '../src/domain/services/SessionLifecycleService.js';
+import { InMemorySessionRepository } from './support/InMemorySessionRepository.js';
 
 class FakeBaileysProvider {
   public lastQrCodeWaitTimeoutMs?: number;
@@ -42,12 +44,13 @@ async function createServer(
   provider: FakeBaileysProvider,
   onEnsureSessionStarted?: (session: SessionReference) => void,
 ) {
+  const sessionLifecycleService = new SessionLifecycleService(new InMemorySessionRepository());
   const activationService = new ActivationService({
     async ensureSessionStarted(session: SessionReference): Promise<FakeBaileysProvider> {
       onEnsureSessionStarted?.(session);
       return provider;
     },
-  });
+  }, sessionLifecycleService);
 
   const server = Fastify();
   new ActivationResource(activationService).register(server);

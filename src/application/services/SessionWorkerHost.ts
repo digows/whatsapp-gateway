@@ -1,5 +1,9 @@
 import { env } from '../config/env.js';
 import { WorkerTransport } from '../contracts/WorkerTransport.js';
+import {
+  ActivationEvent,
+  ActivationEventType,
+} from '../../domain/entities/activation/ActivationEvent.js';
 import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
 import {
   SessionStatus,
@@ -17,12 +21,14 @@ import {
 } from '../../infrastructure/baileys/BaileysProvider.js';
 import { NatsChannelTransport } from '../../infrastructure/nats/NatsChannelTransport.js';
 import { PgConnection } from '../../infrastructure/pg/PgConnection.js';
+import { PgSessionRepository } from '../../infrastructure/pg/PgSessionRepository.js';
 import { RedisConnection } from '../../infrastructure/redis/RedisConnection.js';
 import {
   RedisSessionCoordinator,
   SessionLease,
 } from '../../infrastructure/redis/RedisSessionCoordinator.js';
 import { RedisWorkerHealthReporter } from '../../infrastructure/redis/RedisWorkerHealthReporter.js';
+import { SessionLifecycleService } from '../../domain/services/SessionLifecycleService.js';
 
 interface HostedSession {
   session: SessionReference;
@@ -38,6 +44,7 @@ interface HostedSession {
 
 interface SessionWorkerHostOptions {
   providerId?: string;
+  sessionLifecycleService?: SessionLifecycleService;
   transport?: WorkerTransport;
   workerIdentity?: WorkerIdentity;
 }
@@ -53,6 +60,7 @@ export class SessionWorkerHost {
   private readonly transport: WorkerTransport;
   private readonly sessionCoordinator: RedisSessionCoordinator;
   private readonly healthReporter: RedisWorkerHealthReporter;
+  private readonly sessionLifecycleService: SessionLifecycleService;
   private readonly sessions = new Map<string, HostedSession>();
   private readonly startingSessions = new Set<string>();
   private readonly stoppingSessions = new Set<string>();
@@ -64,6 +72,8 @@ export class SessionWorkerHost {
     this.providerId = options.providerId ?? env.CHANNEL_PROVIDER_ID;
     this.workerIdentity = options.workerIdentity ?? WorkerIdentity.current();
     this.transport = options.transport ?? new NatsChannelTransport(this.providerId);
+    this.sessionLifecycleService = options.sessionLifecycleService
+      ?? new SessionLifecycleService(new PgSessionRepository());
     this.sessionCoordinator = new RedisSessionCoordinator(this.workerIdentity);
     this.healthReporter = new RedisWorkerHealthReporter(
       this.providerId,
@@ -146,6 +156,7 @@ export class SessionWorkerHost {
       );
       const callbacks: BaileysProviderCallbacks = {
         onActivationEvent: async event => {
+          await this.handleActivationLifecycleUpdate(event);
           await this.publishNonCritical(
             `activation event ${event.eventType} for ${event.session.toLogLabel()}`,
             () => this.transport.publishActivation(event),
@@ -164,6 +175,7 @@ export class SessionWorkerHost {
             event.timestamp,
             event.reason,
           );
+          await this.handleSessionStatusLifecycleUpdate(event);
           await this.publishNonCritical(
             `session status ${event.status} for ${event.session.toLogLabel()}`,
             () => this.transport.publishSessionStatus(
@@ -181,6 +193,13 @@ export class SessionWorkerHost {
             await this.stopSession(event.session);
           }
         },
+        onPersistedCredentialsChanged: async (hasPersistedCredentials, timestamp) => {
+          await this.handlePersistedCredentialsChanged(
+            session,
+            hasPersistedCredentials,
+            timestamp,
+          );
+        },
       };
       const provider = new BaileysProvider(session, callbacks);
       const hostedAt = new Date().toISOString();
@@ -195,6 +214,11 @@ export class SessionWorkerHost {
       };
 
       this.sessions.set(sessionKey, hostedSession);
+      await this.sessionLifecycleService.markStarting(
+        session,
+        this.workerIdentity.id,
+        hostedAt,
+      );
       await this.publishSessionStatus(session, SessionStatus.Starting, undefined, hostedAt);
 
       await this.transport.subscribeOutgoing(session, async command => {
@@ -221,6 +245,14 @@ export class SessionWorkerHost {
         await this.cleanupSession(hostedSession);
       }
 
+      await this.persistSessionMirrorNonCritical(
+        `mark ${session.toLogLabel()} as failed during startup`,
+        () => this.sessionLifecycleService.markFailed(
+          session,
+          new Date().toISOString(),
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
       await this.publishSessionStatus(
         session,
         SessionStatus.Failed,
@@ -283,11 +315,33 @@ export class SessionWorkerHost {
     this.stoppingSessions.add(sessionKey);
 
     try {
-      await this.publishSessionStatus(session, SessionStatus.Stopping);
+      const shouldPublishStopLifecycle = !this.isTerminalHostedStatus(hostedSession.status);
+
+      if (shouldPublishStopLifecycle) {
+        await this.persistSessionMirrorNonCritical(
+          `mark ${session.toLogLabel()} as stopping`,
+          () => this.sessionLifecycleService.markStopping(
+            session,
+            new Date().toISOString(),
+          ),
+        );
+        await this.publishSessionStatus(session, SessionStatus.Stopping);
+      }
+
       console.log(`[HOST] Stopping ${session.toLogLabel()}...`);
       await this.cleanupSession(hostedSession);
       this.sessions.delete(sessionKey);
-      await this.publishSessionStatus(session, SessionStatus.Stopped);
+
+      if (shouldPublishStopLifecycle) {
+        await this.persistSessionMirrorNonCritical(
+          `mark ${session.toLogLabel()} as stopped`,
+          () => this.sessionLifecycleService.markStopped(
+            session,
+            new Date().toISOString(),
+          ),
+        );
+        await this.publishSessionStatus(session, SessionStatus.Stopped);
+      }
     } finally {
       this.sessions.delete(sessionKey);
       this.stoppingSessions.delete(sessionKey);
@@ -463,6 +517,118 @@ export class SessionWorkerHost {
     console.warn(`[HOST] Unknown worker command action ${command.action}.`);
   };
 
+  private async handleActivationLifecycleUpdate(event: ActivationEvent): Promise<void> {
+    await this.persistSessionMirrorNonCritical(
+      `mirror activation event ${event.eventType} for ${event.session.toLogLabel()}`,
+      async () => {
+        switch (event.eventType) {
+          case ActivationEventType.Started:
+            await this.sessionLifecycleService.ensureSession(event.session, event.timestamp);
+            return;
+          case ActivationEventType.QrCodeUpdated:
+            await this.sessionLifecycleService.beginQrCodeActivation(
+              event.session,
+              event.timestamp,
+            );
+            return;
+          case ActivationEventType.PairingCodeUpdated:
+            if (event.phoneNumber?.trim()) {
+              await this.sessionLifecycleService.beginPairingCodeActivation(
+                event.session,
+                event.phoneNumber,
+                event.timestamp,
+              );
+              return;
+            }
+
+            await this.sessionLifecycleService.ensureSession(event.session, event.timestamp);
+            return;
+          case ActivationEventType.Completed:
+            await this.sessionLifecycleService.completeActivation(
+              event.session,
+              event.timestamp,
+            );
+            return;
+          case ActivationEventType.Failed:
+            await this.sessionLifecycleService.failActivation(
+              event.session,
+              event.reason,
+              event.timestamp,
+            );
+            return;
+          case ActivationEventType.Expired:
+            await this.sessionLifecycleService.expireActivation(
+              event.session,
+              event.timestamp,
+              event.reason,
+            );
+            return;
+          case ActivationEventType.Cancelled:
+            await this.sessionLifecycleService.cancelActivation(
+              event.session,
+              event.timestamp,
+              event.reason,
+            );
+            return;
+        }
+      },
+    );
+  }
+
+  private async handleSessionStatusLifecycleUpdate(event: SessionStatusEvent): Promise<void> {
+    await this.persistSessionMirrorNonCritical(
+      `mirror session status ${event.status} for ${event.session.toLogLabel()}`,
+      async () => {
+        switch (event.status) {
+          case SessionStatus.Connected:
+            await this.sessionLifecycleService.markConnected(
+              event.session,
+              this.workerIdentity.id,
+              event.timestamp,
+            );
+            return;
+          case SessionStatus.Reconnecting:
+            await this.sessionLifecycleService.markReconnecting(
+              event.session,
+              this.workerIdentity.id,
+              event.timestamp,
+              event.reason,
+            );
+            return;
+          case SessionStatus.LoggedOut:
+            await this.sessionLifecycleService.markLoggedOut(
+              event.session,
+              event.timestamp,
+              event.reason,
+            );
+            return;
+          case SessionStatus.Failed:
+            await this.sessionLifecycleService.markFailed(
+              event.session,
+              event.timestamp,
+              event.reason ?? 'session_failed',
+            );
+            return;
+          default:
+            return;
+        }
+      },
+    );
+  }
+
+  private async handlePersistedCredentialsChanged(
+    session: SessionReference,
+    hasPersistedCredentials: boolean,
+    timestamp: string,
+  ): Promise<void> {
+    await this.persistSessionMirrorNonCritical(
+      `mirror persisted credentials=${hasPersistedCredentials} for ${session.toLogLabel()}`,
+      () => hasPersistedCredentials
+        ? this.sessionLifecycleService.markPersistedCredentials(session, timestamp)
+        : this.sessionLifecycleService.clearPersistedCredentials(session, timestamp),
+    );
+  }
+
   private async publishSessionStatus(
     session: SessionReference,
     status:
@@ -513,6 +679,21 @@ export class SessionWorkerHost {
       hostedSession.updatedAt,
       hostedSession.reason,
     );
+  }
+
+  private isTerminalHostedStatus(status: SessionStatus): boolean {
+    return status === SessionStatus.Failed || status === SessionStatus.LoggedOut;
+  }
+
+  private async persistSessionMirrorNonCritical(
+    label: string,
+    task: () => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await task();
+    } catch (error) {
+      console.error(`[HOST] Failed to persist durable session mirror for ${label}.`, error);
+    }
   }
 
   private async publishNonCritical(

@@ -11,3 +11,24 @@ export enum SessionActivationState {
   Failed = 'failed',
   Cancelled = 'cancelled',
 }
+
+export function parseSessionActivationState(value: string): SessionActivationState {
+  switch (value) {
+    case SessionActivationState.Idle:
+      return SessionActivationState.Idle;
+    case SessionActivationState.AwaitingQrCode:
+      return SessionActivationState.AwaitingQrCode;
+    case SessionActivationState.AwaitingPairingCode:
+      return SessionActivationState.AwaitingPairingCode;
+    case SessionActivationState.Completed:
+      return SessionActivationState.Completed;
+    case SessionActivationState.Expired:
+      return SessionActivationState.Expired;
+    case SessionActivationState.Failed:
+      return SessionActivationState.Failed;
+    case SessionActivationState.Cancelled:
+      return SessionActivationState.Cancelled;
+    default:
+      throw new Error(`Unsupported session activation state "${value}".`);
+  }
+}

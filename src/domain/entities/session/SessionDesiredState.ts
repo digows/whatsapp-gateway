@@ -7,3 +7,16 @@ export enum SessionDesiredState {
   Paused = 'paused',
   Stopped = 'stopped',
 }
+
+export function parseSessionDesiredState(value: string): SessionDesiredState {
+  switch (value) {
+    case SessionDesiredState.Active:
+      return SessionDesiredState.Active;
+    case SessionDesiredState.Paused:
+      return SessionDesiredState.Paused;
+    case SessionDesiredState.Stopped:
+      return SessionDesiredState.Stopped;
+    default:
+      throw new Error(`Unsupported session desired state "${value}".`);
+  }
+}

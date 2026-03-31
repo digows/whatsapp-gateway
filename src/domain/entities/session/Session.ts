@@ -210,7 +210,9 @@ export class Session {
   public markFailed(updatedAt: string, reason: string): Session {
     return this.copy({
       runtimeState: SessionRuntimeState.Failed,
+      assignedWorkerId: undefined,
       updatedAt,
+      lastDisconnectedAt: updatedAt,
       lastError: reason,
     });
   }
