@@ -118,6 +118,33 @@ export class PgSessionRepository implements SessionRepository {
     }
   }
 
+  public async listByProvider(providerId: string): Promise<readonly Session[]> {
+    const result = await PgConnection.query(
+      `SELECT
+          provider,
+          workspace_id AS "workspaceId",
+          session_id AS "sessionId",
+          desired_state AS "desiredState",
+          runtime_state AS "runtimeState",
+          activation_state AS "activationState",
+          has_persisted_credentials AS "hasPersistedCredentials",
+          assigned_worker_id AS "assignedWorkerId",
+          phone_number AS "phoneNumber",
+          whatsapp_jid AS "whatsappJid",
+          last_error AS "lastError",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          last_connected_at AS "lastConnectedAt",
+          last_disconnected_at AS "lastDisconnectedAt"
+       FROM "${env.DB_SCHEMA}".sessions
+       WHERE provider = $1
+       ORDER BY updated_at ASC`,
+      [providerId],
+    );
+
+    return result.rows.map(row => this.mapRowToSession(row as SessionRow));
+  }
+
   public async listRecoverableByWorkspace(workspaceId: number): Promise<readonly Session[]> {
     const client = await PgConnection.getPool().connect();
 

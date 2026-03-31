@@ -87,6 +87,10 @@ test('RedisKeyBuilder uses the configured default keys', () => {
     'wa:cluster:health',
   );
   assert.equal(
+    RedisKeyBuilder.getControlPlaneLeaderKey('whatsapp-web'),
+    'wa:whatsapp-web:control-plane:leader',
+  );
+  assert.equal(
     RedisKeyBuilder.getAuthenticationRecordKey(
       session,
       new AuthenticationStateKey(AuthenticationStateType.Credentials, 'default'),

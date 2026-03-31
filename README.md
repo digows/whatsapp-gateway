@@ -1,198 +1,392 @@
 # WhatsApp Gateway
 
-This project is a WhatsApp gateway worker focused on multi-session, multi-tenant and horizontally scalable operation over a custom Baileys. It is WhatsApp-specific at the runtime layer, but its control and messaging boundaries are gateway-owned rather than tied to a Jarvix SDK contract.
+This repository implements a WhatsApp gateway microservice built on top of a custom Baileys runtime.
 
-## The Anti-Ban Triad (Operational Shield)
+It is not a generic channel platform and it does not try to abstract Baileys away. The product is WhatsApp-specific by design. What this project does provide is a gateway-owned operational model around that runtime:
 
-Due to WhatsApp's strict anti-automation policies for personal accounts, this Provider is designed on three fundamental pillars to prevent network-level bans and behavioral detection:
+- durable `Session` catalog in PostgreSQL
+- technical auth-state persistence in PostgreSQL + Redis
+- distributed single-owner execution through Redis leases
+- embedded control plane for reconciliation and worker placement
+- NATS-based asynchronous integration surface
+- REST surface for synchronous activation and session control
 
-### 1. Operational Fork of Baileys
-- Instead of relying on the slow release cycle of the official NPM package (`@whiskeysockets/baileys`), we use an [Operational Fork on GitHub](https://github.com/digows/baileys).
-- Meta aggressively updates the Web protocol (`wa_version`). The fork enables us to apply community patches instantly without waiting for official approvals, reducing downtime and pairing regressions.
+## Current Architecture
 
-### 2. IP Rotation via Residential Proxies
-- If all sessions route through the same datacenter ASN (DigitalOcean, AWS), Meta will detect it and mass-ban the accounts.
-- The Provider dynamically injects an `HttpsProxyAgent` into the Socket lifecycle, routing the master WebSocket connection and HTTP requests (media, profile pictures) through a reliable domestic provider before touching Meta's servers. This masks the server's true origin.
-- *Usage:* Configurable via the `RESIDENTIAL_PROXY_URL` environment variable.
+The current binary is a **self-managed gateway**.
 
-### 3. Behavioral Middleware (Anti-Ban)
-- The runtime currently enforces an in-process anti-ban policy instead of delegating the send path to an external wrapper.
-- This policy is intentionally modeled after the same operational shield:
-  - **Gaussian-like Jitter:** Randomizes dispatch delay while separating queue cooldown from typing simulation, so the worker does not look like it is typing for 30-60 seconds straight.
-  - **Presence Simulation:** Sends `presenceSubscribe` + `composing` only for the final typing window before direct text delivery, then pauses after the send.
-  - **Throttling:** Strictly limits messages per minute/hour/day and blocks traffic when the worker exceeds those rails.
-  - **Warm-Up Policy:** Session-scoped Redis state progressively raises daily outbound limits and can restart warm-up after long inactivity.
-  - **Health Monitor:** Forced disconnects and send failures increase risk and can auto-pause outbound traffic.
-  - **Content Variator:** Prevents Spamming By Value bans by injecting invisible zero-width characters only after repeated identical text.
-- The gateway borrows the good ideas from `baileys-antiban` but does not adopt its wrapper, local queue or scheduler as runtime boundaries.
-- Those responsibilities are split differently here:
-  - anti-ban policy lives inside the session runtime,
-  - durable command/event flow lives in NATS,
-  - warm-up state and worker liveness live in Redis.
-- Detailed reference:
-  - [ANTIBAN.md](./ANTIBAN.md)
+Each pod runs the same process with three responsibilities:
 
----
+1. **HTTP API**
+   - synchronous operational requests
+   - activation
+   - durable session control
 
-## Macro Architecture: Control Plane vs. Session Worker
-To achieve high density and reliability, the gateway is logically divided:
+2. **Session Worker**
+   - hosts live WhatsApp sessions
+   - owns Baileys sockets
+   - emits inbound, delivery, status and activation events
 
-1. **Control Plane:**
-   - Manages onboarding, QR code or pairing-code activation and session lifecycle.
-   - Routes commands and receives events over NATS.
-   - Decides which worker should own which session based on health and leases.
-   
-2. **Session Worker (This Node.js Project):**
-   - Headless background workers connecting directly to Meta's WebSockets via Baileys.
-   - Dedicated exclusively to cryptography and I/O networking logic.
-   - Internally split into:
-     - `SessionWorkerHost`: owns worker heartbeat, capacity, NATS subjects and session leases.
-     - `BaileysProvider`: owns one WhatsApp socket, auth state, normalization and anti-ban behavior.
-   - A single worker process can host multiple WhatsApp sessions concurrently, up to `MAX_CONCURRENT_SESSIONS`.
+3. **Embedded Control Plane Participant**
+   - all pods participate
+   - only one leader reconciles the durable `Session` catalog
+   - leader assigns or stops sessions across workers using NATS worker commands
 
-## High Availability & Concurrency (Redlock)
-Centralized authentication state storage in PostgreSQL creates a strict concurrency danger: *if Pod A and Pod B attempt to open the same WhatsApp session simultaneously, Meta will detect a cryptographic anomaly and terminate the connection.*
+### High-Level Diagram
 
-To prevent this in a horizontally scaled Kubernetes cluster:
-- **Redlock (Distributed Lock):** Before a worker starts a session, it must acquire a unique TTL lock in Redis.
-- **Object Immutability (Redlock v5 Fix):** The `Lock` object in Redlock v5 is immutable. To avoid the "already-expired lock" bug during long sessions, the Provider correctly updates its internal lock reference on every extension (`.extend()`).
-- **TTL of 120s:** Configured with a generous TTL to tolerate Network Jitter and resource-heavy History Syncs.
-- **Heartbeat:** The lock is actively extended every 45 seconds (`lockHeartbeat`) while the WebSocket is healthy.
-- **Registry:** Upon acquiring the lock, the worker writes its `WORKER_ID` to an assignment hash in Redis. The control plane uses this mapped registry to route outbound messages strictly to the worker holding the active WebSocket.
+```mermaid
+flowchart LR
+    External["External Services / Agents"] --> Http["REST API"]
+    External --> Broker["NATS"]
 
-## Core Engineering Features
+    subgraph Gateway["WhatsApp Gateway Pod"]
+        Http --> ActivationService["ActivationService"]
+        Http --> SessionResource["SessionResource"]
+        Http --> HostedSessionResource["HostedSessionResource (internal)"]
 
-### 1. Persistence & Multi-Tenancy (RLS + BYTEA)
-- **Tenant Isolation:** We use **Row Level Security (RLS)** in PostgreSQL. This ensures that even if Pods share the same database pool, a `workspaceId` (Tenant) can never access another tenant's cryptographic keys. 
-- **Binary storage:** `AuthState` is stored using `BYTEA` columns, preventing UTF-8 string corruption of cryptographic buffers and improving I/O performance.
-- **L1 Cache:** Redis acts as a write-through cache for auth keys, reducing PostgreSQL load.
-- **Session cardinality:** One tenant can own multiple WhatsApp sessions, each identified by `provider + workspaceId + sessionId`.
+        ActivationService --> SessionLifecycle["SessionLifecycleService"]
+        SessionResource --> SessionLifecycle
+        SessionResource --> SessionCatalog["SessionRepository"]
 
-### 2. Fail-Safe Strategy (end vs logout)
-To prevent accidental unpairing (the most common bug in Baileys implementations):
-- **`end()`:** Used for all error-handling and socket closures. It drops the connection without destroying the session tokens.
-- **`logout()`:** Strictly reserved for explicit user actions. Calling this instructs Meta to **unpair the device** from the phone.
+        EmbeddedControlPlane["EmbeddedControlPlane (leader only)"] --> SessionCatalog
+        EmbeddedControlPlane --> WorkerRegistry["Redis Worker Registry"]
+        EmbeddedControlPlane --> Broker
 
-### 3. Identity Resolution (LID-to-PN)
-Meta masks phone numbers with **LIDs** (Local Identifiers) in certain contexts. The Provider resolves these on-the-fly:
-- **`participantAlt` Extraction:** Automatically captures the real phone number (`+E.164`) from message metadata.
-- **Resolution Cache:** Mappings between `@lid` and `@s.whatsapp.net` are cached in Redis (30-day TTL) for sub-millisecond retrieval.
+        SessionWorkerHost["SessionWorkerHost"] --> Broker
+        SessionWorkerHost --> LeaseCoordinator["Redis Session Leases"]
+        SessionWorkerHost --> BaileysProvider["BaileysProvider (one per session)"]
+        SessionWorkerHost --> SessionLifecycle
 
-### 4. NATS Bridge (Standardized Payloads)
-The worker host uses NATS as the asynchronous bridge between Control Plane and session runtimes.
-- **Worker control:** `gateway.v1.channel.{provider}.worker.{workerId}.control`
-- **Inbound:** `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.incoming`
-- **Outbound:** `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.outgoing`
-- **Delivery:** `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.delivery`
-- **Session status:** `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.status`
-- **Activation:** `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.activation`
-- **Responsibility split:** Redis remains responsible for liveness, leases and worker registry; NATS is responsible for commands and events between planes.
-- **Gateway boundary:** The runtime handles the raw WhatsApp protocol and emits gateway-owned events and commands, so the control plane stays decoupled from Baileys internals.
-- **Durability mode:** `NATS_MODE=ephemeral` keeps plain publish/subscribe semantics. `NATS_MODE=jetstream` enables durable stream-backed processing for worker control, outbound and activation commands, with Redis-backed dedupe for command execution.
+        BaileysProvider --> AuthStore["Auth State Store"]
+        AuthStore --> PostgreSql["PostgreSQL"]
+        AuthStore --> Redis["Redis"]
+        SessionCatalog --> PostgreSql
+        WorkerRegistry --> Redis
+        LeaseCoordinator --> Redis
+    end
+```
 
-### 5. Entrypoints
-- **`src/index.ts`:** production worker entrypoint. Boots the host and waits for control-plane commands.
-- **`src/dev.ts`:** local development entrypoint. Boots the host and auto-starts one session from `DEV_WORKSPACE_ID` and `DEV_SESSION_ID`.
+## Domain Model
 
----
+### Session vs. Authentication State
 
-## Environment Configuration
-Configure the `.env` based on the `.env.example` template. The application uses a strict Fail-Fast system backed by `Zod` to validate these environment variables upon startup.
+The project now distinguishes clearly between:
 
-- `RESIDENTIAL_PROXY_URL`: Residential Proxy endpoint. In a local dev environment (with only 1 or 2 test accounts), this can be left empty for direct IP routing.
-- `CHANNEL_PROVIDER_ID`: Logical provider identifier carried in subjects, sessions and telemetry. Default: `whatsapp-web`.
-- `POSTGRES_URL`: PostgreSQL connection string for saving cryptographic sessions (`AuthState`).
-- `REDIS_URL`: Redis connection string for distributed locks and blazing-fast `AuthState` caching.
-- `NATS_MODE`: `ephemeral` for plain NATS or `jetstream` for durable broker-backed command consumption.
-- `NATS_JETSTREAM_STREAM_NAME`: Stream name used when durable mode is enabled.
-- `NATS_JETSTREAM_STORAGE`: `file` or `memory` storage for the JetStream stream.
-- `REDIS_COMMAND_PROCESSING_TTL_SECONDS`: TTL for the transient dedupe claim while a command is executing.
-- `REDIS_COMMAND_COMPLETED_TTL_SECONDS`: TTL for the completed-command marker used to suppress duplicates.
-- `LOG_LEVEL`: Engine verbosity. Default: `info` (for deep WebSocket protocol debugging, set to `debug` or `trace`).
+- **`Session`**
+  - durable operational mirror of a WhatsApp session
+  - owned by the gateway domain
+  - used by the embedded control plane
 
----
+- **`authorization_keys`**
+  - technical Baileys authentication state
+  - credentials, sender keys, app-state sync keys and related records
+  - required for reconnecting a real WhatsApp session
 
-## Current Boundary & Service Shape
+The relationship is:
 
-This repository currently implements the **session worker/runtime** side of the gateway.
+- one `Session` owns many authentication records
+- a `Session` may exist before authentication completes
+- `hasPersistedCredentials` is the operational summary of whether reconnect is possible
 
-What is already present:
-- Multi-session WhatsApp runtime hosting with distributed single-owner leases.
-- Gateway-owned NATS contract for worker control, outbound, inbound, delivery, status and activation rails.
-- Redis-backed worker heartbeat and ownership registry.
-- PostgreSQL + Redis auth-state persistence.
-- Activation handling over NATS instead of terminal-only onboarding.
+### Session Lifecycle
 
-What is **not** present in this repository today:
-- A persisted session catalog or desired-state store.
-- A reconciliation loop that decides which sessions should be running.
-- A scheduler or placement engine that chooses the best worker for a session.
-- A read/query surface for external systems.
-- Media download/storage pipeline for agent consumption.
-- Docker/Helm/Kubernetes deployment assets.
+```mermaid
+stateDiagram-v2
+    [*] --> New
+    New --> AwaitingQrCode
+    New --> AwaitingPairingCode
+    AwaitingQrCode --> CompletedActivation
+    AwaitingPairingCode --> CompletedActivation
+    AwaitingQrCode --> ActivationFailed
+    AwaitingPairingCode --> ActivationFailed
+    CompletedActivation --> Starting
+    Starting --> Connected
+    Connected --> Reconnecting
+    Reconnecting --> Connected
+    Connected --> Stopping
+    Reconnecting --> Stopping
+    Stopping --> Stopped
+    Connected --> LoggedOut
+    Reconnecting --> LoggedOut
+    Connected --> Failed
+    Reconnecting --> Failed
+```
 
-This means the project is already a solid **runtime microservice**, but not yet a full **self-managing gateway platform**.
+## Runtime Components
 
-## How Self-Sufficient Can This Become?
+### `SessionWorkerHost`
 
-A separate control-plane product is **not mandatory**.
+The worker host is the runtime orchestrator inside one pod.
 
-There are three valid operating modes:
+Responsibilities:
 
-1. **Standalone worker**
-   - Best for local development or very small deployments.
-   - An external service still tells the worker which session to start or stop.
+- subscribes to worker commands from NATS
+- acquires and extends session ownership leases in Redis
+- starts and stops `BaileysProvider` instances
+- publishes inbound, delivery, activation and status events
+- mirrors runtime transitions into the durable `Session` catalog
 
-2. **Self-managed gateway**
-   - Recommended for the first production version.
-   - This same repository gains an internal controller/reconciler module.
-   - The controller owns session desired state, placement and retry logic, while the existing worker host continues to own WhatsApp runtime execution.
+### `BaileysProvider`
 
-3. **Split control plane + worker plane**
-   - Better for larger fleets and stricter operational separation.
-   - Useful only when the extra deployment and coordination complexity is worth it.
+One provider instance represents one live WhatsApp session.
 
-For this codebase and target use case, the recommended direction is **self-managed gateway first**, not a separate control-plane service by default.
+Responsibilities:
 
-## What Still Needs To Be Built For External Infrastructure Use
+- owns the Baileys socket
+- handles connection lifecycle
+- normalizes inbound WhatsApp messages into gateway domain entities
+- performs outbound sends
+- runs anti-ban behavior inside the runtime
+- persists and clears auth-state through the auth store
 
-If the goal is to deploy this as a microservice that other microservices and agents can rely on, the next missing pieces are:
+### `EmbeddedControlPlane`
 
-1. **Session catalog**
-   - Source of truth for `provider + workspaceId + sessionId`.
-   - Must persist desired state, actual state, assigned worker, activation state and last operational error.
+This is the leader-only reconciler running inside the same codebase.
 
-2. **Controller / reconciler**
-   - Periodically compares desired state vs. observed runtime state.
-   - Starts, stops, retries and repairs sessions automatically.
+Responsibilities:
 
-3. **Placement logic**
-   - Uses worker heartbeat/capacity data already emitted by the runtime.
-   - First-fit or least-loaded is enough for the first implementation.
+- elect a leader through Redis
+- read durable `Session` records from PostgreSQL
+- read healthy worker capacity from Redis
+- inspect live ownership through Redis session assignment
+- publish `start_session` and `stop_session` commands to workers via NATS
 
-4. **Operational read model**
-   - Needed by external services that must query session state instead of reconstructing everything from events.
+This is what allows session recovery after rollout or pod failure without a second control-plane service.
 
-5. **DLQ / replay / poison-message handling**
-   - `jetstream` durability exists, but full operator-grade recovery flows still need to be added.
+## Distributed Execution Model
 
-6. **Media pipeline**
-   - External agent consumers will eventually need downloadable image/audio/document content, not only message metadata.
+### Session Ownership
 
-7. **Packaging and observability**
-   - Dockerfile, Kubernetes/Helm assets, metrics, tracing and formal readiness/liveness strategy are still missing.
+Only one worker may own a live WhatsApp session at a time.
 
-8. **Authorization boundary**
-   - Multi-tenant identity already exists in the runtime model, but external command authorization still needs to be enforced by the surrounding gateway layer.
+That is enforced with Redis-backed leases:
 
-## Recommended Next Direction
+- acquire lock before starting a session
+- extend lock while the session is healthy
+- release lock on stop or failure
 
-The recommended near-term architecture is:
+If a pod dies, the lock expires and the control plane can reassign the session.
 
-- Keep this repository as the **authoritative WhatsApp runtime**.
-- Add a **controller module inside this same project** instead of creating a second service immediately.
-- Keep **NATS as the main command/event boundary**.
-- Add a **query/read model** for the rest of the infrastructure.
-- Delay HTTP/gRPC/MCP until there is a concrete consumer that needs them.
+### Reconciliation Loop
 
-For implementation guidance aimed at another coding agent or a future session, see [INFRA_INTEGRATION_GUIDE.md](./INFRA_INTEGRATION_GUIDE.md).
+```mermaid
+sequenceDiagram
+    participant Leader as EmbeddedControlPlane Leader
+    participant PG as PostgreSQL
+    participant Redis as Redis
+    participant NATS as NATS
+    participant Worker as SessionWorkerHost
+
+    Leader->>PG: Load Sessions for provider
+    Leader->>Redis: Read healthy workers
+    Leader->>Redis: Read current session owner
+    alt Session should be active and has no live owner
+        Leader->>NATS: publish start_session
+        NATS->>Worker: worker command
+        Worker->>Redis: acquire session lock
+        Worker->>PG: mirror runtime state
+    else Session should be stopped and still has live owner
+        Leader->>NATS: publish stop_session
+        NATS->>Worker: worker command
+    end
+```
+
+## Integration Surfaces
+
+### Public REST API
+
+These routes are intended for infrastructure and other services:
+
+- `GET /healthz`
+- `GET /readyz`
+- `POST /api/v1/workspaces/:workspaceId/activations`
+- `GET /api/v1/workspaces/:workspaceId/sessions`
+- `GET /api/v1/workspaces/:workspaceId/sessions/:sessionId`
+- `PATCH /api/v1/workspaces/:workspaceId/sessions/:sessionId`
+- `DELETE /api/v1/workspaces/:workspaceId/sessions/:sessionId`
+
+Important semantics:
+
+- session routes operate on the **durable session catalog**
+- they are no longer limited to the local pod view
+- `DELETE` means `desiredState=stopped`
+- `PATCH` is the correct way to drive `desiredState`
+
+### Internal REST API
+
+These routes are diagnostic and local to one pod:
+
+- `GET /internal/v1/workspaces/:workspaceId/hosted-sessions`
+- `GET /internal/v1/workspaces/:workspaceId/hosted-sessions/:sessionId`
+
+These return the in-memory hosted runtime view from the current worker only.
+
+### NATS
+
+The gateway remains NATS-first for asynchronous integration.
+
+Logical subjects:
+
+- worker control
+- incoming messages
+- outgoing commands
+- delivery results
+- session status
+- activation lifecycle
+
+Subject templates are environment-driven and rendered from:
+
+- `NATS_SUBJECT_CONTROL_TEMPLATE`
+- `NATS_SUBJECT_INBOUND_TEMPLATE`
+- `NATS_SUBJECT_OUTBOUND_TEMPLATE`
+- `NATS_SUBJECT_DELIVERY_TEMPLATE`
+- `NATS_SUBJECT_STATUS_TEMPLATE`
+- `NATS_SUBJECT_ACTIVATION_TEMPLATE`
+
+The default templates produce subjects such as:
+
+- `gateway.v1.channel.whatsapp-web.worker.{workerId}.control`
+- `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.incoming`
+- `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.delivery`
+
+When `NATS_MODE=jetstream`, worker control and outbound processing use durable consumers and dedupe-aware execution.
+
+## Activation Model
+
+Activation is now **synchronous to request** and **asynchronous to observe**.
+
+That means:
+
+- the initial QR code or pairing code is requested through REST
+- the response already returns the first QR code or pairing code
+- subsequent updates still fan out through activation events on NATS
+
+### Activation Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API as REST API
+    participant Service as ActivationService
+    participant Host as SessionWorkerHost
+    participant Provider as BaileysProvider
+    participant Broker as NATS
+
+    Client->>API: POST /activations
+    API->>Service: request activation
+    Service->>Host: ensure session started
+    Host->>Provider: start or reuse runtime
+    Service->>Provider: request QR or pairing code
+    Provider-->>Service: first challenge
+    Service-->>API: Activation result
+    Provider->>Broker: activation updates, completed, failed, expired
+```
+
+## Persistence
+
+### PostgreSQL
+
+PostgreSQL stores:
+
+- `sessions`
+  - durable operational catalog
+- `authorization_keys`
+  - technical auth-state storage
+
+`authorization_keys` uses RLS by `workspace_id`.
+
+The `sessions` table is intentionally the operational source of truth for the embedded control plane.
+
+### Redis
+
+Redis stores:
+
+- session locks
+- session-to-worker assignment registry
+- worker heartbeat and liveness
+- auth-state cache
+- anti-ban warm-up state
+- command dedupe markers
+- control-plane leader key
+
+## Anti-Ban Strategy
+
+The anti-ban logic remains inside the session runtime.
+
+It includes:
+
+- pacing and jitter
+- presence simulation
+- throughput throttling
+- warm-up policy
+- risk monitoring
+- duplicate content variation
+
+This is an intentional design decision. The send path should not be split into an external wrapper plus an internal runtime, because that would hide real operational state from the provider that actually owns the WhatsApp socket.
+
+See [ANTIBAN.md](./ANTIBAN.md) for more detail.
+
+## Current Operating Modes
+
+The current codebase supports these effective modes:
+
+1. **Single pod**
+   - worker, API and control plane all in one process
+
+2. **Multi pod**
+   - all pods run the same binary
+   - one pod becomes control-plane leader
+   - all pods may host sessions
+
+The recommended production mode today is **multi pod with embedded control plane enabled**.
+
+## Known Boundaries
+
+What is already strong:
+
+- durable session catalog
+- distributed single-owner runtime
+- embedded recovery and reassignment
+- synchronous activation API
+- global session control API
+- internal local diagnostics API
+
+What still remains outside the current scope:
+
+- full authorization layer for external callers
+- media download and durable media handles
+- DLQ and replay tooling for operator workflows
+- richer read models for analytics and audit
+- ownership-aware synchronous routing for future live session actions beyond activation and desired-state changes
+
+## Repository Entrypoints
+
+- `src/index.ts`
+  - production entrypoint
+  - starts HTTP API, worker host and embedded control plane
+
+- `src/dev.ts`
+  - development entrypoint
+  - starts the same runtime shape with one explicit local dev session
+
+## Environment
+
+See [.env.example](./.env.example).
+
+The most important variables are:
+
+- `CHANNEL_PROVIDER_ID`
+- `POSTGRES_URL`
+- `REDIS_URL`
+- `NATS_URL`
+- `NATS_MODE`
+- `HTTP_HOST`
+- `HTTP_PORT`
+- `MAX_CONCURRENT_SESSIONS`
+- `CONTROL_PLANE_ENABLED`
+- `CONTROL_PLANE_RECONCILE_INTERVAL_MS`
+- `CONTROL_PLANE_LEADER_TTL_MS`
+
+## Integration Guide
+
+For deployment and integration guidance aimed at another service, another coding session, or another agent, see [INTEGRATION_GUIDE.md](./INTEGRATION_GUIDE.md).

@@ -1,5 +1,6 @@
 import { SessionReference } from '../entities/operational/SessionReference.js';
 import { Session } from '../entities/session/Session.js';
+import { SessionDesiredState } from '../entities/session/SessionDesiredState.js';
 import { SessionRepository } from '../repositories/session/SessionRepository.js';
 
 /**
@@ -15,6 +16,15 @@ export class SessionLifecycleService {
     occurredAt: string,
   ): Promise<Session> {
     return this.findOrCreateSession(reference, occurredAt);
+  }
+
+  public async setDesiredState(
+    reference: SessionReference,
+    desiredState: SessionDesiredState,
+    occurredAt: string,
+  ): Promise<Session> {
+    return this.persistSessionTransition(reference, occurredAt, session =>
+      session.withDesiredState(desiredState, occurredAt));
   }
 
   public async beginQrCodeActivation(
@@ -147,6 +157,14 @@ export class SessionLifecycleService {
   ): Promise<Session> {
     return this.persistSessionTransition(reference, occurredAt, session =>
       session.clearPersistedCredentials(occurredAt));
+  }
+
+  public async clearWorkerAssignment(
+    reference: SessionReference,
+    occurredAt: string,
+  ): Promise<Session> {
+    return this.persistSessionTransition(reference, occurredAt, session =>
+      session.clearWorker(occurredAt));
   }
 
   private async persistSessionTransition(

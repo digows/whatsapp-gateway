@@ -34,6 +34,13 @@ export class RedisKeyBuilder {
     });
   }
 
+  public static getControlPlaneLeaderKey(providerId: string): string {
+    return renderConfigTemplate(env.REDIS_KEY_CONTROL_PLANE_LEADER_TEMPLATE, {
+      prefix: env.REDIS_KEY_PREFIX,
+      provider: providerId,
+    });
+  }
+
   public static getAuthenticationRecordKey(
     session: SessionReference,
     key: AuthenticationStateKey,

@@ -1,17 +1,23 @@
 async function bootstrapDev(): Promise<void> {
   const [
     { env },
+    { EmbeddedControlPlane },
     { SessionWorkerHost },
     { SessionReference },
+    { WorkerIdentity },
     { SessionLifecycleService },
     { installLibraryLogFilters },
+    { NatsChannelTransport },
     { PgSessionRepository },
   ] = await Promise.all([
     import('./application/config/env.js'),
-    import('./application/services/SessionWorkerHost.js'),
+    import('./application/EmbeddedControlPlane.js'),
+    import('./application/SessionWorkerHost.js'),
     import('./domain/entities/operational/SessionReference.js'),
+    import('./domain/entities/operational/WorkerIdentity.js'),
     import('./domain/services/SessionLifecycleService.js'),
     import('./infrastructure/baileys/installLibraryLogFilters.js'),
+    import('./infrastructure/nats/NatsChannelTransport.js'),
     import('./infrastructure/pg/PgSessionRepository.js'),
   ]);
 
@@ -19,8 +25,17 @@ async function bootstrapDev(): Promise<void> {
   installLibraryLogFilters();
 
   const sessionLifecycleService = new SessionLifecycleService(new PgSessionRepository());
+  const workerIdentity = WorkerIdentity.current();
+  const transport = new NatsChannelTransport(env.CHANNEL_PROVIDER_ID);
   const host = new SessionWorkerHost({
     sessionLifecycleService,
+    transport,
+    workerIdentity,
+  });
+  const embeddedControlPlane = new EmbeddedControlPlane({
+    sessionLifecycleService,
+    transport,
+    workerIdentity,
   });
 
   const shutdown = async (signal: string) => {
@@ -31,6 +46,9 @@ async function bootstrapDev(): Promise<void> {
     }, 3000);
     forceExitTimer.unref();
 
+    await embeddedControlPlane.stop().catch(error => {
+      console.error('[DEV] Error stopping embedded control plane:', error);
+    });
     await host.stop().catch(error => {
       console.error('[DEV] Error during shutdown:', error);
     });
@@ -47,6 +65,7 @@ async function bootstrapDev(): Promise<void> {
 
   try {
     await host.start();
+    await embeddedControlPlane.start();
 
     const devSession = new SessionReference(
       env.CHANNEL_PROVIDER_ID,
@@ -56,6 +75,7 @@ async function bootstrapDev(): Promise<void> {
     await host.startSession(devSession);
   } catch (error) {
     console.error('Failed to start WhatsApp worker host in dev mode:', error);
+    await embeddedControlPlane.stop().catch(() => {});
     await host.stop().catch(() => {});
     process.exit(1);
   }

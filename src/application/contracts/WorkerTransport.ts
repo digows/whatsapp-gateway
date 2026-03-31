@@ -13,6 +13,7 @@ import { WorkerCommand } from '../../domain/entities/operational/WorkerCommand.j
 export interface WorkerTransport {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
+  publishWorkerCommand(command: WorkerCommand, workerId: string): Promise<void>;
   subscribeWorkerCommands(
     workerId: string,
     handler: (command: WorkerCommand) => Promise<void>,

@@ -9,6 +9,11 @@ export class InMemorySessionRepository implements SessionRepository {
     return this.sessions.get(reference.toKey());
   }
 
+  public async listByProvider(providerId: string): Promise<readonly Session[]> {
+    return Array.from(this.sessions.values())
+      .filter(session => session.reference.provider === providerId);
+  }
+
   public async listByWorkspace(workspaceId: number): Promise<readonly Session[]> {
     return Array.from(this.sessions.values())
       .filter(session => session.reference.workspaceId === workspaceId);

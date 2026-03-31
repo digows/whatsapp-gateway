@@ -55,7 +55,7 @@ export class PgConnection {
       console.log(`[DB] Ensuring schema "${env.DB_SCHEMA}" exists...`);
       await client.query(`CREATE SCHEMA IF NOT EXISTS "${env.DB_SCHEMA}"`);
 
-      console.log('[DB] Configuring table "sessions" with RLS...');
+      console.log('[DB] Configuring table "sessions"...');
       await client.query(`
         CREATE TABLE IF NOT EXISTS "${env.DB_SCHEMA}".sessions (
           provider TEXT NOT NULL,
@@ -97,23 +97,12 @@ export class PgConnection {
 
       console.log('[DB] Enabling Row Level Security (RLS)...');
       await client.query(
-        `ALTER TABLE "${env.DB_SCHEMA}".sessions ENABLE ROW LEVEL SECURITY;`,
-      );
-      await client.query(
         `ALTER TABLE "${env.DB_SCHEMA}".authorization_keys ENABLE ROW LEVEL SECURITY;`,
       );
 
       await client.query(
-        `DROP POLICY IF EXISTS workspace_isolation_policy ON "${env.DB_SCHEMA}".sessions;`,
-      );
-      await client.query(
         `DROP POLICY IF EXISTS workspace_isolation_policy ON "${env.DB_SCHEMA}".authorization_keys;`,
       );
-
-      await client.query(`
-        CREATE POLICY workspace_isolation_policy ON "${env.DB_SCHEMA}".sessions
-        USING (workspace_id = current_setting('app.current_workspace_id')::bigint);
-      `);
 
       await client.query(`
         CREATE POLICY workspace_isolation_policy ON "${env.DB_SCHEMA}".authorization_keys

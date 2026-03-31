@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { SessionWorkerHost } from '../services/SessionWorkerHost.js';
+import { SessionWorkerHost } from '../SessionWorkerHost.js';
 import { WorkerHealthSnapshot } from '../../domain/entities/operational/WorkerHealthSnapshot.js';
 
 type HealthHostAccess = Pick<

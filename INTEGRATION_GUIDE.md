@@ -1,239 +1,378 @@
-# Infrastructure Integration Guide
+# Integration Guide
 
-This document is intended for another coding agent, another development session, or a senior engineer continuing the integration work around this repository.
+This document explains how another service, another coding agent, or another engineering session should integrate with this WhatsApp gateway.
 
-It explains how to plug this WhatsApp gateway worker into a broader infrastructure without rewriting the runtime or reintroducing the legacy Jarvix control-plane assumptions.
+It assumes the current architecture already in this repository:
 
-## Verified Current State
+- single binary
+- REST API
+- NATS integration surface
+- durable `Session` catalog in PostgreSQL
+- embedded control plane with Redis leader election
 
-The repository already contains:
-- A WhatsApp-specific Baileys runtime.
-- A multi-session worker host.
-- Redis-backed single-owner session leases.
-- Redis-backed worker heartbeat/registry.
-- NATS-based command/event transport.
-- PostgreSQL + Redis auth-state persistence.
-- A synchronous REST API for activation.
-- A local-worker REST API for health and session inspection.
-- Docker/Kubernetes packaging.
+## Integration Rule
 
-The repository does **not** currently contain:
-- A session catalog.
-- Desired-state persistence.
-- A controller/reconciler.
-- Placement or rebalancing logic.
-- A global query/read surface.
-- Media download/storage abstraction.
-- Owner-aware synchronous routing across multiple worker pods.
+Treat this project as a **self-managed gateway microservice**, not as a library and not as a thin worker.
 
-## Architectural Rule
+External systems should:
 
-Do **not** turn this worker into a generic “everything service” in one step.
+- call the public REST API for synchronous operational requests
+- consume NATS events for asynchronous lifecycle and messaging fanout
+- avoid depending on local in-memory worker state
 
-Keep the following split:
-- The existing worker/runtime remains responsible for WhatsApp protocol execution.
-- New integration work should add orchestration, state and read models **around** the worker.
+Do not integrate directly with Baileys from outside this service.
 
-The recommended first production topology is **self-managed gateway**, not a separate control-plane product:
-- same repository,
-- same domain language,
-- same NATS boundary,
-- new controller module inside the project.
+## What This Service Owns
 
-## Fixed Assumptions
+This gateway owns:
 
-These should be preserved unless the product direction changes explicitly:
+- WhatsApp session runtime
+- durable session lifecycle
+- session recovery after rollout or pod failure
+- worker placement and reassignment
+- activation flow
+- inbound and delivery event fanout
 
-1. The runtime remains WhatsApp/Baileys-specific.
-2. NATS remains the primary boundary in v1.
-3. This service is multi-session and multi-tenant.
-4. Session identity remains `provider + workspaceId + sessionId`.
-5. Redis continues to own leases, liveness and short-lived coordination.
-6. PostgreSQL continues to own durable session/auth records.
-7. Synchronous operational calls may use REST, but lifecycle fanout remains event-driven.
-8. Another layer, not the Baileys runtime itself, should own authorization and global infrastructure-facing queries.
+External infrastructure should not try to replicate those responsibilities.
 
-## Verified HTTP Surface
+## What External Infrastructure Should Own
 
-The worker now exposes:
+This gateway does **not** currently own:
+
+- authentication or authorization of API callers
+- business policy for who may operate which workspace
+- durable media storage pipeline for downstream file access
+- downstream business workflows triggered by WhatsApp events
+- public API gateway concerns such as rate limits, auth tokens and audit perimeter
+
+Those concerns should live in the surrounding infrastructure.
+
+## Recommended Topology
+
+### Kubernetes
+
+Recommended topology today:
+
+- one `Deployment`
+- multiple replicas
+- one internal `Service` for REST
+- all pods run the same binary
+- one pod becomes control-plane leader automatically
+
+Do not split controller and worker into different codebases.
+
+If separation is needed later, do it by deployment mode from the same repository, not by cloning the runtime into another service.
+
+## Public REST Surface
+
+Use these routes for real integration:
+
 - `GET /healthz`
 - `GET /readyz`
 - `POST /api/v1/workspaces/:workspaceId/activations`
 - `GET /api/v1/workspaces/:workspaceId/sessions`
 - `GET /api/v1/workspaces/:workspaceId/sessions/:sessionId`
+- `PATCH /api/v1/workspaces/:workspaceId/sessions/:sessionId`
 - `DELETE /api/v1/workspaces/:workspaceId/sessions/:sessionId`
 
-Important limitation:
-- session routes expose the **local worker view only**
-- they do not resolve ownership across pods
-- they do not read from a global catalog
+### Semantics
 
-This is enough for direct pod/service operation and Kubernetes health checks.
-It is not yet a replacement for a real controller/read-model layer.
+#### Activation
 
-## Recommended Target Topology
+`POST /api/v1/workspaces/:workspaceId/activations`
 
-Implement two roles inside this same codebase:
+This creates or resumes the gateway-side session activation flow and returns the first challenge synchronously.
 
-1. **Worker role**
-   - What already exists today.
-   - Hosts Baileys sessions and executes commands.
+Use cases:
 
-2. **Controller role**
-   - New module.
-   - Owns session desired state.
-   - Reconciles actual runtime state.
-   - Performs worker placement.
-   - Retries activation and repairs orphaned sessions.
+- get a QR code
+- get a pairing code
+- create the first durable `Session`
 
-Deployment options:
-- One deployment running both roles.
-- Separate deployments from the same codebase, for example `ROLE=worker`, `ROLE=controller`, `ROLE=all`.
+The response includes:
 
-Do not create a second repository for the controller unless the operational need is already proven.
+- session reference
+- activation identifiers
+- current activation status
+- first QR code text and PNG base64, or first pairing code
+- activation event subject for asynchronous follow-up
 
-## Minimum New Capabilities To Add
+#### Session Catalog
 
-### 1. Session Catalog
+`GET /api/v1/workspaces/:workspaceId/sessions`
 
-Add a durable session catalog table in PostgreSQL.
+Returns the durable session catalog for the workspace.
 
-Recommended minimum fields:
-- `provider`
-- `workspace_id`
-- `session_id`
-- `desired_state`
-- `actual_state`
-- `assigned_worker_id`
-- `activation_state`
-- `last_error`
-- `last_connected_at`
-- `updated_at`
+This is the correct way to query sessions globally across pods.
 
-This is the missing source of truth.
+`GET /api/v1/workspaces/:workspaceId/sessions/:sessionId`
 
-Without it, the current runtime can execute sessions, but it cannot decide which sessions should exist.
+Returns one durable `Session`.
 
-### 2. Reconciler
+Important:
 
-Add a periodic controller loop that:
-- loads sessions from the catalog,
-- reads worker heartbeat data from Redis,
-- reads current ownership from Redis,
-- reads recent status from the read model,
-- issues `start_session`, `stop_session` or activation commands when reality diverges from desired state.
+- this does not require hitting the pod that currently hosts the live session
+- the response is the durable mirror, not the ephemeral local runtime snapshot
 
-This reconciler is the minimal “control plane function”.
+#### Desired State Control
 
-### 3. Placement
+`PATCH /api/v1/workspaces/:workspaceId/sessions/:sessionId`
 
-Start simple.
+Use this to change `desiredState`.
 
-Recommended first algorithm:
-- choose healthy workers only,
-- filter workers that still have capacity,
-- place on the least-loaded worker,
-- avoid moving an already healthy session unless there is a hard reason.
+Supported values today:
 
-Do not build a complex scheduler first.
+- `active`
+- `paused`
+- `stopped`
 
-### 4. Read Model
+This is the correct control-plane contract for external systems.
 
-External systems should not be forced to replay all events to answer simple operational questions.
+Do not publish ad hoc worker commands from outside unless you are intentionally operating at the infrastructure boundary.
 
-Add a read model for:
-- session state,
-- assigned worker,
-- latest activation state,
-- last delivery result,
-- last inbound timestamp,
-- worker capacity snapshot.
+`DELETE /api/v1/workspaces/:workspaceId/sessions/:sessionId`
 
-This can be PostgreSQL, Redis, or both.
+This is a convenience operation for:
 
-### 5. Broker Recovery Features
+- `desiredState = stopped`
 
-The transport already supports `ephemeral` and `jetstream`.
+If the session is local to the current pod, it is stopped immediately.
+If not, the durable desired state still changes and the embedded control plane converges the rest.
 
-Still missing:
-- DLQ,
-- replay tooling,
-- poison-message handling,
-- integration tests against real NATS/JetStream/Redis,
-- operator-visible retry state.
+## Internal REST Surface
 
-This is required before declaring the gateway “production-grade” for other services.
+These routes are for debugging one pod:
 
-### 6. Media Pipeline
+- `GET /internal/v1/workspaces/:workspaceId/hosted-sessions`
+- `GET /internal/v1/workspaces/:workspaceId/hosted-sessions/:sessionId`
 
-There is currently no media download/storage layer in this repository.
+Use them only for:
 
-If agents or downstream services need image/audio/document bytes:
-- add media retrieval in the Baileys layer,
-- upload to durable object storage,
-- publish or persist a safe media handle instead of only message metadata.
+- debugging
+- diagnostics
+- checking what a specific pod currently hosts
 
-Do not couple long-lived media storage to Redis.
+Do not build business integration on top of these routes.
 
-## REST And NATS Integration Guidance
+## NATS Integration
 
-Use both boundaries intentionally:
-- REST for synchronous operational requests that need an immediate result.
-- NATS for lifecycle fanout and asynchronous integration.
+NATS remains the asynchronous contract for:
 
-Recommended usage by surrounding infrastructure:
-- call REST to request activation and inspect or stop locally hosted sessions,
-- consume NATS activation, status, inbound and delivery events,
-- use a read model for cross-worker or historical queries.
+- inbound messages
+- outbound commands
+- delivery results
+- session status updates
+- activation lifecycle updates
+- worker commands
 
-Do not make external consumers depend on internal runtime classes directly.
+### Recommended External Usage
 
-Instead, publish a shared contract package or schemas based on the gateway domain entities already defined in this repository.
+Use REST when:
 
-## What Not To Rewrite
+- you need an immediate operational result
+- you need to request activation
+- you need to change session desired state
+- you need to read the durable session catalog
 
-Avoid these mistakes:
-- do not replace the worker host lifecycle with a brand new runtime abstraction,
-- do not move anti-ban logic out of the session runtime unless there is a very strong reason,
-- do not reintroduce legacy Jarvix contracts,
-- do not add fake generic abstractions over Baileys,
-- do not make the worker responsible for business authorization decisions,
-- do not hide session ownership logic outside Redis without a replacement plan.
+Use NATS when:
 
-## Highest-Value Missing Piece
+- you need inbound message fanout
+- you need delivery updates
+- you need activation follow-up after the first challenge
+- you need session lifecycle events in near real time
 
-The next real architecture gap is not another endpoint.
+### Subject Strategy
 
-It is ownership-aware synchronous routing and a session catalog.
+Subjects are environment-driven templates.
 
-Without that:
-- activation creation works because the session can be created on the pod that received the request,
-- local session queries work,
-- but any future synchronous operation against an already hosted session can hit the wrong pod.
+The defaults are:
 
-That is why the next major milestone should add:
-- durable session catalog,
-- controller/reconciler,
-- worker placement,
-- owner-aware routing or query indirection.
+- worker control:
+  - `gateway.v1.channel.{provider}.worker.{workerId}.control`
+- incoming:
+  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.incoming`
+- outgoing:
+  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.outgoing`
+- delivery:
+  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.delivery`
+- status:
+  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.status`
+- activation:
+  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.activation`
 
-## Suggested Implementation Order
+If another system depends on these subjects, freeze the templates in deployment config and do not mutate them casually between environments.
 
-1. Add the session catalog and its repository.
-2. Add controller role bootstrap and leader election.
-3. Add reconciler loop with simple placement.
-4. Add read model updates from status/delivery/activation events.
-5. Add owner-aware synchronous routing for existing sessions.
-6. Add DLQ and replay support.
-7. Add media pipeline if downstream consumers require content bytes.
-8. Add metrics and richer operational tooling.
+## Session Ownership Semantics
 
-## Expected Outcome
+External services should understand one crucial rule:
 
-After these additions, this repository becomes:
-- a self-managed gateway microservice,
-- deployable as one logical platform component,
-- usable through REST for synchronous operations,
-- still NATS-first,
-- still WhatsApp/Baileys-specific,
-- usable by other microservices and agents without depending on a separate legacy control plane.
+- a `Session` is durable and global
+- a live hosted runtime is local and exclusive
+
+That means:
+
+- any pod can answer the public session catalog API
+- only one pod may host a given live WhatsApp session
+- ownership is enforced through Redis locks
+- ownership can move after rollout, crash or reconcile
+
+So:
+
+- integrate against the durable session model
+- do not try to pin business behavior to one specific pod
+
+## Recovery And Rollout Behavior
+
+This service already supports automatic recovery driven by the durable session catalog.
+
+What happens during rollout:
+
+1. old pod receives `SIGTERM`
+2. local worker host stops hosted sessions and releases locks
+3. durable `Session` records still remain with `desiredState=active`
+4. embedded control-plane leader sees missing live ownership
+5. leader publishes `start_session` to a healthy worker
+6. another pod reacquires the session
+
+The integration consequence is:
+
+- callers should reason in terms of `Session` desired state, not in terms of pod affinity
+
+## Database Responsibilities
+
+### `sessions`
+
+This is the durable operational catalog.
+
+Integrate with this conceptually, but preferably through the gateway API instead of direct database reads.
+
+Contains data such as:
+
+- desired state
+- runtime state
+- activation state
+- assigned worker
+- persisted credential flag
+- operational timestamps and last error
+
+### `authorization_keys`
+
+This is technical credential storage.
+
+External systems should not treat it as a session catalog.
+
+Do not build discovery logic on top of `authorization_keys`.
+
+That would reintroduce the coupling this refactor explicitly removed.
+
+## Redis Responsibilities
+
+Redis is not the durable source of truth for sessions.
+
+It is used for:
+
+- ownership leases
+- worker liveness
+- worker capacity registry
+- auth cache
+- anti-ban warm-up state
+- control-plane leadership
+- command dedupe
+
+External systems should not persist business state there expecting durability semantics.
+
+## Recommended Integration Patterns
+
+### Pattern 1: Activation + Event Follow-Up
+
+Best for onboarding UI or admin operations.
+
+1. call `POST /activations`
+2. show the first QR code or pairing code immediately
+3. subscribe to activation events on NATS
+4. wait for `completed`, `failed` or `expired`
+
+### Pattern 2: Session Administration
+
+Best for control-plane consumers or admin APIs.
+
+1. call `GET /sessions`
+2. inspect durable `desiredState`, `runtimeState`, `activationState`
+3. call `PATCH` to set `active`, `paused` or `stopped`
+4. consume `status` and `activation` events if you need real-time feedback
+
+### Pattern 3: Outbound Messaging
+
+Best for asynchronous send paths.
+
+1. ensure the target session exists and is active through REST
+2. publish outbound command through NATS
+3. consume delivery events through NATS
+
+Do not convert outbound messaging to synchronous HTTP unless you have a concrete operational reason and owner-aware routing strategy.
+
+## Security Guidance
+
+This repository does not yet enforce a real authorization perimeter for external callers.
+
+Integrate it behind:
+
+- an internal API gateway
+- service-to-service authentication
+- workspace-scoped authorization checks outside this service
+
+At minimum, the caller layer must guarantee:
+
+- which workspaces it can operate
+- which routes it can invoke
+- who may start, stop or pause sessions
+
+## Observability Guidance
+
+The service already emits operational logs and worker heartbeat, but external infrastructure should still provide:
+
+- centralized log aggregation
+- NATS consumer monitoring
+- Redis availability monitoring
+- PostgreSQL monitoring
+- deployment alerts for restart storms or reconcile failures
+
+Recommended future additions:
+
+- Prometheus metrics
+- trace correlation across REST and NATS
+- DLQ monitoring when replay support is added
+
+## What Not To Do
+
+Do not:
+
+- read `authorization_keys` directly as a session list
+- integrate against the internal hosted-session routes as if they were global
+- depend on one pod staying owner of a session forever
+- recreate Baileys logic in another service
+- bypass the durable session catalog for lifecycle decisions
+- publish arbitrary worker commands from business code without a very explicit infrastructure reason
+
+## Current Gaps
+
+The architecture is now coherent, but there are still gaps an integrating system should know about:
+
+1. no public media download/storage pipeline yet
+2. no explicit auth perimeter yet
+3. no operator DLQ/replay workflow yet
+4. no dedicated analytics read model beyond the durable `Session` catalog
+5. no owner-aware synchronous routing for future live session actions beyond activation and desired-state control
+
+These are not blockers for basic integration. They are the next maturity steps.
+
+## Recommended Next Work For Another Agent
+
+If another agent continues from here, the highest-value integration work is:
+
+1. document request and event schemas as shared contract artifacts
+2. add explicit HTTP examples for activation and session control
+3. add auth middleware or integrate behind an existing internal gateway
+4. add metrics and operational dashboards
+5. add DLQ and replay tooling for JetStream mode
+6. add media retrieval and durable media handles if downstream consumers need file bytes

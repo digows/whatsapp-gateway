@@ -162,6 +162,19 @@ export class NatsChannelTransport implements WorkerTransport {
     );
   }
 
+  public async publishWorkerCommand(command: WorkerCommand, workerId: string): Promise<void> {
+    const subject = NatsSubjectBuilder.getWorkerControlSubject(this.providerId, workerId);
+    await this.publish(
+      subject,
+      this.workerCommandCodec.encode({
+        commandId: command.commandId,
+        action: command.action,
+        session: this.serializeSession(command.session),
+      }),
+      this.buildWorkerCommandMessageId(command, workerId),
+    );
+  }
+
   public async subscribeOutgoing(
     session: SessionReference,
     handler: OutgoingHandler,
@@ -1187,6 +1200,12 @@ export class NatsChannelTransport implements WorkerTransport {
   private buildSessionStatusMessageId(event: SessionStatusEvent): string {
     return this.sanitizeMessageId(
       `status:${event.session.toKey()}:${event.status}:${event.timestamp}`,
+    );
+  }
+
+  private buildWorkerCommandMessageId(command: WorkerCommand, workerId: string): string {
+    return this.sanitizeMessageId(
+      `worker-command:${workerId}:${command.session.toKey()}:${command.commandId}:${command.action}`,
     );
   }
 

@@ -91,6 +91,7 @@ const envSchema = z.object({
   REDIS_KEY_SESSION_WORKER_REGISTRY_TEMPLATE: z.string().default('{prefix}:{workspaceId}:registry:workers'),
   REDIS_KEY_CLUSTER_ALIVE_TEMPLATE: z.string().default('{prefix}:cluster:alive:{workerId}'),
   REDIS_KEY_CLUSTER_HEALTH_TEMPLATE: z.string().default('{prefix}:cluster:health'),
+  REDIS_KEY_CONTROL_PLANE_LEADER_TEMPLATE: z.string().default('{prefix}:{provider}:control-plane:leader'),
   REDIS_KEY_AUTH_RECORD_TEMPLATE: z.string().default('{prefix}:{workspaceId}:auth:{sessionId}:{type}:{id}'),
   REDIS_KEY_AUTH_SESSION_PATTERN_TEMPLATE: z.string().default('{prefix}:{workspaceId}:auth:{sessionId}:*'),
   REDIS_KEY_LID_MAPPING_TEMPLATE: z.string().default('{prefix}:{workspaceId}:lid-mapping:{jid}'),
@@ -133,6 +134,15 @@ const envSchema = z.object({
    */
   SESSION_LOCK_TTL_MS: z.coerce.number().default(120000),
   SESSION_LOCK_HEARTBEAT_MS: z.coerce.number().default(45000),
+
+  /**
+   * Embedded control plane settings.
+   * The same binary can host sessions and reconcile them across workers.
+   */
+  CONTROL_PLANE_ENABLED: z.preprocess((v) => v !== 'false' && v !== false, z.boolean().default(true)),
+  CONTROL_PLANE_RECONCILE_INTERVAL_MS: z.coerce.number().default(10000),
+  CONTROL_PLANE_LEADER_TTL_MS: z.coerce.number().default(15000),
+  CONTROL_PLANE_COMMAND_COOLDOWN_MS: z.coerce.number().default(15000),
 
   /**
    * Enables outbound anti-ban protections such as delay, rate limits and risk-based pausing.

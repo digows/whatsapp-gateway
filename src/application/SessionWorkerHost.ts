@@ -1,34 +1,34 @@
-import { env } from '../config/env.js';
-import { WorkerTransport } from '../contracts/WorkerTransport.js';
+import { env } from './config/env.js';
+import { WorkerTransport } from './contracts/WorkerTransport.js';
 import {
   ActivationEvent,
   ActivationEventType,
-} from '../../domain/entities/activation/ActivationEvent.js';
-import { SessionReference } from '../../domain/entities/operational/SessionReference.js';
+} from '../domain/entities/activation/ActivationEvent.js';
+import { SessionReference } from '../domain/entities/operational/SessionReference.js';
 import {
   SessionStatus,
   SessionStatusEvent,
-} from '../../domain/entities/operational/SessionStatus.js';
-import { HostedSessionSnapshot } from '../../domain/entities/operational/HostedSessionSnapshot.js';
+} from '../domain/entities/operational/SessionStatus.js';
+import { HostedSessionSnapshot } from '../domain/entities/operational/HostedSessionSnapshot.js';
 import {
   WorkerCommand,
   WorkerCommandAction,
-} from '../../domain/entities/operational/WorkerCommand.js';
-import { WorkerIdentity } from '../../domain/entities/operational/WorkerIdentity.js';
+} from '../domain/entities/operational/WorkerCommand.js';
+import { WorkerIdentity } from '../domain/entities/operational/WorkerIdentity.js';
 import {
   BaileysProvider,
   BaileysProviderCallbacks,
-} from '../../infrastructure/baileys/BaileysProvider.js';
-import { NatsChannelTransport } from '../../infrastructure/nats/NatsChannelTransport.js';
-import { PgConnection } from '../../infrastructure/pg/PgConnection.js';
-import { PgSessionRepository } from '../../infrastructure/pg/PgSessionRepository.js';
-import { RedisConnection } from '../../infrastructure/redis/RedisConnection.js';
+} from '../infrastructure/baileys/BaileysProvider.js';
+import { NatsChannelTransport } from '../infrastructure/nats/NatsChannelTransport.js';
+import { PgConnection } from '../infrastructure/pg/PgConnection.js';
+import { PgSessionRepository } from '../infrastructure/pg/PgSessionRepository.js';
+import { RedisConnection } from '../infrastructure/redis/RedisConnection.js';
 import {
   RedisSessionCoordinator,
   SessionLease,
-} from '../../infrastructure/redis/RedisSessionCoordinator.js';
-import { RedisWorkerHealthReporter } from '../../infrastructure/redis/RedisWorkerHealthReporter.js';
-import { SessionLifecycleService } from '../../domain/services/SessionLifecycleService.js';
+} from '../infrastructure/redis/RedisSessionCoordinator.js';
+import { RedisWorkerHealthReporter } from '../infrastructure/redis/RedisWorkerHealthReporter.js';
+import { SessionLifecycleService } from '../domain/services/SessionLifecycleService.js';
 
 interface HostedSession {
   session: SessionReference;
