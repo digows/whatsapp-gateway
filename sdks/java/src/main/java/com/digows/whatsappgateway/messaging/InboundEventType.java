@@ -3,11 +3,15 @@ package com.digows.whatsappgateway.messaging;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
+/**
+ * Supported top-level inbound lifecycle categories emitted by the gateway.
+ * The lifecycle intentionally stays compact: create, update and delete.
+ */
 public enum InboundEventType
 {
-  MESSAGE_RECEIVED("message.received"),
+  MESSAGE_CREATED("message.created"),
   MESSAGE_UPDATED("message.updated"),
-  MESSAGE_REACTION("message.reaction");
+  MESSAGE_DELETED("message.deleted");
 
   private final String wireValue;
 

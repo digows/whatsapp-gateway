@@ -170,6 +170,22 @@ It gives you typed models for:
 - `DeliveryResult`
 - public REST request payloads
 
+Inbound messaging lifecycle is modeled as:
+
+- `message.created`
+- `message.updated`
+- `message.deleted`
+
+Reaction changes are not a separate top-level event. They are emitted as `message.updated`
+with `updateKinds` containing `reaction`, plus `reactionText` and `reactionRemoved`.
+
+For `message.updated` and `message.deleted`:
+
+- `targetMessage` identifies the logical WhatsApp message affected by the lifecycle change
+- `message` is optional and only present when the gateway can normalize a payload for the update
+- when `message` is present in an update, `message.timestamp` comes from the WhatsApp/Baileys
+  `messageTimestamp` carried by that update payload, not from the gateway processing clock
+
 ### JitPack
 
 For public JVM consumers, prefer JitPack because it avoids Maven credential setup.

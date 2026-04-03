@@ -93,6 +93,40 @@ test('BaileysMessageNormalizer extracts mentions and quoted message context', as
   assert.equal(normalized?.context?.quotedMessage?.content.text, 'original text');
 });
 
+test('BaileysMessageNormalizer extracts the edit target from edited message envelopes', async () => {
+  const normalized = await BaileysMessageNormalizer.normalize(
+    {
+      key: {
+        remoteJid: '5511999999999@s.whatsapp.net',
+        id: 'edit-envelope-1',
+      },
+      messageTimestamp: 1_710_000_150,
+      message: {
+        editedMessage: {
+          message: {
+            protocolMessage: {
+              type: 14,
+              key: {
+                id: 'target-edit-1',
+                remoteJid: '5511999999999@s.whatsapp.net',
+              },
+              editedMessage: {
+                conversation: 'edited text',
+              },
+            },
+          },
+        },
+      },
+    },
+    async () => null,
+  );
+
+  assert.ok(normalized);
+  assert.ok(normalized?.content instanceof TextMessageContent);
+  assert.equal(normalized?.content.text, 'edited text');
+  assert.equal(normalized?.context?.editTarget?.messageId, 'target-edit-1');
+});
+
 test('BaileysMessageNormalizer normalizes location and reaction payloads', async () => {
   const location = await BaileysMessageNormalizer.normalize(
     {
@@ -141,6 +175,31 @@ test('BaileysMessageNormalizer normalizes location and reaction payloads', async
   assert.ok(reaction?.content instanceof ReactionMessageContent);
   assert.equal(reaction?.content.targetMessage.messageId, 'target-1');
   assert.equal(reaction?.content.reactionText, '🔥');
+
+  const removedReaction = await BaileysMessageNormalizer.normalize(
+    {
+      key: {
+        remoteJid: '5511999999999@s.whatsapp.net',
+        id: 'reaction-removed-1',
+      },
+      messageTimestamp: 1_710_000_202,
+      message: {
+        reactionMessage: {
+          key: {
+            id: 'target-1',
+            remoteJid: '5511999999999@s.whatsapp.net',
+          },
+          text: '',
+        },
+      },
+    },
+    async () => null,
+  );
+
+  assert.ok(removedReaction?.content instanceof ReactionMessageContent);
+  assert.equal(removedReaction?.content.targetMessage.messageId, 'target-1');
+  assert.equal(removedReaction?.content.removed, true);
+  assert.equal(removedReaction?.content.reactionText, undefined);
 });
 
 test('BaileysMessageNormalizer normalizes supported protocol and pin payloads', async () => {

@@ -3,6 +3,11 @@ package com.digows.whatsappgateway.messaging;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
+/**
+ * Supported normalized message content kinds exposed by the gateway.
+ * Consumers should expect new values over time as the gateway gains support for more
+ * WhatsApp features.
+ */
 public enum MessageContentType
 {
   TEXT("text"),

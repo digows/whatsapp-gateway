@@ -13,9 +13,10 @@ import { ActivationMode } from '../../domain/entities/activation/ActivationMode.
 import { DeliveryResult, DeliveryStatus } from '../../domain/entities/messaging/DeliveryResult.js';
 import {
   InboundEvent,
-  MessageReactionEvent,
+  MessageCreatedEvent,
+  MessageDeletedEvent,
+  MessageUpdateKind,
   MessageUpdatedEvent,
-  ReceivedMessageEvent,
 } from '../../domain/entities/messaging/InboundEvent.js';
 import { Message } from '../../domain/entities/messaging/Message.js';
 import {
@@ -52,6 +53,7 @@ import {
   SessionStatus,
   SessionStatusEvent,
 } from '../../domain/entities/operational/SessionStatus.js';
+import { MessageReference } from '../../domain/entities/messaging/MessageReference.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import qrcode from 'qrcode-terminal';
 import { env } from '../../application/config/env.js';
@@ -560,11 +562,52 @@ export class BaileysProvider {
         normalized,
       );
 
-      if (isFromMe || upsertType !== 'notify') {
+      if (upsertType !== 'notify') {
         continue;
       }
 
-      const inboundEvent = new ReceivedMessageEvent(
+      if (normalized.content instanceof DeleteMessageContent) {
+        const inboundEvent = new MessageDeletedEvent(
+          this.session,
+          normalized.timestamp,
+          normalized.content.targetMessage,
+          normalized.chatId,
+          normalized.senderId,
+          isFromMe,
+          normalized,
+        );
+
+        await this.callbacks.onInboundEvent(inboundEvent);
+        continue;
+      }
+
+      if (normalized.context?.editTarget) {
+        const inboundEvent = new MessageUpdatedEvent(
+          this.session,
+          normalized.timestamp,
+          normalized.context.editTarget,
+          normalized.chatId,
+          normalized.senderId,
+          isFromMe,
+          [MessageUpdateKind.Content],
+          normalized,
+          undefined,
+          undefined,
+          normalized.content.type,
+          undefined,
+          undefined,
+          undefined,
+        );
+
+        await this.callbacks.onInboundEvent(inboundEvent);
+        continue;
+      }
+
+      if (normalized.content instanceof ReactionMessageContent || isFromMe) {
+        continue;
+      }
+
+      const inboundEvent = new MessageCreatedEvent(
         this.session,
         normalized.timestamp,
         normalized,
@@ -587,17 +630,39 @@ export class BaileysProvider {
       const pollUpdateCount = Array.isArray(update.pollUpdates) ? update.pollUpdates.length : 0;
       const status = update.status;
       const stubType = update.messageStubType;
+      const timestamp = new Date().toISOString();
 
       if (!hasMessage && !pollUpdateCount && status == null && stubType == null) {
         continue;
       }
 
-      const messageId = key.id;
-      if (!messageId) {
+      const fallbackTargetMessage = this.buildMessageReferenceFromKey(key);
+      if (!fallbackTargetMessage) {
         continue;
       }
 
       const { chatId, senderId, chatLabel, senderLabel } = await this.describeMessageKey(key);
+      const normalizedMessage = hasMessage
+        ? await BaileysMessageNormalizer.normalize(
+            {
+              key,
+              message: update.message,
+              messageTimestamp: update.messageTimestamp,
+            },
+            this.resolveJidToE164.bind(this),
+          )
+        : null;
+      const deletedTargetMessage = hasMessage
+        ? BaileysMessageNormalizer.extractDeleteTargetMessage(
+            update.message,
+            key.remoteJid ?? undefined,
+          )
+        : undefined;
+      const targetMessage =
+        normalizedMessage?.context?.editTarget
+        ?? deletedTargetMessage
+        ?? fallbackTargetMessage;
+      const updateKinds: MessageUpdateKind[] = [];
       const parts = [
         `chat=${chatLabel}`,
         `sender=${senderLabel}`,
@@ -609,30 +674,62 @@ export class BaileysProvider {
 
       if (stubType != null) {
         parts.push(`stubType=${stubType}`);
+        updateKinds.push(MessageUpdateKind.Stub);
       }
 
+      const contentType = hasMessage
+        ? normalizedMessage?.content.type
+          ?? BaileysMessageNormalizer.describeContentType(
+            update.message,
+            key.remoteJid ?? undefined,
+          )
+        : undefined;
       if (hasMessage) {
-        const contentType = this.describeMessageContentType(update.message);
-        parts.push(`message=${contentType}`);
+        parts.push(`message=${contentType ?? 'unknown'}`);
+        updateKinds.push(MessageUpdateKind.Content);
       }
 
       if (pollUpdateCount > 0) {
         parts.push(`pollUpdates=${pollUpdateCount}`);
+        updateKinds.push(MessageUpdateKind.Poll);
+      }
+
+      if (status != null) {
+        updateKinds.push(MessageUpdateKind.Status);
       }
 
       console.log(`\n[MSG UPDATE] ${parts.join(' ')}`);
 
+      if (deletedTargetMessage) {
+        const inboundEvent = new MessageDeletedEvent(
+          this.session,
+          timestamp,
+          deletedTargetMessage,
+          chatId,
+          senderId,
+          Boolean(key.fromMe),
+          normalizedMessage ?? undefined,
+        );
+
+        await this.callbacks.onInboundEvent(inboundEvent);
+        continue;
+      }
+
       const inboundEvent = new MessageUpdatedEvent(
         this.session,
-        new Date().toISOString(),
-        messageId,
+        timestamp,
+        targetMessage,
         chatId,
         senderId,
         Boolean(key.fromMe),
+        updateKinds,
+        normalizedMessage ?? undefined,
         typeof status === 'number' ? status : undefined,
         typeof stubType === 'number' ? stubType : undefined,
-        hasMessage ? this.describeMessageContentType(update.message) : undefined,
+        contentType,
         pollUpdateCount > 0 ? pollUpdateCount : undefined,
+        undefined,
+        undefined,
       );
 
       await this.callbacks.onInboundEvent(inboundEvent);
@@ -642,7 +739,8 @@ export class BaileysProvider {
   private async handleMessagesReaction(reactions: any[]): Promise<void> {
     for (const entry of reactions ?? []) {
       const key = entry?.key;
-      if (!key) {
+      const targetMessage = this.buildMessageReferenceFromKey(key);
+      if (!key || !targetMessage) {
         continue;
       }
 
@@ -652,15 +750,21 @@ export class BaileysProvider {
         `\n[MSG REACTION] chat=${chatLabel} sender=${senderLabel} text=${reactionText}`,
       );
 
-      const inboundEvent = new MessageReactionEvent(
+      const inboundEvent = new MessageUpdatedEvent(
         this.session,
         new Date().toISOString(),
+        targetMessage,
         chatId,
         senderId,
         Boolean(key.fromMe),
-        !entry?.reaction?.text,
-        key.id || undefined,
+        [MessageUpdateKind.Reaction],
+        undefined,
+        undefined,
+        undefined,
+        MessageContentType.Reaction,
+        undefined,
         entry?.reaction?.text || undefined,
+        !entry?.reaction?.text,
       );
 
       await this.callbacks.onInboundEvent(inboundEvent);
@@ -1247,6 +1351,18 @@ export class BaileysProvider {
 
     const contentKeys = Object.keys(content).filter(key => Boolean(content[key]));
     return contentKeys[0] ?? 'unknown';
+  }
+
+  private buildMessageReferenceFromKey(key: any): MessageReference | undefined {
+    if (!key?.id) {
+      return undefined;
+    }
+
+    return new MessageReference(
+      key.id,
+      key.remoteJid ?? undefined,
+      key.participant ?? undefined,
+    );
   }
 
   private createActiveActivation(

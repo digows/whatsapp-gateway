@@ -223,6 +223,19 @@ It mirrors the public integration contract:
 - `Message`, `MessageContent`, `InboundEvent`, `DeliveryResult`
 - public REST request models for activation and session desired-state changes
 
+Inbound message lifecycle is exposed as:
+
+- `message.created`
+- `message.updated`
+- `message.deleted`
+
+Reaction add/change/remove is modeled as `message.updated` with
+`MessageUpdateKind.Reaction`, not as a fourth event category.
+
+For update and delete lifecycle events, `targetMessage` points to the logical WhatsApp
+message being affected. When `message.updated` carries a nested `Message`, its timestamp
+comes from the WhatsApp/Baileys `messageTimestamp` on the update payload.
+
 ### Distribution
 
 There are now two supported consumption paths for the Java SDK:

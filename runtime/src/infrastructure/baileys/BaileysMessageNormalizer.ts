@@ -30,6 +30,7 @@ import {
   TextMessageContent,
   VideoMessageContent,
 } from '../../domain/entities/messaging/MessageContent.js';
+import { MessageContentType } from '../../domain/entities/messaging/MessageContentType.js';
 import {ChatType, MessageContext,} from '../../domain/entities/messaging/MessageContext.js';
 import {Message} from '../../domain/entities/messaging/Message.js';
 import {MessageReference} from '../../domain/entities/messaging/MessageReference.js';
@@ -107,6 +108,24 @@ export class BaileysMessageNormalizer {
     }
 
     return this.getInternalMessageReason(unwrapped);
+  }
+
+  public static describeContentType(
+    message: any,
+    rawChatId?: string,
+  ): MessageContentType | undefined {
+    const content = this.extractContent(message, rawChatId);
+    return content?.type;
+  }
+
+  public static extractDeleteTargetMessage(
+    message: any,
+    rawChatId?: string,
+  ): MessageReference | undefined {
+    const content = this.extractContent(message, rawChatId);
+    return content instanceof DeleteMessageContent
+      ? content.targetMessage
+      : undefined;
   }
 
   private static getChatType(jid: string): ChatType {
@@ -517,7 +536,7 @@ export class BaileysMessageNormalizer {
     );
   }
 
-  private static extractEditTarget(
+  public static extractEditTarget(
     message: any,
     rawChatId?: string,
   ): MessageReference | undefined {

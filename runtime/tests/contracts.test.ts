@@ -8,6 +8,7 @@ import {
   parsePinMessageAction,
   parsePinMessageDurationSeconds,
 } from '../src/domain/entities/messaging/MessageContent.js';
+import { MessageUpdateKind, parseMessageUpdateKind } from '../src/domain/entities/messaging/InboundEvent.js';
 import { parseMessageContentType } from '../src/domain/entities/messaging/MessageContentType.js';
 import { parseChatType } from '../src/domain/entities/messaging/MessageContext.js';
 import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
@@ -55,6 +56,9 @@ test('domain parsers reject unsupported external values', () => {
   assert.equal(parseEventCallType('video'), 'video');
   assert.equal(parsePinMessageAction('unpin_for_all'), 'unpin_for_all');
   assert.equal(parsePinMessageDurationSeconds(604800), 604800);
+  assert.equal(parseMessageUpdateKind('content'), MessageUpdateKind.Content);
+  assert.equal(parseMessageUpdateKind('poll'), MessageUpdateKind.Poll);
+  assert.equal(parseMessageUpdateKind('reaction'), MessageUpdateKind.Reaction);
 
   assert.throws(() => {
     parseWorkerCommandAction('restart_session');
@@ -83,6 +87,10 @@ test('domain parsers reject unsupported external values', () => {
   assert.throws(() => {
     parsePinMessageDurationSeconds(120);
   }, /Unsupported pin duration/);
+
+  assert.throws(() => {
+    parseMessageUpdateKind('delivery');
+  }, /Unsupported message update kind/);
 });
 
 test('AuthenticationStateType centralizes known key kinds', () => {

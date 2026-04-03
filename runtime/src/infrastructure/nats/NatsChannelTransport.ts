@@ -26,8 +26,9 @@ import {parseActivationMode} from '../../domain/entities/activation/ActivationMo
 import {DeliveryResult,} from '../../domain/entities/messaging/DeliveryResult.js';
 import {
   InboundEvent,
+  MessageCreatedEvent,
+  MessageDeletedEvent,
   MessageUpdatedEvent,
-  ReceivedMessageEvent,
 } from '../../domain/entities/messaging/InboundEvent.js';
 import {Message} from '../../domain/entities/messaging/Message.js';
 import {
@@ -509,7 +510,7 @@ export class NatsChannelTransport implements WorkerTransport {
   }
 
   private serializeInboundEvent(event: InboundEvent): Record<string, unknown> {
-    if (event instanceof ReceivedMessageEvent) {
+    if (event instanceof MessageCreatedEvent) {
       return {
         eventType: event.eventType,
         session: this.serializeSession(event.session),
@@ -523,28 +524,39 @@ export class NatsChannelTransport implements WorkerTransport {
         eventType: event.eventType,
         session: this.serializeSession(event.session),
         timestamp: event.timestamp,
-        messageId: event.messageId,
+        targetMessage: this.serializeMessageReference(event.targetMessage),
         chatId: event.chatId,
         senderId: event.senderId,
         fromMe: event.fromMe,
+        updateKinds: event.updateKinds,
+        message: event.message
+          ? this.serializeMessage(event.message)
+          : undefined,
         status: event.status,
         stubType: event.stubType,
         contentType: event.contentType,
         pollUpdateCount: event.pollUpdateCount,
+        reactionText: event.reactionText,
+        reactionRemoved: event.reactionRemoved,
       };
     }
 
-    return {
-      eventType: event.eventType,
-      session: this.serializeSession(event.session),
-      timestamp: event.timestamp,
-      messageId: event.messageId,
-      chatId: event.chatId,
-      senderId: event.senderId,
-      fromMe: event.fromMe,
-      reactionText: event.reactionText,
-      removed: event.removed,
-    };
+    if (event instanceof MessageDeletedEvent) {
+      return {
+        eventType: event.eventType,
+        session: this.serializeSession(event.session),
+        timestamp: event.timestamp,
+        targetMessage: this.serializeMessageReference(event.targetMessage),
+        chatId: event.chatId,
+        senderId: event.senderId,
+        fromMe: event.fromMe,
+        message: event.message
+          ? this.serializeMessage(event.message)
+          : undefined,
+      };
+    }
+
+    throw new Error('Unsupported inbound event type.');
   }
 
   private parseWorkerCommand(payload: unknown): WorkerCommand {
@@ -1174,21 +1186,22 @@ export class NatsChannelTransport implements WorkerTransport {
   }
 
   private buildInboundEventMessageId(event: InboundEvent): string {
-    if (event instanceof ReceivedMessageEvent) {
+    if (event instanceof MessageCreatedEvent) {
       return this.sanitizeMessageId(
         `inbound:${event.session.toKey()}:${event.message.messageId ?? event.timestamp}:${event.eventType}`,
       );
     }
 
-    if (event instanceof MessageUpdatedEvent) {
+    if (
+      event instanceof MessageUpdatedEvent
+      || event instanceof MessageDeletedEvent
+    ) {
       return this.sanitizeMessageId(
-        `inbound:${event.session.toKey()}:${event.messageId}:${event.eventType}:${event.timestamp}`,
+        `inbound:${event.session.toKey()}:${event.targetMessage.messageId}:${event.eventType}:${event.timestamp}`,
       );
     }
 
-    return this.sanitizeMessageId(
-      `inbound:${event.session.toKey()}:${event.messageId ?? event.timestamp}:${event.eventType}:${event.timestamp}`,
-    );
+    throw new Error('Unsupported inbound event type.');
   }
 
   private buildDeliveryMessageId(event: DeliveryResult): string {
