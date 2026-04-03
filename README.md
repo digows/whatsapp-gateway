@@ -11,6 +11,13 @@ It is not a generic channel platform and it does not try to abstract Baileys awa
 - NATS-based asynchronous integration surface
 - REST surface for synchronous activation and session control
 
+## Repository Layout
+
+- [runtime](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/runtime)
+  The production microservice.
+- [sdks/java](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/sdks/java)
+  Public Java integration SDK with the gateway entities, events and REST request models.
+
 ## Current Architecture
 
 The current binary is a **self-managed gateway**.
@@ -204,6 +211,58 @@ These routes are intended for infrastructure and other services:
 - `GET /api/v1/workspaces/:workspaceId/sessions/:sessionId`
 - `PATCH /api/v1/workspaces/:workspaceId/sessions/:sessionId`
 - `DELETE /api/v1/workspaces/:workspaceId/sessions/:sessionId`
+
+## Java SDK
+
+The repository now includes a Java SDK in [sdks/java](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/sdks/java).
+
+It mirrors the public integration contract:
+
+- `Session`, `SessionReference`, session state enums
+- `Activation`, `ActivationEvent`
+- `Message`, `MessageContent`, `InboundEvent`, `DeliveryResult`
+- public REST request models for activation and session desired-state changes
+
+### Distribution
+
+The Java SDK is published to GitHub Packages.
+
+Add the dependency:
+
+```xml
+<dependency>
+  <groupId>com.digows.whatsappgateway</groupId>
+  <artifactId>java-whatsappgateway-sdk</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+</dependency>
+```
+
+Add the GitHub Packages Maven repository:
+
+```xml
+<repositories>
+  <repository>
+    <id>github</id>
+    <url>https://maven.pkg.github.com/digows/whatsapp-gateway</url>
+  </repository>
+</repositories>
+```
+
+GitHub Packages Maven consumption requires credentials. Configure Maven `settings.xml` with the same repository id:
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>github</id>
+      <username>YOUR_GITHUB_USERNAME</username>
+      <password>YOUR_GITHUB_CLASSIC_PAT_WITH_READ_PACKAGES</password>
+    </server>
+  </servers>
+</settings>
+```
+
+The Java SDK CI publishes the package there on every push to `main`.
 
 Important semantics:
 

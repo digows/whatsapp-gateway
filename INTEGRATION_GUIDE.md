@@ -18,6 +18,7 @@ External systems should:
 
 - call the public REST API for synchronous operational requests
 - consume NATS events for asynchronous lifecycle and messaging fanout
+- prefer the Java SDK when integrating from JVM services
 - avoid depending on local in-memory worker state
 
 Do not integrate directly with Baileys from outside this service.
@@ -153,6 +154,74 @@ Use them only for:
 - checking what a specific pod currently hosts
 
 Do not build business integration on top of these routes.
+
+## Java SDK Integration
+
+For JVM-based consumers, prefer the Java SDK in [sdks/java](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/sdks/java).
+
+It gives you typed models for:
+
+- `Session`
+- `Activation`
+- `ActivationEvent`
+- `Message`
+- `MessageContent`
+- `InboundEvent`
+- `DeliveryResult`
+- public REST request payloads
+
+### GitHub Packages
+
+Add the SDK dependency:
+
+```xml
+<dependency>
+  <groupId>com.digows.whatsappgateway</groupId>
+  <artifactId>java-whatsappgateway-sdk</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+</dependency>
+```
+
+Add the GitHub Packages repository:
+
+```xml
+<repositories>
+  <repository>
+    <id>github</id>
+    <url>https://maven.pkg.github.com/digows/whatsapp-gateway</url>
+  </repository>
+</repositories>
+```
+
+GitHub Packages Maven consumption requires credentials. Configure Maven `settings.xml` with the same repository id:
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>github</id>
+      <username>YOUR_GITHUB_USERNAME</username>
+      <password>YOUR_GITHUB_CLASSIC_PAT_WITH_READ_PACKAGES</password>
+    </server>
+  </servers>
+</settings>
+```
+
+The SDK CI publishes to GitHub Packages on pushes to `main`.
+
+### Scope of the SDK
+
+Use the SDK for:
+
+- REST request and response typing
+- NATS event payload typing
+- consistent cross-service serialization
+
+Do not expect it to provide:
+
+- Baileys runtime access
+- direct Redis, PostgreSQL or NATS clients
+- control-plane orchestration
 
 ## NATS Integration
 

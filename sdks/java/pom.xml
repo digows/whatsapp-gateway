@@ -6,16 +6,49 @@
   <groupId>com.digows.whatsappgateway</groupId>
   <artifactId>java-whatsappgateway-sdk</artifactId>
   <version>0.1.0-SNAPSHOT</version>
+  <name>Digows WhatsApp Gateway Java SDK</name>
+  <description>Java integration SDK for the Digows WhatsApp Gateway</description>
+  <url>https://github.com/digows/whatsapp-gateway</url>
   <packaging>jar</packaging>
 
   <properties>
-    <maven.compiler.source>17</maven.compiler.source>
-    <maven.compiler.target>17</maven.compiler.target>
+    <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <jackson.databind.version>3.1.1</jackson.databind.version>
     <jackson.annotations.version>2.21</jackson.annotations.version>
     <junit.version>5.12.2</junit.version>
+    <maven.source.plugin.version>3.3.1</maven.source.plugin.version>
+    <maven.javadoc.plugin.version>3.11.2</maven.javadoc.plugin.version>
   </properties>
+
+  <developers>
+    <developer>
+      <name>Rodrigo P. Fraga</name>
+      <email>rodrigo.p.fraga@gmail.com</email>
+      <organization>Digows</organization>
+      <organizationUrl>https://github.com/digows</organizationUrl>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/digows/whatsapp-gateway.git</connection>
+    <developerConnection>scm:git:https://github.com/digows/whatsapp-gateway.git</developerConnection>
+    <url>https://github.com/digows/whatsapp-gateway</url>
+    <tag>HEAD</tag>
+  </scm>
+
+  <distributionManagement>
+    <repository>
+      <id>github</id>
+      <name>GitHub Packages</name>
+      <url>https://maven.pkg.github.com/digows/whatsapp-gateway</url>
+    </repository>
+    <snapshotRepository>
+      <id>github</id>
+      <name>GitHub Packages</name>
+      <url>https://maven.pkg.github.com/digows/whatsapp-gateway</url>
+    </snapshotRepository>
+  </distributionManagement>
 
   <dependencies>
     <dependency>
@@ -43,6 +76,35 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.14.0</version>
+        <configuration>
+          <release>${maven.compiler.release}</release>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+        <version>${maven.source.plugin.version}</version>
+        <executions>
+          <execution>
+            <id>attach-sources</id>
+            <goals>
+              <goal>jar-no-fork</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>${maven.javadoc.plugin.version}</version>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
