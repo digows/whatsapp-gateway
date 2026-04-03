@@ -225,7 +225,41 @@ It mirrors the public integration contract:
 
 ### Distribution
 
-The Java SDK is published to GitHub Packages.
+There are now two supported consumption paths for the Java SDK:
+
+- **JitPack**
+  - best for public consumers that do not want Maven credentials
+  - builds the SDK directly from this public repository
+- **GitHub Packages**
+  - published by this repository CI on pushes to `main`
+  - better for internal controlled consumption
+
+### Public Consumption with JitPack
+
+Add the JitPack Maven repository:
+
+```xml
+<repositories>
+  <repository>
+    <id>jitpack.io</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+```
+
+Add the dependency using a Git tag or commit hash as the version:
+
+```xml
+<dependency>
+  <groupId>com.digows.whatsappgateway</groupId>
+  <artifactId>java-whatsappgateway-sdk</artifactId>
+  <version>TAG_OR_COMMIT_HASH</version>
+</dependency>
+```
+
+The repository root now includes [jitpack.yml](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/jitpack.yml) so JitPack builds the SDK from [/sdks/java](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/sdks/java) instead of trying to build the runtime.
+
+### GitHub Packages Consumption
 
 Add the dependency:
 

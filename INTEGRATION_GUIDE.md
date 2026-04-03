@@ -170,7 +170,36 @@ It gives you typed models for:
 - `DeliveryResult`
 - public REST request payloads
 
+### JitPack
+
+For public JVM consumers, prefer JitPack because it avoids Maven credential setup.
+
+Add the JitPack repository:
+
+```xml
+<repositories>
+  <repository>
+    <id>jitpack.io</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+```
+
+Add the dependency using a Git tag or commit hash as the version:
+
+```xml
+<dependency>
+  <groupId>com.digows.whatsappgateway</groupId>
+  <artifactId>java-whatsappgateway-sdk</artifactId>
+  <version>TAG_OR_COMMIT_HASH</version>
+</dependency>
+```
+
+This repository includes [jitpack.yml](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/jitpack.yml) so JitPack builds the SDK module from [/sdks/java](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/sdks/java).
+
 ### GitHub Packages
+
+For controlled internal consumption, the repository CI also publishes the SDK to GitHub Packages.
 
 Add the SDK dependency:
 

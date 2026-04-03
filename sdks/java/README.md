@@ -29,7 +29,36 @@ It does not contain:
 </dependency>
 ```
 
+## JitPack Consumption
+
+For public consumption without Maven credentials, use JitPack.
+
+Add the repository:
+
+```xml
+<repositories>
+  <repository>
+    <id>jitpack.io</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+```
+
+Add the dependency using a Git tag or commit hash as the version:
+
+```xml
+<dependency>
+  <groupId>com.digows.whatsappgateway</groupId>
+  <artifactId>java-whatsappgateway-sdk</artifactId>
+  <version>TAG_OR_COMMIT_HASH</version>
+</dependency>
+```
+
+The repository root contains [jitpack.yml](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/jitpack.yml), so JitPack builds this module from [/sdks/java](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/sdks/java).
+
 ## GitHub Packages Consumption
+
+For controlled internal consumption, the repository CI also publishes the SDK to GitHub Packages.
 
 Add the GitHub Packages Maven repository:
 
