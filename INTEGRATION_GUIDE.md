@@ -185,15 +185,17 @@ Add the JitPack repository:
 </repositories>
 ```
 
-Add the dependency using a Git tag or commit hash as the version:
+Add the dependency. For JitPack, the version is the Git tag or commit hash. Example:
 
 ```xml
 <dependency>
-  <groupId>com.digows.whatsappgateway</groupId>
-  <artifactId>java-whatsappgateway-sdk</artifactId>
-  <version>TAG_OR_COMMIT_HASH</version>
+  <groupId>com.github.digows</groupId>
+  <artifactId>whatsapp-gateway</artifactId>
+  <version>2.0.3</version>
 </dependency>
 ```
+
+JitPack exposes the SDK with repository-based coordinates. The Java package base inside the jar still remains `com.digows.whatsappgateway`.
 
 This repository includes [jitpack.yml](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/jitpack.yml) so JitPack builds the SDK module from [/sdks/java](/Volumes/Files/Development/workspaces/digows/whatsapp-gateway/sdks/java).
 
