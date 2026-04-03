@@ -1,0 +1,79 @@
+name: Build and Publish Java SDK
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: '17'
+  SDK_DIRECTORY: sdks/java
+
+jobs:
+  verify:
+    name: Verify Java SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.SDK_DIRECTORY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          cache-dependency-path: ${{ env.SDK_DIRECTORY }}/pom.xml
+
+      - name: Build and run tests
+        run: mvn -B clean test
+
+      - name: Upload SDK jar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-whatsappgateway-sdk-jar
+          path: |
+            ${{ env.SDK_DIRECTORY }}/target/*.jar
+            !${{ env.SDK_DIRECTORY }}/target/*-sources.jar
+            !${{ env.SDK_DIRECTORY }}/target/*-javadoc.jar
+          if-no-files-found: error
+
+  publish:
+    name: Publish Java SDK
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: ${{ env.SDK_DIRECTORY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java for GitHub Packages
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          cache-dependency-path: ${{ env.SDK_DIRECTORY }}/pom.xml
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Publish package to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          mvn -B -DskipTests deploy
+          -DaltDeploymentRepository=github::default::https://maven.pkg.github.com/${{ github.repository }}
