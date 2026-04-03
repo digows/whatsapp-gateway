@@ -4,9 +4,16 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'runtime/**'
+      - '.github/workflows/runtime-build-deploy.yml'
   pull_request:
     branches:
       - main
+    paths:
+      - 'runtime/**'
+      - '.github/workflows/runtime-build-deploy.yml'
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io

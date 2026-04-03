@@ -2,4 +2,4 @@ jdk:
   - openjdk17
 install:
   - cd sdks/java
-  - mvn -B clean install -DskipTests
+  - ./mvnw -B clean install -DskipTests
