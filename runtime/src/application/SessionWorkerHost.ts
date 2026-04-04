@@ -15,6 +15,7 @@ import {
   WorkerCommandAction,
 } from '../domain/entities/operational/WorkerCommand.js';
 import { WorkerIdentity } from '../domain/entities/operational/WorkerIdentity.js';
+import { OutboundCommand } from '../domain/entities/command/OutboundCommand.js';
 import {
   BaileysProvider,
   BaileysProviderCallbacks,
@@ -227,10 +228,19 @@ export class SessionWorkerHost {
           throw new Error(`Session ${session.toLogLabel()} is no longer hosted.`);
         }
 
-        const result = await currentSession.provider.send(command);
+        const outcome = await currentSession.provider.execute(command as OutboundCommand);
         await this.publishNonCritical(
-          `delivery result for command ${result.commandId}`,
-          () => this.transport.publishDelivery(result),
+          `command result for command ${command.commandId}`,
+          () => this.transport.publishCommandResult(outcome.commandResult),
+        );
+
+        if (!outcome.deliveryResult) {
+          return;
+        }
+
+        await this.publishNonCritical(
+          `delivery result for command ${outcome.deliveryResult.commandId}`,
+          () => this.transport.publishDelivery(outcome.deliveryResult),
         );
       });
 

@@ -221,6 +221,8 @@ It mirrors the public integration contract:
 - `Session`, `SessionReference`, session state enums
 - `Activation`, `ActivationEvent`
 - `Message`, `MessageContent`, `InboundEvent`, `DeliveryResult`
+- `OutboundCommand`, `OutboundCommandResult`
+- outbound command families for message, presence, read, chat, group, community, newsletter, profile, privacy and call
 - public REST request models for activation and session desired-state changes
 
 Session-observed message lifecycle is exposed as:
@@ -267,7 +269,7 @@ Add the dependency. For JitPack, the version is the Git tag or commit hash. Exam
 <dependency>
   <groupId>com.github.digows</groupId>
   <artifactId>whatsapp-gateway</artifactId>
-  <version>2.0.3</version>
+  <version>3.0.0</version>
 </dependency>
 ```
 
@@ -339,6 +341,7 @@ Logical subjects:
 - worker control
 - incoming messages
 - outgoing commands
+- command results
 - delivery results
 - session status
 - activation lifecycle
@@ -348,6 +351,7 @@ Subject templates are environment-driven and rendered from:
 - `NATS_SUBJECT_CONTROL_TEMPLATE`
 - `NATS_SUBJECT_INBOUND_TEMPLATE`
 - `NATS_SUBJECT_OUTBOUND_TEMPLATE`
+- `NATS_SUBJECT_COMMAND_RESULT_TEMPLATE`
 - `NATS_SUBJECT_DELIVERY_TEMPLATE`
 - `NATS_SUBJECT_STATUS_TEMPLATE`
 - `NATS_SUBJECT_ACTIVATION_TEMPLATE`
@@ -356,9 +360,51 @@ The default templates produce subjects such as:
 
 - `gateway.v1.channel.whatsapp-web.worker.{workerId}.control`
 - `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.incoming`
+- `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.outgoing`
+- `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.command-result`
 - `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.delivery`
 
 When `NATS_MODE=jetstream`, worker control and outbound processing use durable consumers and dedupe-aware execution.
+
+### Outbound Commands
+
+The outbound NATS contract is now organized by command family instead of only a
+message-send payload.
+
+Supported families today:
+
+- `message`
+  - `send`
+- `presence`
+  - `subscribe`
+  - `update`
+- `read`
+  - `read_messages`
+  - `send_receipt`
+- `chat`
+  - `archive`, `unarchive`, `pin`, `unpin`, `mute`, `unmute`
+  - `clear`, `delete_for_me`, `delete_chat`
+  - `mark_read`, `mark_unread`
+  - `star`, `unstar`
+- `group`
+  - metadata, creation, invite, participant and settings operations
+- `community`
+  - metadata, link, invite, participant and settings operations
+- `newsletter`
+  - creation, metadata, follow, mute, fetch, reaction and ownership operations
+- `profile`
+  - profile picture, profile status, profile name, blocklist and business profile operations
+- `privacy`
+  - privacy fetch and privacy update operations
+- `call`
+  - reject and create link
+
+Important contract semantics:
+
+- the `outgoing` subject still accepts the legacy message-send payload for backward compatibility
+- family-based commands should be the default for all new integrations
+- every outbound command produces a generic `command-result` event
+- `message/send` also continues to emit the legacy delivery lifecycle on the `delivery` subject
 
 ## Activation Model
 

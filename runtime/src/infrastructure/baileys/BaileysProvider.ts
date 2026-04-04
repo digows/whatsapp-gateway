@@ -10,6 +10,35 @@ import {
   ActivationStartedEvent,
 } from '../../domain/entities/activation/ActivationEvent.js';
 import { ActivationMode } from '../../domain/entities/activation/ActivationMode.js';
+import {
+  BlockAction,
+  CallCommand,
+  CallCommandAction,
+  CallType,
+  ChatCommand,
+  ChatCommandAction,
+  CommandMessageKey,
+  CommunityCommand,
+  CommunityCommandAction,
+  GroupCommand,
+  GroupCommandAction,
+  NewsletterCommand,
+  NewsletterCommandAction,
+  NewsletterLookupType,
+  OutboundCommand,
+  PresenceCommand,
+  PresenceCommandAction,
+  PrivacyCommand,
+  PrivacyCommandAction,
+  ProfileCommand,
+  ProfileCommandAction,
+  ReadCommand,
+  ReadCommandAction,
+} from '../../domain/entities/command/OutboundCommand.js';
+import {
+  OutboundCommandResult,
+  OutboundCommandResultStatus,
+} from '../../domain/entities/command/OutboundCommandResult.js';
 import { DeliveryResult, DeliveryStatus } from '../../domain/entities/messaging/DeliveryResult.js';
 import {
   InboundEvent,
@@ -95,6 +124,11 @@ export interface BaileysProviderCallbacks {
     timestamp: string,
   ): Promise<void>;
   onSessionStatus(event: SessionStatusEvent): Promise<void>;
+}
+
+export interface OutboundExecutionOutcome {
+  readonly commandResult: OutboundCommandResult;
+  readonly deliveryResult?: DeliveryResult;
 }
 
 /**
@@ -225,6 +259,72 @@ export class BaileysProvider {
     );
   }
 
+  public async execute(command: OutboundCommand): Promise<OutboundExecutionOutcome> {
+    if (command instanceof SendMessageCommand) {
+      const deliveryResult = await this.send(command);
+      return {
+        commandResult: this.buildCommandResultFromDelivery(command, deliveryResult),
+        deliveryResult,
+      };
+    }
+
+    if (command instanceof PresenceCommand) {
+      return {
+        commandResult: await this.executePresenceCommand(command),
+      };
+    }
+
+    if (command instanceof ReadCommand) {
+      return {
+        commandResult: await this.executeReadCommand(command),
+      };
+    }
+
+    if (command instanceof ChatCommand) {
+      return {
+        commandResult: await this.executeChatCommand(command),
+      };
+    }
+
+    if (command instanceof GroupCommand) {
+      return {
+        commandResult: await this.executeGroupCommand(command),
+      };
+    }
+
+    if (command instanceof CommunityCommand) {
+      return {
+        commandResult: await this.executeCommunityCommand(command),
+      };
+    }
+
+    if (command instanceof NewsletterCommand) {
+      return {
+        commandResult: await this.executeNewsletterCommand(command),
+      };
+    }
+
+    if (command instanceof ProfileCommand) {
+      return {
+        commandResult: await this.executeProfileCommand(command),
+      };
+    }
+
+    if (command instanceof PrivacyCommand) {
+      return {
+        commandResult: await this.executePrivacyCommand(command),
+      };
+    }
+
+    if (command instanceof CallCommand) {
+      return {
+        commandResult: await this.executeCallCommand(command),
+      };
+    }
+
+    throw new Error(`Unsupported outbound command family "${command.family}".`);
+  }
+
   public async send(command: SendMessageCommand): Promise<DeliveryResult> {
     if (!this.sock) {
       return this.buildDeliveryResult(
@@ -281,6 +381,777 @@ export class BaileysProvider {
         await this.sock.sendPresenceUpdate('paused', recipientJid).catch(() => {});
       }
     }
+  }
+
+  private async executePresenceCommand(command: PresenceCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    const chatJid = this.normalizeRecipientId(command.chatId);
+
+    try {
+      if (command.action === PresenceCommandAction.Subscribe) {
+        await this.sock.presenceSubscribe(chatJid);
+        return this.buildSucceededCommandResult(command, {
+          chatId: chatJid,
+        });
+      }
+
+      await this.sock.sendPresenceUpdate(command.presence!, chatJid);
+      return this.buildSucceededCommandResult(command, {
+        chatId: chatJid,
+        presence: command.presence,
+      });
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async executeReadCommand(command: ReadCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    try {
+      if (command.action === ReadCommandAction.ReadMessages) {
+        await this.sock.readMessages(
+          command.messages.map(message => this.toBaileysMessageKey(message)),
+        );
+
+        return this.buildSucceededCommandResult(command, {
+          messageCount: command.messages.length,
+        });
+      }
+
+      const chatJid = this.normalizeRecipientId(command.chatId!);
+      await this.sock.sendReceipt(
+        chatJid,
+        command.participantId,
+        [...command.messageIds],
+        command.receiptType,
+      );
+
+      return this.buildSucceededCommandResult(command, {
+        chatId: chatJid,
+        participantId: command.participantId,
+        messageCount: command.messageIds.length,
+        receiptType: command.receiptType,
+      });
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async executeChatCommand(command: ChatCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    const chatJid = this.normalizeRecipientId(command.chatId);
+
+    try {
+      switch (command.action) {
+        case ChatCommandAction.Archive:
+          await this.sock.chatModify(
+            {
+              archive: true,
+              lastMessages: this.toMinimalMessages(command.lastMessages, 'chat archive'),
+            },
+            chatJid,
+          );
+          break;
+        case ChatCommandAction.Unarchive:
+          await this.sock.chatModify(
+            {
+              archive: false,
+              lastMessages: this.toMinimalMessages(command.lastMessages, 'chat unarchive'),
+            },
+            chatJid,
+          );
+          break;
+        case ChatCommandAction.Pin:
+          await this.sock.chatModify({ pin: true }, chatJid);
+          break;
+        case ChatCommandAction.Unpin:
+          await this.sock.chatModify({ pin: false }, chatJid);
+          break;
+        case ChatCommandAction.Mute:
+          await this.sock.chatModify({ mute: command.muteDurationMs ?? 0 }, chatJid);
+          break;
+        case ChatCommandAction.Unmute:
+          await this.sock.chatModify({ mute: null }, chatJid);
+          break;
+        case ChatCommandAction.Clear:
+          await this.sock.chatModify(
+            {
+              clear: true,
+              lastMessages: this.toMinimalMessages(command.lastMessages, 'chat clear'),
+            },
+            chatJid,
+          );
+          break;
+        case ChatCommandAction.DeleteForMe:
+          await this.sock.chatModify(
+            {
+              deleteForMe: {
+                deleteMedia: command.deleteMedia === true,
+                key: this.toBaileysMessageKey(command.targetMessage!),
+                timestamp: command.deleteTimestamp!,
+              },
+            },
+            chatJid,
+          );
+          break;
+        case ChatCommandAction.DeleteChat:
+          await this.sock.chatModify(
+            {
+              delete: true,
+              lastMessages: this.toMinimalMessages(command.lastMessages, 'chat delete'),
+            },
+            chatJid,
+          );
+          break;
+        case ChatCommandAction.MarkRead:
+          await this.sock.chatModify(
+            {
+              markRead: true,
+              lastMessages: this.toMinimalMessages(command.lastMessages, 'chat markRead'),
+            },
+            chatJid,
+          );
+          break;
+        case ChatCommandAction.MarkUnread:
+          await this.sock.chatModify(
+            {
+              markRead: false,
+              lastMessages: this.toMinimalMessages(command.lastMessages, 'chat markUnread'),
+            },
+            chatJid,
+          );
+          break;
+        case ChatCommandAction.Star:
+          await this.sock.star(
+            chatJid,
+            command.messageReferences.map(message => ({
+              id: message.reference.messageId,
+              fromMe: message.fromMe,
+            })),
+            true,
+          );
+          break;
+        case ChatCommandAction.Unstar:
+          await this.sock.star(
+            chatJid,
+            command.messageReferences.map(message => ({
+              id: message.reference.messageId,
+              fromMe: message.fromMe,
+            })),
+            false,
+          );
+          break;
+      }
+
+      return this.buildSucceededCommandResult(command, {
+        chatId: chatJid,
+      });
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async executeGroupCommand(command: GroupCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    try {
+      switch (command.action) {
+        case GroupCommandAction.Metadata:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.groupMetadata(this.normalizeRecipientId(command.groupJid!)),
+          });
+        case GroupCommandAction.Create:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.groupCreate(command.subject!, [...command.participants]),
+          });
+        case GroupCommandAction.Leave:
+          await this.sock.groupLeave(this.normalizeRecipientId(command.groupJid!));
+          break;
+        case GroupCommandAction.UpdateSubject:
+          await this.sock.groupUpdateSubject(
+            this.normalizeRecipientId(command.groupJid!),
+            command.subject!,
+          );
+          break;
+        case GroupCommandAction.UpdateDescription:
+          await this.sock.groupUpdateDescription(
+            this.normalizeRecipientId(command.groupJid!),
+            command.description,
+          );
+          break;
+        case GroupCommandAction.InviteCode:
+          return this.buildSucceededCommandResult(command, {
+            inviteCode: await this.sock.groupInviteCode(this.normalizeRecipientId(command.groupJid!)),
+          });
+        case GroupCommandAction.RevokeInvite:
+          return this.buildSucceededCommandResult(command, {
+            inviteCode: await this.sock.groupRevokeInvite(this.normalizeRecipientId(command.groupJid!)),
+          });
+        case GroupCommandAction.AcceptInvite:
+          return this.buildSucceededCommandResult(command, {
+            groupJid: await this.sock.groupAcceptInvite(command.inviteCode!),
+          });
+        case GroupCommandAction.GetInviteInfo:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.groupGetInviteInfo(command.inviteCode!),
+          });
+        case GroupCommandAction.ParticipantsUpdate:
+          return this.buildSucceededCommandResult(command, {
+            participants: await this.sock.groupParticipantsUpdate(
+              this.normalizeRecipientId(command.groupJid!),
+              [...command.participants],
+              command.participantAction!,
+            ),
+          });
+        case GroupCommandAction.RequestParticipantsList:
+          return this.buildSucceededCommandResult(command, {
+            participants: await this.sock.groupRequestParticipantsList(
+              this.normalizeRecipientId(command.groupJid!),
+            ),
+          });
+        case GroupCommandAction.RequestParticipantsUpdate:
+          return this.buildSucceededCommandResult(command, {
+            participants: await this.sock.groupRequestParticipantsUpdate(
+              this.normalizeRecipientId(command.groupJid!),
+              [...command.participants],
+              command.requestAction!,
+            ),
+          });
+        case GroupCommandAction.ToggleEphemeral:
+          await this.sock.groupToggleEphemeral(
+            this.normalizeRecipientId(command.groupJid!),
+            command.ephemeralExpiration!,
+          );
+          break;
+        case GroupCommandAction.SettingUpdate:
+          await this.sock.groupSettingUpdate(
+            this.normalizeRecipientId(command.groupJid!),
+            command.setting!,
+          );
+          break;
+        case GroupCommandAction.MemberAddMode:
+          await this.sock.groupMemberAddMode(
+            this.normalizeRecipientId(command.groupJid!),
+            command.memberAddMode!,
+          );
+          break;
+        case GroupCommandAction.JoinApprovalMode:
+          await this.sock.groupJoinApprovalMode(
+            this.normalizeRecipientId(command.groupJid!),
+            command.joinApprovalMode!,
+          );
+          break;
+        case GroupCommandAction.FetchAllParticipating:
+          return this.buildSucceededCommandResult(command, {
+            groups: await this.sock.groupFetchAllParticipating(),
+          });
+      }
+
+      return this.buildSucceededCommandResult(command);
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async executeCommunityCommand(command: CommunityCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    try {
+      switch (command.action) {
+        case CommunityCommandAction.Metadata:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.communityMetadata(this.normalizeRecipientId(command.communityJid!)),
+          });
+        case CommunityCommandAction.Create:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.communityCreate(command.subject!, command.description ?? ''),
+          });
+        case CommunityCommandAction.CreateGroup:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.communityCreateGroup(
+              command.subject!,
+              [...command.participants],
+              this.normalizeRecipientId(command.communityJid!),
+            ),
+          });
+        case CommunityCommandAction.Leave:
+          await this.sock.communityLeave(this.normalizeRecipientId(command.communityJid!));
+          break;
+        case CommunityCommandAction.UpdateSubject:
+          await this.sock.communityUpdateSubject(
+            this.normalizeRecipientId(command.communityJid!),
+            command.subject!,
+          );
+          break;
+        case CommunityCommandAction.UpdateDescription:
+          await this.sock.communityUpdateDescription(
+            this.normalizeRecipientId(command.communityJid!),
+            command.description,
+          );
+          break;
+        case CommunityCommandAction.LinkGroup:
+          await this.sock.communityLinkGroup(
+            this.normalizeRecipientId(command.groupJid!),
+            this.normalizeRecipientId(command.communityJid!),
+          );
+          break;
+        case CommunityCommandAction.UnlinkGroup:
+          await this.sock.communityUnlinkGroup(
+            this.normalizeRecipientId(command.groupJid!),
+            this.normalizeRecipientId(command.communityJid!),
+          );
+          break;
+        case CommunityCommandAction.FetchLinkedGroups:
+          return this.buildSucceededCommandResult(command, {
+            groups: await this.sock.communityFetchLinkedGroups(
+              this.normalizeRecipientId(command.communityJid!),
+            ),
+          });
+        case CommunityCommandAction.RequestParticipantsList:
+          return this.buildSucceededCommandResult(command, {
+            participants: await this.sock.communityRequestParticipantsList(
+              this.normalizeRecipientId(command.communityJid!),
+            ),
+          });
+        case CommunityCommandAction.RequestParticipantsUpdate:
+          return this.buildSucceededCommandResult(command, {
+            participants: await this.sock.communityRequestParticipantsUpdate(
+              this.normalizeRecipientId(command.communityJid!),
+              [...command.participants],
+              command.requestAction!,
+            ),
+          });
+        case CommunityCommandAction.ParticipantsUpdate:
+          return this.buildSucceededCommandResult(command, {
+            participants: await this.sock.communityParticipantsUpdate(
+              this.normalizeRecipientId(command.communityJid!),
+              [...command.participants],
+              command.participantAction!,
+            ),
+          });
+        case CommunityCommandAction.InviteCode:
+          return this.buildSucceededCommandResult(command, {
+            inviteCode: await this.sock.communityInviteCode(this.normalizeRecipientId(command.communityJid!)),
+          });
+        case CommunityCommandAction.RevokeInvite:
+          return this.buildSucceededCommandResult(command, {
+            inviteCode: await this.sock.communityRevokeInvite(this.normalizeRecipientId(command.communityJid!)),
+          });
+        case CommunityCommandAction.AcceptInvite:
+          return this.buildSucceededCommandResult(command, {
+            communityJid: await this.sock.communityAcceptInvite(command.inviteCode!),
+          });
+        case CommunityCommandAction.GetInviteInfo:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.communityGetInviteInfo(command.inviteCode!),
+          });
+        case CommunityCommandAction.ToggleEphemeral:
+          await this.sock.communityToggleEphemeral(
+            this.normalizeRecipientId(command.communityJid!),
+            command.ephemeralExpiration!,
+          );
+          break;
+        case CommunityCommandAction.SettingUpdate:
+          await this.sock.communitySettingUpdate(
+            this.normalizeRecipientId(command.communityJid!),
+            command.setting!,
+          );
+          break;
+        case CommunityCommandAction.MemberAddMode:
+          await this.sock.communityMemberAddMode(
+            this.normalizeRecipientId(command.communityJid!),
+            command.memberAddMode!,
+          );
+          break;
+        case CommunityCommandAction.JoinApprovalMode:
+          await this.sock.communityJoinApprovalMode(
+            this.normalizeRecipientId(command.communityJid!),
+            command.joinApprovalMode!,
+          );
+          break;
+        case CommunityCommandAction.FetchAllParticipating:
+          return this.buildSucceededCommandResult(command, {
+            communities: await this.sock.communityFetchAllParticipating(),
+          });
+      }
+
+      return this.buildSucceededCommandResult(command);
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async executeNewsletterCommand(command: NewsletterCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    try {
+      switch (command.action) {
+        case NewsletterCommandAction.Create:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.newsletterCreate(command.name!, command.description),
+          });
+        case NewsletterCommandAction.Update:
+          if (command.name) {
+            await this.sock.newsletterUpdateName(this.normalizeRecipientId(command.newsletterJid!), command.name);
+          }
+          if (command.description !== undefined) {
+            await this.sock.newsletterUpdateDescription(
+              this.normalizeRecipientId(command.newsletterJid!),
+              command.description,
+            );
+          }
+          if (command.pictureUrl) {
+            await this.sock.newsletterUpdatePicture(
+              this.normalizeRecipientId(command.newsletterJid!),
+              { url: command.pictureUrl },
+            );
+          }
+          break;
+        case NewsletterCommandAction.Subscribers:
+          return this.buildSucceededCommandResult(command, {
+            subscribers: await this.sock.newsletterSubscribers(
+              this.normalizeRecipientId(command.newsletterJid!),
+            ),
+          });
+        case NewsletterCommandAction.Metadata:
+          return this.buildSucceededCommandResult(command, {
+            metadata: await this.sock.newsletterMetadata(
+              command.lookupType ?? NewsletterLookupType.Jid,
+              command.lookupKey ?? this.normalizeRecipientId(command.newsletterJid!),
+            ),
+          });
+        case NewsletterCommandAction.Follow:
+          await this.sock.newsletterFollow(this.normalizeRecipientId(command.newsletterJid!));
+          break;
+        case NewsletterCommandAction.Unfollow:
+          await this.sock.newsletterUnfollow(this.normalizeRecipientId(command.newsletterJid!));
+          break;
+        case NewsletterCommandAction.Mute:
+          await this.sock.newsletterMute(this.normalizeRecipientId(command.newsletterJid!));
+          break;
+        case NewsletterCommandAction.Unmute:
+          await this.sock.newsletterUnmute(this.normalizeRecipientId(command.newsletterJid!));
+          break;
+        case NewsletterCommandAction.ReactMessage:
+          await this.sock.newsletterReactMessage(
+            this.normalizeRecipientId(command.newsletterJid!),
+            command.serverId!,
+            command.reactionText,
+          );
+          break;
+        case NewsletterCommandAction.FetchMessages:
+          return this.buildSucceededCommandResult(command, {
+            messages: await this.sock.newsletterFetchMessages(
+              this.normalizeRecipientId(command.newsletterJid!),
+              command.count!,
+              command.since!,
+              command.after!,
+            ),
+          });
+        case NewsletterCommandAction.SubscribeUpdates:
+          return this.buildSucceededCommandResult(command, {
+            subscription: await this.sock.subscribeNewsletterUpdates(
+              this.normalizeRecipientId(command.newsletterJid!),
+            ),
+          });
+        case NewsletterCommandAction.AdminCount:
+          return this.buildSucceededCommandResult(command, {
+            adminCount: await this.sock.newsletterAdminCount(
+              this.normalizeRecipientId(command.newsletterJid!),
+            ),
+          });
+        case NewsletterCommandAction.ChangeOwner:
+          await this.sock.newsletterChangeOwner(
+            this.normalizeRecipientId(command.newsletterJid!),
+            this.normalizeRecipientId(command.newOwnerJid!),
+          );
+          break;
+        case NewsletterCommandAction.Demote:
+          await this.sock.newsletterDemote(
+            this.normalizeRecipientId(command.newsletterJid!),
+            this.normalizeRecipientId(command.userJid!),
+          );
+          break;
+        case NewsletterCommandAction.Delete:
+          await this.sock.newsletterDelete(this.normalizeRecipientId(command.newsletterJid!));
+          break;
+      }
+
+      return this.buildSucceededCommandResult(command);
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async executeProfileCommand(command: ProfileCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    try {
+      switch (command.action) {
+        case ProfileCommandAction.ProfilePictureUrl:
+          return this.buildSucceededCommandResult(command, {
+            url: await this.sock.profilePictureUrl(
+              this.normalizeRecipientId(command.jid!),
+              command.pictureType,
+            ),
+          });
+        case ProfileCommandAction.UpdateProfilePicture:
+          await this.sock.updateProfilePicture(
+            this.normalizeRecipientId(command.jid!),
+            { url: command.mediaUrl! },
+            command.dimensions,
+          );
+          break;
+        case ProfileCommandAction.RemoveProfilePicture:
+          await this.sock.removeProfilePicture(this.normalizeRecipientId(command.jid!));
+          break;
+        case ProfileCommandAction.UpdateProfileStatus:
+          await this.sock.updateProfileStatus(command.statusText!);
+          break;
+        case ProfileCommandAction.UpdateProfileName:
+          await this.sock.updateProfileName(command.profileName!);
+          break;
+        case ProfileCommandAction.UpdateBlockStatus:
+          await this.sock.updateBlockStatus(
+            this.normalizeRecipientId(command.jid!),
+            command.blockAction!,
+          );
+          break;
+        case ProfileCommandAction.FetchBlocklist:
+          return this.buildSucceededCommandResult(command, {
+            blocklist: await this.sock.fetchBlocklist(),
+          });
+        case ProfileCommandAction.FetchStatus:
+          return this.buildSucceededCommandResult(command, {
+            statuses: await this.sock.fetchStatus(...command.jids.map(jid => this.normalizeRecipientId(jid))),
+          });
+        case ProfileCommandAction.FetchDisappearingDuration:
+          return this.buildSucceededCommandResult(command, {
+            durations: await this.sock.fetchDisappearingDuration(
+              ...command.jids.map(jid => this.normalizeRecipientId(jid)),
+            ),
+          });
+        case ProfileCommandAction.GetBusinessProfile:
+          return this.buildSucceededCommandResult(command, {
+            profile: await this.sock.getBusinessProfile(this.normalizeRecipientId(command.jid!)),
+          });
+      }
+
+      return this.buildSucceededCommandResult(command);
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async executePrivacyCommand(command: PrivacyCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    try {
+      switch (command.action) {
+        case PrivacyCommandAction.FetchSettings:
+          return this.buildSucceededCommandResult(command, {
+            settings: await this.sock.fetchPrivacySettings(),
+          });
+        case PrivacyCommandAction.UpdateDisableLinkPreviews:
+          await this.sock.updateDisableLinkPreviewsPrivacy(command.previewsDisabled!);
+          break;
+        case PrivacyCommandAction.UpdateCallPrivacy:
+          await this.sock.updateCallPrivacy(command.callPrivacy!);
+          break;
+        case PrivacyCommandAction.UpdateMessagesPrivacy:
+          await this.sock.updateMessagesPrivacy(command.messagesPrivacy!);
+          break;
+        case PrivacyCommandAction.UpdateLastSeenPrivacy:
+          await this.sock.updateLastSeenPrivacy(command.lastSeenPrivacy!);
+          break;
+        case PrivacyCommandAction.UpdateOnlinePrivacy:
+          await this.sock.updateOnlinePrivacy(command.onlinePrivacy!);
+          break;
+        case PrivacyCommandAction.UpdateProfilePicturePrivacy:
+          await this.sock.updateProfilePicturePrivacy(command.profilePicturePrivacy!);
+          break;
+        case PrivacyCommandAction.UpdateStatusPrivacy:
+          await this.sock.updateStatusPrivacy(command.statusPrivacy!);
+          break;
+        case PrivacyCommandAction.UpdateReadReceiptsPrivacy:
+          await this.sock.updateReadReceiptsPrivacy(command.readReceiptsPrivacy!);
+          break;
+        case PrivacyCommandAction.UpdateGroupsAddPrivacy:
+          await this.sock.updateGroupsAddPrivacy(command.groupsAddPrivacy!);
+          break;
+        case PrivacyCommandAction.UpdateDefaultDisappearingMode:
+          await this.sock.updateDefaultDisappearingMode(command.defaultDisappearingModeSeconds!);
+          break;
+      }
+
+      return this.buildSucceededCommandResult(command);
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async executeCallCommand(command: CallCommand): Promise<OutboundCommandResult> {
+    if (!this.sock) {
+      return this.buildFailedCommandResult(command, 'no active socket');
+    }
+
+    try {
+      if (command.action === CallCommandAction.Reject) {
+        await this.sock.rejectCall(command.callId!, this.normalizeRecipientId(command.callFrom!));
+        return this.buildSucceededCommandResult(command);
+      }
+
+      return this.buildSucceededCommandResult(command, {
+        callLink: await this.sock.createCallLink(
+          command.callType === CallType.Video ? 'video' : 'audio',
+          command.startTime
+            ? {
+                startTime: command.startTime,
+              }
+            : undefined,
+          command.timeoutMs,
+        ),
+      });
+    } catch (error) {
+      return this.buildFailedCommandResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private buildCommandResultFromDelivery(
+    command: SendMessageCommand,
+    deliveryResult: DeliveryResult,
+  ): OutboundCommandResult {
+    return new OutboundCommandResult(
+      command.commandId,
+      command.session,
+      command.family,
+      command.action,
+      deliveryResult.status === DeliveryStatus.Sent
+        ? OutboundCommandResultStatus.Succeeded
+        : deliveryResult.status === DeliveryStatus.Blocked
+          ? OutboundCommandResultStatus.Blocked
+          : OutboundCommandResultStatus.Failed,
+      deliveryResult.timestamp,
+      deliveryResult.reason,
+      {
+        recipientId: deliveryResult.recipientId,
+        providerMessageId: deliveryResult.providerMessageId,
+      },
+    );
+  }
+
+  private buildSucceededCommandResult(
+    command: OutboundCommand,
+    data?: Readonly<Record<string, unknown>>,
+  ): OutboundCommandResult {
+    return new OutboundCommandResult(
+      command.commandId,
+      command.session,
+      command.family,
+      command.action,
+      OutboundCommandResultStatus.Succeeded,
+      new Date().toISOString(),
+      undefined,
+      data,
+    );
+  }
+
+  private buildFailedCommandResult(
+    command: OutboundCommand,
+    reason: string,
+    data?: Readonly<Record<string, unknown>>,
+  ): OutboundCommandResult {
+    return new OutboundCommandResult(
+      command.commandId,
+      command.session,
+      command.family,
+      command.action,
+      OutboundCommandResultStatus.Failed,
+      new Date().toISOString(),
+      reason,
+      data,
+    );
+  }
+
+  private toBaileysMessageKey(messageKey: CommandMessageKey): {
+    id: string;
+    remoteJid?: string;
+    participant?: string;
+  } {
+    return {
+      id: messageKey.reference.messageId,
+      remoteJid: messageKey.reference.remoteJid,
+      participant: messageKey.reference.participantId,
+    };
+  }
+
+  private toMinimalMessages(
+    messageKeys: readonly CommandMessageKey[],
+    label: string,
+  ): Array<{
+    key: {
+      id: string;
+      remoteJid?: string;
+      participant?: string;
+    };
+    messageTimestamp: number;
+  }> {
+    return messageKeys.map((messageKey, index) => {
+      if (messageKey.timestamp == null) {
+        throw new Error(`${label} requires messages[${index}].timestamp.`);
+      }
+
+      return {
+        key: this.toBaileysMessageKey(messageKey),
+        messageTimestamp: messageKey.timestamp,
+      };
+    });
   }
 
   private setupEventListeners(saveCreds: () => Promise<void>): void {

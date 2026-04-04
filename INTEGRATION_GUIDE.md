@@ -168,6 +168,8 @@ It gives you typed models for:
 - `MessageContent`
 - `InboundEvent`
 - `DeliveryResult`
+- `OutboundCommand`
+- `OutboundCommandResult`
 - public REST request payloads
 
 Session-observed message lifecycle is modeled as:
@@ -215,7 +217,7 @@ Add the dependency. For JitPack, the version is the Git tag or commit hash. Exam
 <dependency>
   <groupId>com.github.digows</groupId>
   <artifactId>whatsapp-gateway</artifactId>
-  <version>2.0.3</version>
+  <version>3.0.0</version>
 </dependency>
 ```
 
@@ -284,6 +286,7 @@ NATS remains the asynchronous contract for:
 
 - inbound messages
 - outbound commands
+- command execution results
 - delivery results
 - session status updates
 - activation lifecycle updates
@@ -301,6 +304,8 @@ Use REST when:
 Use NATS when:
 
 - you need inbound message fanout
+- you need outbound command execution
+- you need explicit typing or presence signaling
 - you need delivery updates
 - you need activation follow-up after the first challenge
 - you need session lifecycle events in near real time
@@ -317,6 +322,8 @@ The defaults are:
   - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.incoming`
 - outgoing:
   - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.outgoing`
+- command result:
+  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-result`
 - delivery:
   - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.delivery`
 - status:
@@ -325,6 +332,102 @@ The defaults are:
   - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.activation`
 
 If another system depends on these subjects, freeze the templates in deployment config and do not mutate them casually between environments.
+
+## Outbound Command Contract
+
+The `outgoing` subject now accepts family-based commands.
+
+Supported families:
+
+- `message`
+  - `send`
+- `presence`
+  - `subscribe`
+  - `update`
+- `read`
+  - `read_messages`
+  - `send_receipt`
+- `chat`
+  - `archive`, `unarchive`, `pin`, `unpin`, `mute`, `unmute`
+  - `clear`, `delete_for_me`, `delete_chat`
+  - `mark_read`, `mark_unread`
+  - `star`, `unstar`
+- `group`
+  - metadata, create, leave, invite, participant and settings operations
+- `community`
+  - metadata, link, invite, participant and settings operations
+- `newsletter`
+  - creation, metadata, follow, mute, fetch, reaction and ownership operations
+- `profile`
+  - profile picture, status, name, block and business profile operations
+- `privacy`
+  - privacy fetch and privacy update operations
+- `call`
+  - reject and create link
+
+### Compatibility
+
+The gateway still accepts the legacy outbound message-send payload on the same
+subject.
+
+That legacy payload is interpreted as:
+
+- `family = message`
+- `action = send`
+
+New integrations should publish explicit family-based commands.
+
+### Command Result Semantics
+
+Every accepted outbound command produces one generic execution result on:
+
+- `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-result`
+
+Result status values:
+
+- `succeeded`
+- `failed`
+- `blocked`
+
+Important:
+
+- `command-result` is the primary execution acknowledgement for all families
+- `message/send` also continues to emit the delivery lifecycle on the `delivery` subject
+- non-message families should be tracked through `command-result`, not through `delivery`
+
+### Example: Presence Typing Indicator
+
+```json
+{
+  "commandId": "cmd-typing-001",
+  "session": {
+    "provider": "whatsapp-web",
+    "workspaceId": 1,
+    "sessionId": "primary"
+  },
+  "family": "presence",
+  "action": "update",
+  "chatId": "5511999999999@s.whatsapp.net",
+  "presence": "composing"
+}
+```
+
+### Example: Generic Command Result
+
+```json
+{
+  "commandId": "cmd-typing-001",
+  "session": {
+    "provider": "whatsapp-web",
+    "workspaceId": 1,
+    "sessionId": "primary"
+  },
+  "family": "presence",
+  "action": "update",
+  "status": "succeeded",
+  "timestamp": "2026-04-04T12:00:00.000Z"
+}
+```
 
 ## Session Ownership Semantics
 
@@ -427,11 +530,13 @@ Best for control-plane consumers or admin APIs.
 
 ### Pattern 3: Outbound Messaging
 
-Best for asynchronous send paths.
+Best for asynchronous command execution, including sends, typing indicators,
+read receipts and chat operations.
 
 1. ensure the target session exists and is active through REST
 2. publish outbound command through NATS
-3. consume delivery events through NATS
+3. consume `command-result`
+4. for `message/send`, also consume delivery events through NATS
 
 Do not convert outbound messaging to synchronous HTTP unless you have a concrete operational reason and owner-aware routing strategy.
 

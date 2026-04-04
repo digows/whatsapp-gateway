@@ -12,7 +12,7 @@ export class NatsSubjectBuilder {
 
   public static getSessionSubject(
     session: SessionReference,
-    eventType: 'incoming' | 'outgoing' | 'delivery' | 'status',
+    eventType: 'incoming' | 'outgoing' | 'delivery' | 'command_result' | 'status',
   ): string {
     const template = this.getSessionTemplate(eventType);
     return renderConfigTemplate(template, {
@@ -36,13 +36,14 @@ export class NatsSubjectBuilder {
       env.NATS_SUBJECT_INBOUND_TEMPLATE,
       env.NATS_SUBJECT_OUTBOUND_TEMPLATE,
       env.NATS_SUBJECT_DELIVERY_TEMPLATE,
+      env.NATS_SUBJECT_COMMAND_RESULT_TEMPLATE,
       env.NATS_SUBJECT_STATUS_TEMPLATE,
       env.NATS_SUBJECT_ACTIVATION_TEMPLATE,
     ].map(template => this.toJetStreamSubjectPattern(template, providerId));
   }
 
   private static getSessionTemplate(
-    eventType: 'incoming' | 'outgoing' | 'delivery' | 'status',
+    eventType: 'incoming' | 'outgoing' | 'delivery' | 'command_result' | 'status',
   ): string {
     switch (eventType) {
       case 'incoming':
@@ -51,6 +52,8 @@ export class NatsSubjectBuilder {
         return env.NATS_SUBJECT_OUTBOUND_TEMPLATE;
       case 'delivery':
         return env.NATS_SUBJECT_DELIVERY_TEMPLATE;
+      case 'command_result':
+        return env.NATS_SUBJECT_COMMAND_RESULT_TEMPLATE;
       case 'status':
         return env.NATS_SUBJECT_STATUS_TEMPLATE;
     }

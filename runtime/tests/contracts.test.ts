@@ -3,6 +3,20 @@ import test from 'node:test';
 import { ActivationMode, parseActivationMode } from '../src/domain/entities/activation/ActivationMode.js';
 import { AuthenticationStateType } from '../src/domain/entities/authentication/AuthenticationStateType.js';
 import {
+  parseCallCommandAction,
+  parseCallType,
+  parseChatCommandAction,
+  parseGroupCommandAction,
+  parseNewsletterCommandAction,
+  parseOutboundCommandFamily,
+  parsePresenceCommandAction,
+  parsePresenceType,
+  parsePrivacyCommandAction,
+  parseProfileCommandAction,
+  parseReadCommandAction,
+} from '../src/domain/entities/command/OutboundCommand.js';
+import { OutboundCommandResultStatus, parseOutboundCommandResultStatus } from '../src/domain/entities/command/OutboundCommandResult.js';
+import {
   parseButtonReplyType,
   parseEventCallType,
   parsePinMessageAction,
@@ -59,6 +73,18 @@ test('domain parsers reject unsupported external values', () => {
   assert.equal(parseMessageUpdateKind('content'), MessageUpdateKind.Content);
   assert.equal(parseMessageUpdateKind('poll'), MessageUpdateKind.Poll);
   assert.equal(parseMessageUpdateKind('reaction'), MessageUpdateKind.Reaction);
+  assert.equal(parseOutboundCommandFamily('presence'), 'presence');
+  assert.equal(parsePresenceCommandAction('update'), 'update');
+  assert.equal(parsePresenceType('paused'), 'paused');
+  assert.equal(parseReadCommandAction('send_receipt'), 'send_receipt');
+  assert.equal(parseChatCommandAction('archive'), 'archive');
+  assert.equal(parseGroupCommandAction('participants_update'), 'participants_update');
+  assert.equal(parseNewsletterCommandAction('metadata'), 'metadata');
+  assert.equal(parseProfileCommandAction('update_profile_status'), 'update_profile_status');
+  assert.equal(parsePrivacyCommandAction('fetch_settings'), 'fetch_settings');
+  assert.equal(parseCallCommandAction('create_link'), 'create_link');
+  assert.equal(parseCallType('audio'), 'audio');
+  assert.equal(parseOutboundCommandResultStatus('succeeded'), OutboundCommandResultStatus.Succeeded);
 
   assert.throws(() => {
     parseWorkerCommandAction('restart_session');
@@ -91,6 +117,18 @@ test('domain parsers reject unsupported external values', () => {
   assert.throws(() => {
     parseMessageUpdateKind('delivery');
   }, /Unsupported message update kind/);
+
+  assert.throws(() => {
+    parseOutboundCommandFamily('history');
+  }, /Unsupported outbound command family/);
+
+  assert.throws(() => {
+    parsePresenceType('typing');
+  }, /Unsupported presence type/);
+
+  assert.throws(() => {
+    parseOutboundCommandResultStatus('partial');
+  }, /Unsupported outbound command result status/);
 });
 
 test('AuthenticationStateType centralizes known key kinds', () => {

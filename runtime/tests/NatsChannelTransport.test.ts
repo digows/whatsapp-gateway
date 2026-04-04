@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { PresenceCommand, PresenceCommandAction, PresenceType } from '../src/domain/entities/command/OutboundCommand.js';
 import { EventMessageContent, PinMessageContent, TextMessageContent } from '../src/domain/entities/messaging/MessageContent.js';
 import { NatsChannelTransport } from '../src/infrastructure/nats/NatsChannelTransport.js';
 
@@ -108,4 +109,25 @@ test('NatsChannelTransport accepts null optional event location payloads', () =>
 
   assert.ok(command.message.content instanceof EventMessageContent);
   assert.equal(command.message.content.location, undefined);
+});
+
+test('NatsChannelTransport parses presence commands on the shared outgoing rail', () => {
+  const transport = new NatsChannelTransport('whatsapp-web') as any;
+
+  const command = transport.parseOutboundCommand({
+    family: 'presence',
+    action: 'update',
+    commandId: 'command-4',
+    session: {
+      provider: 'whatsapp-web',
+      workspaceId: 1,
+      sessionId: 'primary',
+    },
+    chatId: '5511999999999@s.whatsapp.net',
+    presence: 'composing',
+  });
+
+  assert.ok(command instanceof PresenceCommand);
+  assert.equal(command.action, PresenceCommandAction.Update);
+  assert.equal(command.presence, PresenceType.Composing);
 });

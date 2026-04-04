@@ -23,6 +23,78 @@ import {
   ActivationStartedEvent,
 } from '../../domain/entities/activation/ActivationEvent.js';
 import {parseActivationMode} from '../../domain/entities/activation/ActivationMode.js';
+import {
+  BlockAction,
+  CallCommand,
+  CallCommandAction,
+  CallType,
+  ChatCommand,
+  ChatCommandAction,
+  CommandMessageKey,
+  CommunityCommand,
+  CommunityCommandAction,
+  GroupCommand,
+  GroupCommandAction,
+  GroupJoinApprovalMode,
+  GroupJoinRequestAction,
+  GroupMemberAddMode,
+  GroupSettingValue,
+  MessageReceiptType,
+  NewsletterCommand,
+  NewsletterCommandAction,
+  NewsletterLookupType,
+  OnlinePrivacyValue,
+  OutboundCommand,
+  OutboundCommandFamily,
+  parseBlockAction,
+  parseCallCommandAction,
+  parseCallType,
+  parseChatCommandAction,
+  parseCommunityCommandAction,
+  parseGroupCommandAction,
+  parseGroupJoinApprovalMode,
+  parseGroupJoinRequestAction,
+  parseGroupMemberAddMode,
+  parseGroupSettingValue,
+  parseMessageReceiptType,
+  parseNewsletterCommandAction,
+  parseNewsletterLookupType,
+  parseOnlinePrivacyValue,
+  parseOutboundCommandFamily,
+  parseParticipantAction,
+  parsePresenceCommandAction,
+  parsePresenceType,
+  parsePrivacyCommandAction,
+  parsePrivacyValue,
+  parseProfileCommandAction,
+  parseProfilePictureType,
+  parseGroupsAddPrivacyValue,
+  parseReadCommandAction,
+  parseReadReceiptsPrivacyValue,
+  parseCallPrivacyValue,
+  parseMessagesPrivacyValue,
+  ParticipantAction,
+  PresenceCommand,
+  PresenceCommandAction,
+  PresenceType,
+  PrivacyCommand,
+  PrivacyCommandAction,
+  PrivacyValue,
+  ProfileCommand,
+  ProfileCommandAction,
+  ProfilePictureType,
+  GroupsAddPrivacyValue,
+  ReadCommand,
+  ReadCommandAction,
+  ReadReceiptsPrivacyValue,
+  CallPrivacyValue,
+  MessagesPrivacyValue,
+} from '../../domain/entities/command/OutboundCommand.js';
+import {
+  OutboundCommandResult,
+  OutboundCommandResultStatus,
+  parseOutboundCommandResultStatus,
+} from '../../domain/entities/command/OutboundCommandResult.js';
 import {DeliveryResult,} from '../../domain/entities/messaging/DeliveryResult.js';
 import {
   InboundEvent,
@@ -77,7 +149,7 @@ import {CommandClaimStatus, CommandKind, RedisCommandDeduplicator,} from '../red
 import {RedisConnection} from '../redis/RedisConnection.js';
 
 type WorkerCommandHandler = (command: WorkerCommand) => Promise<void>;
-type OutgoingHandler = (command: SendMessageCommand) => Promise<void>;
+type OutgoingHandler = (command: OutboundCommand) => Promise<void>;
 type BrokerSubscription = Subscription | JetStreamSubscription;
 type BrokerMessageHandling = 'ack' | 'retry';
 
@@ -91,6 +163,7 @@ export class NatsChannelTransport implements WorkerTransport {
   private readonly activationCodec = JSONCodec<unknown>();
   private readonly inboundCodec = JSONCodec<unknown>();
   private readonly deliveryCodec = JSONCodec<unknown>();
+  private readonly commandResultCodec = JSONCodec<unknown>();
   private readonly sessionStatusCodec = JSONCodec<unknown>();
 
   private workerSubscription?: BrokerSubscription;
@@ -208,7 +281,7 @@ export class NatsChannelTransport implements WorkerTransport {
     void this.consume(
       subscription,
       this.outboundCodec,
-      payload => handler(this.parseSendMessageCommand(payload)),
+      payload => handler(this.parseOutboundCommand(payload)),
       '[NATS] Failed to process outbound command:',
     );
   }
@@ -251,6 +324,24 @@ export class NatsChannelTransport implements WorkerTransport {
         timestamp: event.timestamp,
       }),
       this.buildDeliveryMessageId(event),
+    );
+  }
+
+  public async publishCommandResult(event: OutboundCommandResult): Promise<void> {
+    const subject = NatsSubjectBuilder.getSessionSubject(event.session, 'command_result');
+    await this.publish(
+      subject,
+      this.commandResultCodec.encode({
+        commandId: event.commandId,
+        session: this.serializeSession(event.session),
+        family: event.family,
+        action: event.action,
+        status: event.status,
+        timestamp: event.timestamp,
+        reason: event.reason,
+        data: event.data,
+      }),
+      this.buildCommandResultMessageId(event),
     );
   }
 
@@ -385,7 +476,7 @@ export class NatsChannelTransport implements WorkerTransport {
     handler: OutgoingHandler,
   ): Promise<BrokerMessageHandling> {
     try {
-      const command = this.parseSendMessageCommand(payload);
+      const command = this.parseOutboundCommand(payload);
       return this.runDeduplicatedCommand(
         command.session,
         CommandKind.Outbound,
@@ -569,12 +660,282 @@ export class NatsChannelTransport implements WorkerTransport {
     );
   }
 
+  private parseOutboundCommand(payload: unknown): OutboundCommand {
+    const payloadRecord = this.requireRecord(payload, 'outgoing command');
+    const rawFamily = payloadRecord.family;
+
+    if (rawFamily == null) {
+      return this.parseSendMessageCommand(payloadRecord);
+    }
+
+    switch (parseOutboundCommandFamily(this.readRequiredString(payloadRecord, 'family', 'outgoing command'))) {
+      case OutboundCommandFamily.Message:
+        return this.parseSendMessageCommand(payloadRecord);
+      case OutboundCommandFamily.Presence:
+        return this.parsePresenceCommand(payloadRecord);
+      case OutboundCommandFamily.Read:
+        return this.parseReadCommand(payloadRecord);
+      case OutboundCommandFamily.Chat:
+        return this.parseChatCommand(payloadRecord);
+      case OutboundCommandFamily.Group:
+        return this.parseGroupCommand(payloadRecord);
+      case OutboundCommandFamily.Community:
+        return this.parseCommunityCommand(payloadRecord);
+      case OutboundCommandFamily.Newsletter:
+        return this.parseNewsletterCommand(payloadRecord);
+      case OutboundCommandFamily.Profile:
+        return this.parseProfileCommand(payloadRecord);
+      case OutboundCommandFamily.Privacy:
+        return this.parsePrivacyCommand(payloadRecord);
+      case OutboundCommandFamily.Call:
+        return this.parseCallCommand(payloadRecord);
+    }
+  }
+
   private parseSendMessageCommand(payload: unknown): SendMessageCommand {
     const payloadRecord = this.requireRecord(payload, 'outgoing command');
     return new SendMessageCommand(
       this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
       this.parseSession(payloadRecord.session, 'outgoing command session'),
       this.parseMessage(payloadRecord.message, 'outgoing command message'),
+    );
+  }
+
+  private parsePresenceCommand(payloadRecord: Record<string, unknown>): PresenceCommand {
+    const action = parsePresenceCommandAction(
+      this.readRequiredString(payloadRecord, 'action', 'outgoing command'),
+    );
+
+    return new PresenceCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      action,
+      this.readRequiredString(payloadRecord, 'chatId', 'outgoing command'),
+      action === PresenceCommandAction.Update
+        ? parsePresenceType(this.readRequiredString(payloadRecord, 'presence', 'outgoing command'))
+        : undefined,
+    );
+  }
+
+  private parseReadCommand(payloadRecord: Record<string, unknown>): ReadCommand {
+    const action = parseReadCommandAction(
+      this.readRequiredString(payloadRecord, 'action', 'outgoing command'),
+    );
+
+    return new ReadCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      action,
+      action === ReadCommandAction.ReadMessages
+        ? this.readOptionalArray(payloadRecord, 'messages', 'outgoing command')
+          .map((entry, index) => this.parseCommandMessageKey(entry, `outgoing command messages[${index}]`))
+        : [],
+      this.readOptionalString(payloadRecord, 'chatId', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'participantId', 'outgoing command'),
+      this.readOptionalStringArray(payloadRecord, 'messageIds', 'outgoing command'),
+      action === ReadCommandAction.SendReceipt
+        ? parseMessageReceiptType(this.readRequiredString(payloadRecord, 'receiptType', 'outgoing command'))
+        : undefined,
+    );
+  }
+
+  private parseChatCommand(payloadRecord: Record<string, unknown>): ChatCommand {
+    return new ChatCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      parseChatCommandAction(this.readRequiredString(payloadRecord, 'action', 'outgoing command')),
+      this.readRequiredString(payloadRecord, 'chatId', 'outgoing command'),
+      this.readOptionalArray(payloadRecord, 'lastMessages', 'outgoing command')
+        .map((entry, index) => this.parseCommandMessageKey(entry, `outgoing command lastMessages[${index}]`)),
+      payloadRecord.targetMessage == null
+        ? undefined
+        : this.parseCommandMessageKey(payloadRecord.targetMessage, 'outgoing command targetMessage'),
+      this.readOptionalArray(payloadRecord, 'messageReferences', 'outgoing command')
+        .map((entry, index) => this.parseCommandMessageKey(entry, `outgoing command messageReferences[${index}]`)),
+      this.readOptionalNullableNumber(payloadRecord, 'muteDurationMs', 'outgoing command'),
+      this.readOptionalBoolean(payloadRecord, 'deleteMedia', 'outgoing command'),
+      this.readOptionalNumber(payloadRecord, 'deleteTimestamp', 'outgoing command'),
+    );
+  }
+
+  private parseGroupCommand(payloadRecord: Record<string, unknown>): GroupCommand {
+    return new GroupCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      parseGroupCommandAction(this.readRequiredString(payloadRecord, 'action', 'outgoing command')),
+      this.readOptionalString(payloadRecord, 'groupJid', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'subject', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'description', 'outgoing command'),
+      this.readOptionalStringArray(payloadRecord, 'participants', 'outgoing command'),
+      payloadRecord.participantAction == null
+        ? undefined
+        : parseParticipantAction(
+          this.readRequiredString(payloadRecord, 'participantAction', 'outgoing command'),
+        ),
+      payloadRecord.requestAction == null
+        ? undefined
+        : parseGroupJoinRequestAction(
+          this.readRequiredString(payloadRecord, 'requestAction', 'outgoing command'),
+        ),
+      this.readOptionalString(payloadRecord, 'inviteCode', 'outgoing command'),
+      this.readOptionalNumber(payloadRecord, 'ephemeralExpiration', 'outgoing command'),
+      payloadRecord.setting == null
+        ? undefined
+        : parseGroupSettingValue(this.readRequiredString(payloadRecord, 'setting', 'outgoing command')),
+      payloadRecord.memberAddMode == null
+        ? undefined
+        : parseGroupMemberAddMode(this.readRequiredString(payloadRecord, 'memberAddMode', 'outgoing command')),
+      payloadRecord.joinApprovalMode == null
+        ? undefined
+        : parseGroupJoinApprovalMode(
+          this.readRequiredString(payloadRecord, 'joinApprovalMode', 'outgoing command'),
+        ),
+    );
+  }
+
+  private parseCommunityCommand(payloadRecord: Record<string, unknown>): CommunityCommand {
+    return new CommunityCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      parseCommunityCommandAction(this.readRequiredString(payloadRecord, 'action', 'outgoing command')),
+      this.readOptionalString(payloadRecord, 'communityJid', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'subject', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'description', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'groupJid', 'outgoing command'),
+      this.readOptionalStringArray(payloadRecord, 'participants', 'outgoing command'),
+      payloadRecord.participantAction == null
+        ? undefined
+        : parseParticipantAction(
+          this.readRequiredString(payloadRecord, 'participantAction', 'outgoing command'),
+        ),
+      payloadRecord.requestAction == null
+        ? undefined
+        : parseGroupJoinRequestAction(
+          this.readRequiredString(payloadRecord, 'requestAction', 'outgoing command'),
+        ),
+      this.readOptionalString(payloadRecord, 'inviteCode', 'outgoing command'),
+      this.readOptionalNumber(payloadRecord, 'ephemeralExpiration', 'outgoing command'),
+      payloadRecord.setting == null
+        ? undefined
+        : parseGroupSettingValue(this.readRequiredString(payloadRecord, 'setting', 'outgoing command')),
+      payloadRecord.memberAddMode == null
+        ? undefined
+        : parseGroupMemberAddMode(this.readRequiredString(payloadRecord, 'memberAddMode', 'outgoing command')),
+      payloadRecord.joinApprovalMode == null
+        ? undefined
+        : parseGroupJoinApprovalMode(
+          this.readRequiredString(payloadRecord, 'joinApprovalMode', 'outgoing command'),
+        ),
+    );
+  }
+
+  private parseNewsletterCommand(payloadRecord: Record<string, unknown>): NewsletterCommand {
+    return new NewsletterCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      parseNewsletterCommandAction(this.readRequiredString(payloadRecord, 'action', 'outgoing command')),
+      this.readOptionalString(payloadRecord, 'newsletterJid', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'name', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'description', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'pictureUrl', 'outgoing command'),
+      payloadRecord.lookupType == null
+        ? undefined
+        : parseNewsletterLookupType(this.readRequiredString(payloadRecord, 'lookupType', 'outgoing command')),
+      this.readOptionalString(payloadRecord, 'lookupKey', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'serverId', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'reactionText', 'outgoing command'),
+      this.readOptionalNumber(payloadRecord, 'count', 'outgoing command'),
+      this.readOptionalNumber(payloadRecord, 'since', 'outgoing command'),
+      this.readOptionalNumber(payloadRecord, 'after', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'newOwnerJid', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'userJid', 'outgoing command'),
+    );
+  }
+
+  private parseProfileCommand(payloadRecord: Record<string, unknown>): ProfileCommand {
+    return new ProfileCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      parseProfileCommandAction(this.readRequiredString(payloadRecord, 'action', 'outgoing command')),
+      this.readOptionalString(payloadRecord, 'jid', 'outgoing command'),
+      payloadRecord.pictureType == null
+        ? undefined
+        : parseProfilePictureType(
+          this.readRequiredString(payloadRecord, 'pictureType', 'outgoing command'),
+        ),
+      this.readOptionalString(payloadRecord, 'mediaUrl', 'outgoing command'),
+      payloadRecord.dimensions == null
+        ? undefined
+        : this.parseMediaDimensions(payloadRecord.dimensions, 'outgoing command dimensions'),
+      this.readOptionalString(payloadRecord, 'statusText', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'profileName', 'outgoing command'),
+      payloadRecord.blockAction == null
+        ? undefined
+        : parseBlockAction(this.readRequiredString(payloadRecord, 'blockAction', 'outgoing command')),
+      this.readOptionalStringArray(payloadRecord, 'jids', 'outgoing command'),
+    );
+  }
+
+  private parsePrivacyCommand(payloadRecord: Record<string, unknown>): PrivacyCommand {
+    return new PrivacyCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      parsePrivacyCommandAction(this.readRequiredString(payloadRecord, 'action', 'outgoing command')),
+      this.readOptionalBoolean(payloadRecord, 'previewsDisabled', 'outgoing command'),
+      payloadRecord.callPrivacy == null
+        ? undefined
+        : parseCallPrivacyValue(this.readRequiredString(payloadRecord, 'callPrivacy', 'outgoing command')),
+      payloadRecord.messagesPrivacy == null
+        ? undefined
+        : parseMessagesPrivacyValue(
+          this.readRequiredString(payloadRecord, 'messagesPrivacy', 'outgoing command'),
+        ),
+      payloadRecord.lastSeenPrivacy == null
+        ? undefined
+        : parsePrivacyValue(
+          this.readRequiredString(payloadRecord, 'lastSeenPrivacy', 'outgoing command'),
+        ),
+      payloadRecord.onlinePrivacy == null
+        ? undefined
+        : parseOnlinePrivacyValue(
+          this.readRequiredString(payloadRecord, 'onlinePrivacy', 'outgoing command'),
+        ),
+      payloadRecord.profilePicturePrivacy == null
+        ? undefined
+        : parsePrivacyValue(
+          this.readRequiredString(payloadRecord, 'profilePicturePrivacy', 'outgoing command'),
+        ),
+      payloadRecord.statusPrivacy == null
+        ? undefined
+        : parsePrivacyValue(
+          this.readRequiredString(payloadRecord, 'statusPrivacy', 'outgoing command'),
+        ),
+      payloadRecord.readReceiptsPrivacy == null
+        ? undefined
+        : parseReadReceiptsPrivacyValue(
+          this.readRequiredString(payloadRecord, 'readReceiptsPrivacy', 'outgoing command'),
+        ),
+      payloadRecord.groupsAddPrivacy == null
+        ? undefined
+        : parseGroupsAddPrivacyValue(
+          this.readRequiredString(payloadRecord, 'groupsAddPrivacy', 'outgoing command'),
+        ),
+      this.readOptionalNumber(payloadRecord, 'defaultDisappearingModeSeconds', 'outgoing command'),
+    );
+  }
+
+  private parseCallCommand(payloadRecord: Record<string, unknown>): CallCommand {
+    return new CallCommand(
+      this.readRequiredString(payloadRecord, 'commandId', 'outgoing command'),
+      this.parseSession(payloadRecord.session, 'outgoing command session'),
+      parseCallCommandAction(this.readRequiredString(payloadRecord, 'action', 'outgoing command')),
+      this.readOptionalString(payloadRecord, 'callId', 'outgoing command'),
+      this.readOptionalString(payloadRecord, 'callFrom', 'outgoing command'),
+      payloadRecord.callType == null
+        ? undefined
+        : parseCallType(this.readRequiredString(payloadRecord, 'callType', 'outgoing command')),
+      this.readOptionalNumber(payloadRecord, 'startTime', 'outgoing command'),
+      this.readOptionalNumber(payloadRecord, 'timeoutMs', 'outgoing command'),
     );
   }
 
@@ -592,6 +953,31 @@ export class NatsChannelTransport implements WorkerTransport {
       provider: session.provider,
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
+    };
+  }
+
+  private parseCommandMessageKey(payload: unknown, label: string): CommandMessageKey {
+    const payloadRecord = this.requireRecord(payload, label);
+    return new CommandMessageKey(
+      this.parseMessageReference(payloadRecord.reference, `${label} reference`),
+      this.readOptionalNumber(payloadRecord, 'timestamp', label),
+      this.readOptionalBoolean(payloadRecord, 'fromMe', label),
+    );
+  }
+
+  private serializeCommandMessageKey(messageKey: CommandMessageKey): Record<string, unknown> {
+    return {
+      reference: this.serializeMessageReference(messageKey.reference),
+      timestamp: messageKey.timestamp,
+      fromMe: messageKey.fromMe,
+    };
+  }
+
+  private parseMediaDimensions(payload: unknown, label: string): { width: number; height: number } {
+    const payloadRecord = this.requireRecord(payload, label);
+    return {
+      width: this.readRequiredNumber(payloadRecord, 'width', label),
+      height: this.readRequiredNumber(payloadRecord, 'height', label),
     };
   }
 
@@ -1211,6 +1597,12 @@ export class NatsChannelTransport implements WorkerTransport {
     );
   }
 
+  private buildCommandResultMessageId(event: OutboundCommandResult): string {
+    return this.sanitizeMessageId(
+      `command-result:${event.session.toKey()}:${event.commandId}:${event.family}:${event.action}:${event.status}`,
+    );
+  }
+
   private buildSessionStatusMessageId(event: SessionStatusEvent): string {
     return this.sanitizeMessageId(
       `status:${event.session.toKey()}:${event.status}:${event.timestamp}`,
@@ -1299,6 +1691,27 @@ export class NatsChannelTransport implements WorkerTransport {
     const value = source[key];
     if (value === undefined || value === null) {
       return undefined;
+    }
+
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error(`${label}.${key} must be a finite number when provided.`);
+    }
+
+    return value;
+  }
+
+  private readOptionalNullableNumber(
+    source: Record<string, unknown>,
+    key: string,
+    label: string,
+  ): number | null | undefined {
+    const value = source[key];
+    if (value === undefined) {
+      return undefined;
+    }
+
+    if (value === null) {
+      return null;
     }
 
     if (typeof value !== 'number' || !Number.isFinite(value)) {

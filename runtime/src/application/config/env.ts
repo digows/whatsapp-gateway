@@ -72,6 +72,7 @@ const envSchema = z.object({
   NATS_SUBJECT_INBOUND_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.incoming'),
   NATS_SUBJECT_OUTBOUND_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.outgoing'),
   NATS_SUBJECT_DELIVERY_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.delivery'),
+  NATS_SUBJECT_COMMAND_RESULT_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-result'),
   NATS_SUBJECT_STATUS_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.status'),
   NATS_SUBJECT_ACTIVATION_TEMPLATE: z.string().default('gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.activation'),
 

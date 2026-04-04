@@ -47,6 +47,10 @@ test('NatsSubjectBuilder uses the configured default subjects', () => {
     'gateway.v1.channel.whatsapp-web.session.7.session-a.delivery',
   );
   assert.equal(
+    NatsSubjectBuilder.getSessionSubject(session, 'command_result'),
+    'gateway.v1.channel.whatsapp-web.session.7.session-a.command-result',
+  );
+  assert.equal(
     NatsSubjectBuilder.getSessionSubject(session, 'status'),
     'gateway.v1.channel.whatsapp-web.session.7.session-a.status',
   );
@@ -61,6 +65,7 @@ test('NatsSubjectBuilder uses the configured default subjects', () => {
       'gateway.v1.channel.whatsapp-web.session.*.*.incoming',
       'gateway.v1.channel.whatsapp-web.session.*.*.outgoing',
       'gateway.v1.channel.whatsapp-web.session.*.*.delivery',
+      'gateway.v1.channel.whatsapp-web.session.*.*.command-result',
       'gateway.v1.channel.whatsapp-web.session.*.*.status',
       'gateway.v1.channel.whatsapp-web.session.*.*.activation',
     ],

@@ -25,6 +25,7 @@ class FakeWorkerTransport implements WorkerTransport {
   public async publishActivation(): Promise<void> {}
   public async publishInbound(): Promise<void> {}
   public async publishDelivery(): Promise<void> {}
+  public async publishCommandResult(): Promise<void> {}
   public async publishSessionStatus(): Promise<void> {}
 }
 

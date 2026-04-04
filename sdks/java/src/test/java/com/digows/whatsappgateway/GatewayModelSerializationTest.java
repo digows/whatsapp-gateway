@@ -4,6 +4,12 @@ import com.digows.whatsappgateway.activation.ActivationCompletedEvent;
 import com.digows.whatsappgateway.activation.ActivationEvent;
 import com.digows.whatsappgateway.activation.ActivationMode;
 import com.digows.whatsappgateway.activation.ActivationQrCodeUpdatedEvent;
+import com.digows.whatsappgateway.command.CommandMessageKey;
+import com.digows.whatsappgateway.command.OutboundCommand;
+import com.digows.whatsappgateway.command.OutboundCommandResult;
+import com.digows.whatsappgateway.command.OutboundCommandResultStatus;
+import com.digows.whatsappgateway.command.PresenceCommand;
+import com.digows.whatsappgateway.command.ReadCommand;
 import com.digows.whatsappgateway.messaging.ChatType;
 import com.digows.whatsappgateway.messaging.DeleteMessageContent;
 import com.digows.whatsappgateway.messaging.InboundEvent;
@@ -28,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -226,5 +233,69 @@ class GatewayModelSerializationTest
     Message restoredMessage = objectMapper.readValue(messageJson, Message.class);
     PinMessageContent restoredContent = assertInstanceOf(PinMessageContent.class, restoredMessage.content());
     assertEquals(PinMessageDurationSeconds.SEVEN_DAYS, restoredContent.durationSeconds());
+  }
+
+  @Test
+  void serializesAndDeserializesOutboundCommandsAndCommandResults() throws Exception
+  {
+    OutboundCommand presenceCommand = new PresenceCommand(
+      "command-presence-1",
+      new SessionReference("whatsapp-web", 1, "primary"),
+      PresenceCommand.Action.UPDATE,
+      "5511999999999@s.whatsapp.net",
+      PresenceCommand.PresenceType.COMPOSING
+    );
+
+    String presenceJson = objectMapper.writeValueAsString(presenceCommand);
+    assertTrue(presenceJson.contains("\"family\":\"presence\""));
+    assertTrue(presenceJson.contains("\"action\":\"update\""));
+    assertTrue(presenceJson.contains("\"presence\":\"composing\""));
+
+    OutboundCommand restoredPresence = objectMapper.readValue(presenceJson, OutboundCommand.class);
+    PresenceCommand restoredPresenceCommand = assertInstanceOf(PresenceCommand.class, restoredPresence);
+    assertEquals(PresenceCommand.Action.UPDATE, restoredPresenceCommand.action());
+    assertEquals(PresenceCommand.PresenceType.COMPOSING, restoredPresenceCommand.presence());
+
+    OutboundCommand readCommand = new ReadCommand(
+      "command-read-1",
+      new SessionReference("whatsapp-web", 1, "primary"),
+      ReadCommand.Action.READ_MESSAGES,
+      List.of(
+        new CommandMessageKey(
+          new MessageReference("wamid-read-1", "5511999999999@s.whatsapp.net", null),
+          1712080000L,
+          false
+        )
+      ),
+      null,
+      null,
+      List.of(),
+      null
+    );
+
+    String readJson = objectMapper.writeValueAsString(readCommand);
+    assertTrue(readJson.contains("\"family\":\"read\""));
+    assertTrue(readJson.contains("\"action\":\"read_messages\""));
+
+    OutboundCommand restoredRead = objectMapper.readValue(readJson, OutboundCommand.class);
+    ReadCommand restoredReadCommand = assertInstanceOf(ReadCommand.class, restoredRead);
+    assertEquals("wamid-read-1", restoredReadCommand.messages().get(0).reference().messageId());
+
+    OutboundCommandResult commandResult = new OutboundCommandResult(
+      "command-presence-1",
+      new SessionReference("whatsapp-web", 1, "primary"),
+      "presence",
+      "update",
+      OutboundCommandResultStatus.SUCCEEDED,
+      "2026-04-04T12:00:00Z",
+      null,
+      Map.of("chatId", "5511999999999@s.whatsapp.net", "presence", "composing")
+    );
+
+    String resultJson = objectMapper.writeValueAsString(commandResult);
+    assertTrue(resultJson.contains("\"status\":\"succeeded\""));
+    OutboundCommandResult restoredResult = objectMapper.readValue(resultJson, OutboundCommandResult.class);
+    assertEquals(OutboundCommandResultStatus.SUCCEEDED, restoredResult.status());
+    assertEquals("presence", restoredResult.family());
   }
 }

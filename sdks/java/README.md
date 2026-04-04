@@ -11,6 +11,7 @@ It contains:
 - durable session models
 - activation models and activation lifecycle events
 - messaging models and inbound/delivery events
+- outbound command models and generic command execution results
 - request models for the public REST API
 
 Session-observed lifecycle exposed by the SDK:
@@ -33,6 +34,25 @@ It does not contain:
 - Baileys internals
 - Redis, PostgreSQL or NATS infrastructure implementations
 - control-plane internals
+
+## Outbound Command Families
+
+The SDK mirrors the NATS outbound contract with typed models for:
+
+- `message`
+- `presence`
+- `read`
+- `chat`
+- `group`
+- `community`
+- `newsletter`
+- `profile`
+- `privacy`
+- `call`
+
+Use `OutboundCommandResult` to track generic execution outcomes across those
+families. For `message/send`, continue consuming the delivery lifecycle as the
+message-specific result rail.
 
 ## Coordinates
 
@@ -71,7 +91,7 @@ Add the dependency. For JitPack, the version is the Git tag or commit hash. Exam
 <dependency>
   <groupId>com.github.digows</groupId>
   <artifactId>whatsapp-gateway</artifactId>
-  <version>2.0.3</version>
+  <version>3.0.0</version>
 </dependency>
 ```
 
