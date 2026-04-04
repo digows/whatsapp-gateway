@@ -170,7 +170,7 @@ It gives you typed models for:
 - `DeliveryResult`
 - public REST request payloads
 
-Inbound messaging lifecycle is modeled as:
+Session-observed message lifecycle is modeled as:
 
 - `message.created`
 - `message.updated`
@@ -179,10 +179,18 @@ Inbound messaging lifecycle is modeled as:
 Reaction changes are not a separate top-level event. They are emitted as `message.updated`
 with `updateKinds` containing `reaction`, plus `reactionText` and `reactionRemoved`.
 
+`message.created` can represent both:
+
+- a remote-account message received by the session
+- a local-account message created by the session itself
+
+Use `fromMe` on the event to distinguish direction.
+
 For `message.updated` and `message.deleted`:
 
 - `targetMessage` identifies the logical WhatsApp message affected by the lifecycle change
 - `message` is optional and only present when the gateway can normalize a payload for the update
+- `fromMe` indicates whether the logical message belongs to the local account perspective
 - when `message` is present in an update, `message.timestamp` comes from the WhatsApp/Baileys
   `messageTimestamp` carried by that update payload, not from the gateway processing clock
 

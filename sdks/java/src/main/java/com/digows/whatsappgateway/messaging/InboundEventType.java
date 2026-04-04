@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 /**
- * Supported top-level inbound lifecycle categories emitted by the gateway.
+ * Supported top-level message lifecycle categories emitted by the gateway.
  * The lifecycle intentionally stays compact: create, update and delete.
  */
 public enum InboundEventType

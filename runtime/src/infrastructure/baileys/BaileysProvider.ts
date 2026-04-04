@@ -603,7 +603,7 @@ export class BaileysProvider {
         continue;
       }
 
-      if (normalized.content instanceof ReactionMessageContent || isFromMe) {
+      if (normalized.content instanceof ReactionMessageContent) {
         continue;
       }
 
@@ -611,6 +611,7 @@ export class BaileysProvider {
         this.session,
         normalized.timestamp,
         normalized,
+        isFromMe,
       );
 
       await this.callbacks.onInboundEvent(inboundEvent);

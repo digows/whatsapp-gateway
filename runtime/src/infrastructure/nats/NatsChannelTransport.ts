@@ -516,6 +516,7 @@ export class NatsChannelTransport implements WorkerTransport {
         session: this.serializeSession(event.session),
         timestamp: event.timestamp,
         message: this.serializeMessage(event.message),
+        fromMe: event.fromMe,
       };
     }
 

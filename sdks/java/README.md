@@ -13,7 +13,7 @@ It contains:
 - messaging models and inbound/delivery events
 - request models for the public REST API
 
-Inbound lifecycle exposed by the SDK:
+Session-observed lifecycle exposed by the SDK:
 
 - `message.created`
 - `message.updated`
@@ -22,9 +22,11 @@ Inbound lifecycle exposed by the SDK:
 Reaction changes are represented as `MessageUpdatedEvent` with
 `MessageUpdateKind.REACTION`, `reactionText` and `reactionRemoved`.
 
-For `MessageUpdatedEvent` and `MessageDeletedEvent`, `targetMessage` identifies the logical
-WhatsApp message affected by the lifecycle transition. When `MessageUpdatedEvent.message` is
-present, its timestamp reflects the WhatsApp/Baileys `messageTimestamp` from the update payload.
+`MessageCreatedEvent` can represent both remote-account and local-account messages. Use
+`fromMe` to distinguish direction. For `MessageUpdatedEvent` and `MessageDeletedEvent`,
+`targetMessage` identifies the logical WhatsApp message affected by the lifecycle transition.
+When `MessageUpdatedEvent.message` is present, its timestamp reflects the WhatsApp/Baileys
+`messageTimestamp` from the update payload.
 
 It does not contain:
 

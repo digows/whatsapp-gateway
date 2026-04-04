@@ -40,7 +40,7 @@ export function parseMessageUpdateKind(value: string): MessageUpdateKind {
 }
 
 /**
- * Emitted when WhatsApp delivers a new message payload into the session timeline.
+ * Emitted when the session observes a newly created WhatsApp message in the timeline.
  * The payload is always normalized to the canonical domain `Message`.
  */
 export class MessageCreatedEvent {
@@ -50,6 +50,7 @@ export class MessageCreatedEvent {
     public readonly session: SessionReference,
     public readonly timestamp: string,
     public readonly message: Message,
+    public readonly fromMe: boolean,
   ) {}
 }
 

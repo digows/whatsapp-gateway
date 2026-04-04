@@ -87,7 +87,8 @@ class GatewayModelSerializationTest
           null,
           false
         )
-      )
+      ),
+      true
     );
 
     String json = objectMapper.writeValueAsString(event);
@@ -100,6 +101,7 @@ class GatewayModelSerializationTest
     TextMessageContent content = assertInstanceOf(TextMessageContent.class, restoredEvent.message().content());
     assertEquals("hello", content.text());
     assertEquals(ChatType.DIRECT, restoredEvent.message().context().chatType());
+    assertTrue(restoredEvent.fromMe());
   }
 
   @Test
