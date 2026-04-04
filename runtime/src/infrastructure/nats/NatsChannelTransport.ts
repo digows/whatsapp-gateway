@@ -606,7 +606,7 @@ export class NatsChannelTransport implements WorkerTransport {
       this.readOptionalString(payloadRecord, 'messageId', label),
       this.readOptionalString(payloadRecord, 'senderId', label),
       this.readOptionalString(payloadRecord, 'participantId', label),
-      rawContext === undefined
+      rawContext == null
         ? undefined
         : this.parseMessageContext(rawContext, `${label} context`),
     );
@@ -650,10 +650,10 @@ export class NatsChannelTransport implements WorkerTransport {
       this.readOptionalString(payloadRecord, 'participantId', label),
       this.readOptionalString(payloadRecord, 'senderPhone', label),
       this.readOptionalStringArray(payloadRecord, 'mentionedJids', label),
-      payloadRecord.quotedMessage === undefined
+      payloadRecord.quotedMessage == null
         ? undefined
         : this.parseQuotedMessage(payloadRecord.quotedMessage, `${label} quotedMessage`),
-      payloadRecord.editTarget === undefined
+      payloadRecord.editTarget == null
         ? undefined
         : this.parseMessageReference(payloadRecord.editTarget, `${label} editTarget`),
       this.readOptionalBoolean(payloadRecord, 'forwarded', label) === true,
@@ -788,7 +788,7 @@ export class NatsChannelTransport implements WorkerTransport {
           this.readOptionalNumber(payloadRecord, 'startTimestamp', label),
           this.readOptionalString(payloadRecord, 'description', label),
           this.readOptionalNumber(payloadRecord, 'endTimestamp', label),
-          payloadRecord.location === undefined
+          payloadRecord.location == null
             ? undefined
             : this.parseLocationMessageContent(payloadRecord.location, `${label} location`),
           this.readOptionalString(payloadRecord, 'joinLink', label),
@@ -836,7 +836,7 @@ export class NatsChannelTransport implements WorkerTransport {
         return new PinMessageContent(
           this.parseMessageReference(payloadRecord.targetMessage, `${label} targetMessage`),
           parsePinMessageAction(this.readRequiredString(payloadRecord, 'action', label)),
-          payloadRecord.durationSeconds === undefined
+          payloadRecord.durationSeconds == null
             ? undefined
             : parsePinMessageDurationSeconds(
               this.readRequiredNumber(payloadRecord, 'durationSeconds', label),
@@ -1121,7 +1121,7 @@ export class NatsChannelTransport implements WorkerTransport {
     const payloadRecord = this.requireRecord(payload, label);
     return new QuotedMessage(
       this.parseMessageReference(payloadRecord.reference, `${label} reference`),
-      payloadRecord.content === undefined
+      payloadRecord.content == null
         ? undefined
         : this.parseMessageContent(payloadRecord.content, `${label} content`),
     );
