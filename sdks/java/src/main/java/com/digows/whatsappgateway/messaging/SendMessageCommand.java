@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Outbound command that sends one WhatsApp message through one hosted session.
- * This remains the legacy/default outbound command on the shared NATS outgoing rail.
+ * It is published on the message command family subject.
  */
 public record SendMessageCommand(
   String commandId,

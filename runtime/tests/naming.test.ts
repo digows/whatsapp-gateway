@@ -3,6 +3,7 @@ import test from 'node:test';
 import { renderConfigTemplate } from '../src/application/config/renderConfigTemplate.js';
 import { AuthenticationStateKey } from '../src/domain/entities/authentication/AuthenticationStateKey.js';
 import { AuthenticationStateType } from '../src/domain/entities/authentication/AuthenticationStateType.js';
+import { OutboundCommandFamily } from '../src/domain/entities/command/OutboundCommand.js';
 import { SessionReference } from '../src/domain/entities/operational/SessionReference.js';
 import { NatsSubjectBuilder } from '../src/infrastructure/nats/NatsSubjectBuilder.js';
 import { CommandKind } from '../src/infrastructure/redis/RedisCommandDeduplicator.js';
@@ -39,16 +40,16 @@ test('NatsSubjectBuilder uses the configured default subjects', () => {
     'gateway.v1.channel.whatsapp-web.session.7.session-a.incoming',
   );
   assert.equal(
-    NatsSubjectBuilder.getSessionSubject(session, 'outgoing'),
-    'gateway.v1.channel.whatsapp-web.session.7.session-a.outgoing',
+    NatsSubjectBuilder.getCommandSubject(session, OutboundCommandFamily.Presence),
+    'gateway.v1.channel.whatsapp-web.session.7.session-a.commands.presence',
   );
   assert.equal(
     NatsSubjectBuilder.getSessionSubject(session, 'delivery'),
     'gateway.v1.channel.whatsapp-web.session.7.session-a.delivery',
   );
   assert.equal(
-    NatsSubjectBuilder.getSessionSubject(session, 'command_result'),
-    'gateway.v1.channel.whatsapp-web.session.7.session-a.command-result',
+    NatsSubjectBuilder.getCommandResultSubject(session, OutboundCommandFamily.Presence),
+    'gateway.v1.channel.whatsapp-web.session.7.session-a.command-results.presence',
   );
   assert.equal(
     NatsSubjectBuilder.getSessionSubject(session, 'status'),
@@ -63,9 +64,9 @@ test('NatsSubjectBuilder uses the configured default subjects', () => {
     [
       'gateway.v1.channel.whatsapp-web.worker.*.control',
       'gateway.v1.channel.whatsapp-web.session.*.*.incoming',
-      'gateway.v1.channel.whatsapp-web.session.*.*.outgoing',
+      'gateway.v1.channel.whatsapp-web.session.*.*.commands.*',
       'gateway.v1.channel.whatsapp-web.session.*.*.delivery',
-      'gateway.v1.channel.whatsapp-web.session.*.*.command-result',
+      'gateway.v1.channel.whatsapp-web.session.*.*.command-results.*',
       'gateway.v1.channel.whatsapp-web.session.*.*.status',
       'gateway.v1.channel.whatsapp-web.session.*.*.activation',
     ],

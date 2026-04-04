@@ -31,10 +31,10 @@ Supported command families:
 
 ## Entry Point
 
-The actor publishes a command payload to the rendered NATS `outgoing` subject
-for a specific session:
+The actor publishes a command payload to the rendered family-specific command
+subject for a specific session:
 
-- `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.outgoing`
+- `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.commands.{family}`
 
 ## Core Flow
 
@@ -42,7 +42,7 @@ for a specific session:
 2. the transport validates and parses the payload into a typed `OutboundCommand`
 3. the worker host resolves the current hosted session runtime
 4. the provider executes the typed command against Baileys
-5. the transport publishes a `command-result` event
+5. the transport publishes a `command-results.{family}` event
 6. when the family is `message` and the action is `send`, the transport also
    publishes the existing delivery lifecycle event
 
@@ -53,24 +53,23 @@ for a specific session:
 - every outbound command must declare `family`
 - every outbound command must declare `action`
 - unsupported family or action values must be rejected during parsing
-- every accepted outbound command must produce exactly one `command-result`
+- every accepted outbound command must produce exactly one `command-results.{family}`
 - `message/send` must keep the existing delivery contract in addition to
-  `command-result`
+  `command-results.message`
 - integrations must not depend on pod affinity; the addressed session may move
   between workers while preserving the same subject contract
 
 ## Backward Compatibility
 
-- the `outgoing` subject still accepts the legacy message-send payload that does
-  not declare `family`
-- the legacy payload is interpreted as `family=message` and `action=send`
-- new integrations should publish family-based commands explicitly
+- there is no compatibility path for the old shared `outgoing` subject
+- every command payload must declare `family`
+- every command payload must be published to the corresponding `commands.{family}` subject
 
 ## Result Contract
 
 Generic execution results are published to:
 
-- `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-result`
+- `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-results.{family}`
 
 The result carries:
 
@@ -113,7 +112,7 @@ Status values:
 External systems should:
 
 - publish typed commands
-- observe `command-result`
+- observe `command-results.{family}`
 - observe `delivery` when sending messages
 
 External systems should not:

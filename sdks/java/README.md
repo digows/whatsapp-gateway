@@ -91,7 +91,7 @@ Add the dependency. For JitPack, the version is the Git tag or commit hash. Exam
 <dependency>
   <groupId>com.github.digows</groupId>
   <artifactId>whatsapp-gateway</artifactId>
-  <version>3.0.0</version>
+  <version>3.0.1</version>
 </dependency>
 ```
 

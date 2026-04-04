@@ -269,7 +269,7 @@ Add the dependency. For JitPack, the version is the Git tag or commit hash. Exam
 <dependency>
   <groupId>com.github.digows</groupId>
   <artifactId>whatsapp-gateway</artifactId>
-  <version>3.0.0</version>
+  <version>3.0.1</version>
 </dependency>
 ```
 
@@ -340,7 +340,7 @@ Logical subjects:
 
 - worker control
 - incoming messages
-- outgoing commands
+- command subjects
 - command results
 - delivery results
 - session status
@@ -350,7 +350,7 @@ Subject templates are environment-driven and rendered from:
 
 - `NATS_SUBJECT_CONTROL_TEMPLATE`
 - `NATS_SUBJECT_INBOUND_TEMPLATE`
-- `NATS_SUBJECT_OUTBOUND_TEMPLATE`
+- `NATS_SUBJECT_COMMAND_TEMPLATE`
 - `NATS_SUBJECT_COMMAND_RESULT_TEMPLATE`
 - `NATS_SUBJECT_DELIVERY_TEMPLATE`
 - `NATS_SUBJECT_STATUS_TEMPLATE`
@@ -360,16 +360,15 @@ The default templates produce subjects such as:
 
 - `gateway.v1.channel.whatsapp-web.worker.{workerId}.control`
 - `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.incoming`
-- `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.outgoing`
-- `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.command-result`
+- `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.commands.{family}`
+- `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.command-results.{family}`
 - `gateway.v1.channel.whatsapp-web.session.{workspaceId}.{sessionId}.delivery`
 
 When `NATS_MODE=jetstream`, worker control and outbound processing use durable consumers and dedupe-aware execution.
 
 ### Outbound Commands
 
-The outbound NATS contract is now organized by command family instead of only a
-message-send payload.
+The outbound NATS contract is now organized by command family subjects.
 
 Supported families today:
 
@@ -401,9 +400,9 @@ Supported families today:
 
 Important contract semantics:
 
-- the `outgoing` subject still accepts the legacy message-send payload for backward compatibility
-- family-based commands should be the default for all new integrations
-- every outbound command produces a generic `command-result` event
+- commands must be published to `commands.{family}`
+- generic execution results are published to `command-results.{family}`
+- there is no compatibility rail for the old shared `outgoing` subject
 - `message/send` also continues to emit the legacy delivery lifecycle on the `delivery` subject
 
 ## Activation Model

@@ -111,7 +111,30 @@ test('NatsChannelTransport accepts null optional event location payloads', () =>
   assert.equal(command.message.content.location, undefined);
 });
 
-test('NatsChannelTransport parses presence commands on the shared outgoing rail', () => {
+test('NatsChannelTransport rejects command payloads without an explicit family', () => {
+  const transport = new NatsChannelTransport('whatsapp-web') as any;
+
+  assert.throws(() => {
+    transport.parseOutboundCommand({
+      commandId: 'command-legacy',
+      session: {
+        provider: 'whatsapp-web',
+        workspaceId: 1,
+        sessionId: 'primary',
+      },
+      message: {
+        chatId: '5511999999999@s.whatsapp.net',
+        timestamp: '2026-04-04T00:00:00Z',
+        content: {
+          type: 'text',
+          text: 'legacy payload',
+        },
+      },
+    });
+  }, /command payload\.family must be a non-empty string/);
+});
+
+test('NatsChannelTransport parses presence commands on the presence command subject payload', () => {
   const transport = new NatsChannelTransport('whatsapp-web') as any;
 
   const command = transport.parseOutboundCommand({

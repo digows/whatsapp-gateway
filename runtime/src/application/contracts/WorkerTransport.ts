@@ -19,7 +19,7 @@ export interface WorkerTransport {
     workerId: string,
     handler: (command: WorkerCommand) => Promise<void>,
   ): Promise<void>;
-  subscribeOutgoing(
+  subscribeCommands(
     session: SessionReference,
     handler: (command: OutboundCommand) => Promise<void>,
   ): Promise<void>;

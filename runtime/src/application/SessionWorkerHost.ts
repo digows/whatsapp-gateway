@@ -222,7 +222,7 @@ export class SessionWorkerHost {
       );
       await this.publishSessionStatus(session, SessionStatus.Starting, undefined, hostedAt);
 
-      await this.transport.subscribeOutgoing(session, async command => {
+      await this.transport.subscribeCommands(session, async command => {
         const currentSession = this.sessions.get(sessionKey);
         if (!currentSession) {
           throw new Error(`Session ${session.toLogLabel()} is no longer hosted.`);

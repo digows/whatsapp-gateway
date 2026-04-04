@@ -217,7 +217,7 @@ Add the dependency. For JitPack, the version is the Git tag or commit hash. Exam
 <dependency>
   <groupId>com.github.digows</groupId>
   <artifactId>whatsapp-gateway</artifactId>
-  <version>3.0.0</version>
+  <version>3.0.1</version>
 </dependency>
 ```
 
@@ -320,10 +320,10 @@ The defaults are:
   - `gateway.v1.channel.{provider}.worker.{workerId}.control`
 - incoming:
   - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.incoming`
-- outgoing:
-  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.outgoing`
-- command result:
-  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-result`
+- commands:
+  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.commands.{family}`
+- command results:
+  - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-results.{family}`
 - delivery:
   - `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.delivery`
 - status:
@@ -335,7 +335,7 @@ If another system depends on these subjects, freeze the templates in deployment 
 
 ## Outbound Command Contract
 
-The `outgoing` subject now accepts family-based commands.
+Commands are now published to family-specific command subjects.
 
 Supported families:
 
@@ -367,21 +367,17 @@ Supported families:
 
 ### Compatibility
 
-The gateway still accepts the legacy outbound message-send payload on the same
-subject.
+There is no compatibility layer for the old shared `outgoing` subject.
 
-That legacy payload is interpreted as:
-
-- `family = message`
-- `action = send`
-
-New integrations should publish explicit family-based commands.
+Every outbound payload must now declare `family` and must be published to the
+matching `commands.{family}` subject.
 
 ### Command Result Semantics
 
-Every accepted outbound command produces one generic execution result on:
+Every accepted outbound command produces one generic execution result on the
+matching result subject:
 
-- `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-result`
+- `gateway.v1.channel.{provider}.session.{workspaceId}.{sessionId}.command-results.{family}`
 
 Result status values:
 
@@ -391,9 +387,9 @@ Result status values:
 
 Important:
 
-- `command-result` is the primary execution acknowledgement for all families
+- `command-results.{family}` is the primary execution acknowledgement for all families
 - `message/send` also continues to emit the delivery lifecycle on the `delivery` subject
-- non-message families should be tracked through `command-result`, not through `delivery`
+- non-message families should be tracked through `command-results.{family}`, not through `delivery`
 
 ### Example: Presence Typing Indicator
 
@@ -535,7 +531,7 @@ read receipts and chat operations.
 
 1. ensure the target session exists and is active through REST
 2. publish outbound command through NATS
-3. consume `command-result`
+3. consume `command-results.{family}`
 4. for `message/send`, also consume delivery events through NATS
 
 Do not convert outbound messaging to synchronous HTTP unless you have a concrete operational reason and owner-aware routing strategy.

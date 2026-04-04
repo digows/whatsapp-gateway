@@ -20,7 +20,7 @@ class FakeWorkerTransport implements WorkerTransport {
     this.workerCommands.push({ workerId, command });
   }
   public async subscribeWorkerCommands(): Promise<void> {}
-  public async subscribeOutgoing(): Promise<void> {}
+  public async subscribeCommands(): Promise<void> {}
   public async disconnectSession(): Promise<void> {}
   public async publishActivation(): Promise<void> {}
   public async publishInbound(): Promise<void> {}

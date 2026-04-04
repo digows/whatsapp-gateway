@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
 /**
- * Base contract for outbound commands consumed by the gateway runtime on the NATS outgoing subject.
+ * Base contract for outbound commands consumed by the gateway runtime on family-specific NATS command subjects.
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "family")
 @JsonSubTypes({
