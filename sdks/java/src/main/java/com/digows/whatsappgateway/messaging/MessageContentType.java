@@ -26,6 +26,7 @@ public enum MessageContentType
   EVENT("event"),
   PRODUCT("product"),
   INTERACTIVE_RESPONSE("interactive_response"),
+  INTERACTIVE_CAROUSEL("interactive_carousel"),
   REQUEST_PHONE_NUMBER("request_phone_number"),
   SHARE_PHONE_NUMBER("share_phone_number"),
   DELETE("delete"),

@@ -285,7 +285,7 @@ Add the dependency:
 <dependency>
   <groupId>com.digows.whatsappgateway</groupId>
   <artifactId>java-whatsappgateway-sdk</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.1-SNAPSHOT</version>
 </dependency>
 ```
 

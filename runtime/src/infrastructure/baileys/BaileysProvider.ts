@@ -1,4 +1,9 @@
-import makeWASocket, { DisconnectReason, proto } from 'baileys';
+import makeWASocket, {
+  DisconnectReason,
+  generateWAMessageFromContent,
+  prepareWAMessageMedia,
+  proto,
+} from 'baileys';
 import crypto from 'crypto';
 import {
   ActivationCancelledEvent,
@@ -59,6 +64,9 @@ import {
   EventMessageContent,
   GroupInviteMessageContent,
   ImageMessageContent,
+  InteractiveCarouselCardContent,
+  InteractiveCarouselMessageContent,
+  InteractiveCarouselNativeFlowMessageContent,
   InteractiveResponseMessageContent,
   LimitSharingMessageContent,
   ListReplyMessageContent,
@@ -130,6 +138,11 @@ export interface OutboundExecutionOutcome {
   readonly commandResult: OutboundCommandResult;
   readonly deliveryResult?: DeliveryResult;
 }
+
+type InteractiveCarouselHeaderMediaBuilder = (
+  recipientJid: string,
+  headerMedia: MessageContent,
+) => Promise<Record<string, unknown> | undefined>;
 
 /**
  * Single-session Baileys runtime.
@@ -350,6 +363,26 @@ export class BaileysProvider {
     const isGroup = recipientJid.endsWith('@g.us');
     await this.sleep(decision.preSendDelayMs);
 
+    if (decision.content instanceof InteractiveCarouselMessageContent) {
+      try {
+        const messageId = await this.sendInteractiveCarousel(recipientJid, decision.content);
+        await this.antiBan.afterSend(recipientJid, decision.content, decision.trackingKey);
+        return this.buildDeliveryResult(
+          command,
+          DeliveryStatus.Sent,
+          messageId,
+        );
+      } catch (error) {
+        this.antiBan.afterSendFailed(error);
+        return this.buildDeliveryResult(
+          command,
+          DeliveryStatus.Failed,
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+
     if (decision.content instanceof TextMessageContent && !isGroup) {
       await this.sock.presenceSubscribe(recipientJid).catch(() => {});
       await this.sock.sendPresenceUpdate('composing', recipientJid).catch(() => {});
@@ -381,6 +414,246 @@ export class BaileysProvider {
         await this.sock.sendPresenceUpdate('paused', recipientJid).catch(() => {});
       }
     }
+  }
+
+  private async sendInteractiveCarousel(
+    recipientJid: string,
+    content: InteractiveCarouselMessageContent,
+  ): Promise<string> {
+    if (!this.sock) {
+      throw new Error('no active socket');
+    }
+
+    const waMessage = await this.buildInteractiveCarouselWAMessage(recipientJid, content);
+    await this.sock.relayMessage(recipientJid, waMessage.message, {
+      messageId: waMessage.key.id,
+    });
+
+    return waMessage.key.id;
+  }
+
+  private async buildInteractiveCarouselWAMessage(
+    recipientJid: string,
+    content: InteractiveCarouselMessageContent,
+    headerMediaBuilder?: InteractiveCarouselHeaderMediaBuilder,
+  ): Promise<ReturnType<typeof generateWAMessageFromContent>> {
+    const resolvedHeaderMediaBuilder = headerMediaBuilder
+      ?? ((jid: string, headerMedia: MessageContent) => this.buildInteractiveCarouselHeaderMedia(jid, headerMedia));
+
+    const cards = await Promise.all(
+      content.cards.map(card => this.buildInteractiveCarouselCard(recipientJid, card, resolvedHeaderMediaBuilder)),
+    );
+
+    return generateWAMessageFromContent(
+      recipientJid,
+      {
+        viewOnceMessage: {
+          message: {
+            messageContextInfo: {
+              deviceListMetadata: {},
+              deviceListMetadataVersion: 2,
+            },
+            interactiveMessage: proto.Message.InteractiveMessage.create({
+              body: content.bodyText
+                ? proto.Message.InteractiveMessage.Body.create({
+                    text: content.bodyText,
+                  })
+                : undefined,
+              footer: content.footerText
+                ? proto.Message.InteractiveMessage.Footer.create({
+                    text: content.footerText,
+                  })
+                : undefined,
+              carouselMessage: proto.Message.InteractiveMessage.CarouselMessage.create({
+                messageVersion: content.messageVersion,
+                carouselCardType: proto.Message.InteractiveMessage.CarouselMessage.CarouselCardType.HSCROLL_CARDS,
+                cards,
+              }),
+            }),
+          },
+        },
+      },
+      {
+        userJid: this.sock?.user?.id ?? recipientJid,
+      },
+    );
+  }
+
+  private async buildInteractiveCarouselCard(
+    recipientJid: string,
+    card: InteractiveCarouselCardContent,
+    headerMediaBuilder: InteractiveCarouselHeaderMediaBuilder,
+  ): Promise<proto.Message.IInteractiveMessage> {
+    const headerMedia = card.headerMedia
+      ? await headerMediaBuilder(recipientJid, card.headerMedia)
+      : undefined;
+
+    return proto.Message.InteractiveMessage.create({
+      header: proto.Message.InteractiveMessage.Header.create({
+        title: card.headerTitle,
+        subtitle: card.headerSubtitle,
+        hasMediaAttachment: headerMedia != null,
+        ...(headerMedia ?? {}),
+      }),
+      body: card.bodyText
+        ? proto.Message.InteractiveMessage.Body.create({
+            text: card.bodyText,
+          })
+        : undefined,
+      footer: card.footerText
+        ? proto.Message.InteractiveMessage.Footer.create({
+            text: card.footerText,
+          })
+        : undefined,
+      nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+        buttons: card.nativeFlowMessage.buttons.map(button =>
+          proto.Message.InteractiveMessage.NativeFlowMessage.NativeFlowButton.create({
+            name: button.name,
+            buttonParamsJson: button.buttonParamsJson,
+          }),
+        ),
+        messageParamsJson: card.nativeFlowMessage.messageParamsJson,
+        messageVersion: card.nativeFlowMessage.messageVersion,
+      }),
+    });
+  }
+
+  private async buildInteractiveCarouselHeaderMedia(
+    recipientJid: string,
+    headerMedia: MessageContent,
+  ): Promise<Record<string, unknown>> {
+    if (!this.sock) {
+      throw new Error('no active socket');
+    }
+
+    if (headerMedia instanceof ImageMessageContent) {
+      if (!headerMedia.mediaUrl) {
+        throw new Error('interactive carousel image header requires mediaUrl');
+      }
+
+      return {
+        imageMessage: await this.prepareInteractiveCarouselMediaMessage(
+          recipientJid,
+          {
+            image: { url: headerMedia.mediaUrl },
+          },
+        ),
+      };
+    }
+
+    if (headerMedia instanceof VideoMessageContent) {
+      if (!headerMedia.mediaUrl) {
+        throw new Error('interactive carousel video header requires mediaUrl');
+      }
+
+      return {
+        videoMessage: await this.prepareInteractiveCarouselMediaMessage(
+          recipientJid,
+          {
+            video: { url: headerMedia.mediaUrl },
+            mimetype: headerMedia.mimeType,
+            gifPlayback: headerMedia.gifPlayback,
+            ptv: headerMedia.videoNote,
+          },
+        ),
+      };
+    }
+
+    if (headerMedia instanceof DocumentMessageContent) {
+      if (!headerMedia.mediaUrl) {
+        throw new Error('interactive carousel document header requires mediaUrl');
+      }
+
+      return {
+        documentMessage: await this.prepareInteractiveCarouselMediaMessage(
+          recipientJid,
+          {
+            document: { url: headerMedia.mediaUrl },
+            mimetype: headerMedia.mimeType ?? 'application/octet-stream',
+            fileName: headerMedia.fileName ?? headerMedia.caption ?? 'document',
+          },
+        ),
+      };
+    }
+
+    if (headerMedia instanceof LocationMessageContent) {
+      return {
+        locationMessage: {
+          degreesLatitude: headerMedia.latitude,
+          degreesLongitude: headerMedia.longitude,
+          name: headerMedia.name,
+          address: headerMedia.address,
+          url: headerMedia.url,
+          comment: headerMedia.comment,
+          isLive: headerMedia.live,
+          accuracyInMeters: headerMedia.accuracyInMeters,
+          speedInMps: headerMedia.speedInMetersPerSecond,
+          degreesClockwiseFromMagneticNorth: headerMedia.degreesClockwiseFromMagneticNorth,
+          sequenceNumber: headerMedia.sequenceNumber,
+          timeOffset: headerMedia.timeOffsetSeconds,
+        },
+      };
+    }
+
+    if (headerMedia instanceof ProductMessageContent) {
+      if (!headerMedia.productImageUrl) {
+        throw new Error('interactive carousel product header requires productImageUrl');
+      }
+
+      const productImage = await this.prepareInteractiveCarouselMediaMessage(
+        recipientJid,
+        {
+          image: { url: headerMedia.productImageUrl },
+        },
+      );
+
+      return {
+        productMessage: {
+          product: {
+            productImage,
+            productId: headerMedia.productId,
+            title: headerMedia.title,
+            description: headerMedia.description,
+            currencyCode: headerMedia.currencyCode,
+            priceAmount1000: headerMedia.priceAmount1000,
+            retailerId: headerMedia.retailerId,
+            url: headerMedia.url,
+          },
+          businessOwnerJid: headerMedia.businessOwnerJid,
+          body: headerMedia.body,
+          footer: headerMedia.footer,
+          catalog: headerMedia.catalogTitle || headerMedia.catalogDescription
+            ? {
+                title: headerMedia.catalogTitle,
+                description: headerMedia.catalogDescription,
+                catalogImage: productImage,
+              }
+            : undefined,
+        },
+      };
+    }
+
+    throw new Error(`Unsupported interactive carousel header media type: ${headerMedia.type}`);
+  }
+
+  private async prepareInteractiveCarouselMediaMessage(
+    recipientJid: string,
+    content: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const prepared = await prepareWAMessageMedia(content as any, {
+      upload: this.sock!.waUploadToServer,
+      jid: recipientJid,
+    });
+
+    const preparedRecord = prepared as unknown as Record<string, unknown>;
+    const [messageType] = Object.keys(preparedRecord);
+    const message = preparedRecord[messageType];
+
+    if (!message) {
+      throw new Error('Unable to prepare interactive carousel header media.');
+    }
+
+    return message as Record<string, unknown>;
   }
 
   private async executePresenceCommand(command: PresenceCommand): Promise<OutboundCommandResult> {
@@ -2675,6 +2948,15 @@ export class BaileysProvider {
         type: MessageContentType.InteractiveResponse,
         bodyText: this.truncateDebugText(content.bodyText),
         flowName: content.flowName,
+      };
+    }
+
+    if (content instanceof InteractiveCarouselMessageContent) {
+      return {
+        type: MessageContentType.InteractiveCarousel,
+        bodyText: this.truncateDebugText(content.bodyText),
+        footerText: this.truncateDebugText(content.footerText),
+        cardCount: content.cards.length,
       };
     }
 

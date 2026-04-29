@@ -4,6 +4,11 @@ import { ChatType } from '../src/domain/entities/messaging/MessageContext.js';
 import {
   DeleteMessageContent,
   DisappearingMessagesMessageContent,
+  ImageMessageContent,
+  InteractiveCarouselCardContent,
+  InteractiveCarouselMessageContent,
+  InteractiveCarouselNativeFlowButton,
+  InteractiveCarouselNativeFlowMessageContent,
   LimitSharingMessageContent,
   LocationMessageContent,
   PinMessageAction,
@@ -338,4 +343,86 @@ test('BaileysMessageNormalizer skips unsupported protocol messages', async () =>
     }),
     'protocol_message',
   );
+});
+
+test('BaileysMessageNormalizer normalizes interactive carousel messages', async () => {
+  const normalized = await BaileysMessageNormalizer.normalize(
+    {
+      key: {
+        remoteJid: '5511999999999@s.whatsapp.net',
+        id: 'carousel-1',
+      },
+      messageTimestamp: 1_710_000_900,
+      message: {
+        viewOnceMessage: {
+          message: {
+            messageContextInfo: {
+              deviceListMetadata: {},
+              deviceListMetadataVersion: 2,
+            },
+            interactiveMessage: {
+              body: {
+                text: 'Featured products',
+              },
+              footer: {
+                text: 'Swipe the cards',
+              },
+              carouselMessage: {
+                messageVersion: 1,
+                cards: [
+                  {
+                    header: {
+                      title: 'Watch S1',
+                      hasMediaAttachment: true,
+                      imageMessage: {
+                        mimetype: 'image/jpeg',
+                        width: 1080,
+                        height: 1080,
+                      },
+                    },
+                    body: {
+                      text: 'Premium smartwatch',
+                    },
+                    footer: {
+                      text: 'Available now',
+                    },
+                    nativeFlowMessage: {
+                      messageVersion: 1,
+                      buttons: [
+                        {
+                          name: 'quick_reply',
+                          buttonParamsJson: JSON.stringify({
+                            display_text: 'Buy watch',
+                            id: 'buy_watch',
+                          }),
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+    async jid => {
+      if (jid === '5511999999999@s.whatsapp.net') {
+        return '+5511999999999';
+      }
+
+      return null;
+    },
+  );
+
+  assert.ok(normalized);
+  assert.ok(normalized?.content instanceof InteractiveCarouselMessageContent);
+  assert.equal(normalized?.content.bodyText, 'Featured products');
+  assert.equal(normalized?.content.footerText, 'Swipe the cards');
+  assert.equal(normalized?.content.cards.length, 1);
+  assert.ok(normalized?.content.cards[0] instanceof InteractiveCarouselCardContent);
+  assert.ok(normalized?.content.cards[0].headerMedia instanceof ImageMessageContent);
+  assert.ok(normalized?.content.cards[0].nativeFlowMessage instanceof InteractiveCarouselNativeFlowMessageContent);
+  assert.equal(normalized?.content.cards[0].nativeFlowMessage.buttons[0].name, 'quick_reply');
+  assert.equal(normalized?.context?.chatType, ChatType.Direct);
 });

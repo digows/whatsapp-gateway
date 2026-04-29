@@ -119,6 +119,10 @@ import {
   ListReplyMessageContent,
   LocationMessageContent,
   MessageContent,
+  InteractiveCarouselCardContent,
+  InteractiveCarouselMessageContent,
+  InteractiveCarouselNativeFlowButton,
+  InteractiveCarouselNativeFlowMessageContent,
   OtherMessageContent,
   parseButtonReplyType,
   parseEventCallType,
@@ -1236,6 +1240,14 @@ export class NatsChannelTransport implements WorkerTransport {
           this.readOptionalString(payloadRecord, 'parametersJson', label),
           this.readOptionalNumber(payloadRecord, 'version', label),
         );
+      case 'interactive_carousel':
+        return new InteractiveCarouselMessageContent(
+          this.readOptionalString(payloadRecord, 'bodyText', label),
+          this.readOptionalString(payloadRecord, 'footerText', label),
+          this.readOptionalArray(payloadRecord, 'cards', label)
+            .map((entry, index) => this.parseInteractiveCarouselCardContent(entry, `${label} cards[${index}]`)),
+          this.readOptionalNumber(payloadRecord, 'messageVersion', label) ?? 1,
+        );
       case 'request_phone_number':
         return new RequestPhoneNumberMessageContent();
       case 'share_phone_number':
@@ -1461,6 +1473,16 @@ export class NatsChannelTransport implements WorkerTransport {
       };
     }
 
+    if (content instanceof InteractiveCarouselMessageContent) {
+      return {
+        type: content.type,
+        bodyText: content.bodyText,
+        footerText: content.footerText,
+        cards: content.cards.map(card => this.serializeInteractiveCarouselCardContent(card)),
+        messageVersion: content.messageVersion,
+      };
+    }
+
     if (content instanceof RequestPhoneNumberMessageContent) {
       return { type: content.type };
     }
@@ -1527,6 +1549,88 @@ export class NatsChannelTransport implements WorkerTransport {
       this.readOptionalNumber(payloadRecord, 'sequenceNumber', label),
       this.readOptionalNumber(payloadRecord, 'timeOffsetSeconds', label),
     );
+  }
+
+  private parseInteractiveCarouselCardContent(
+    payload: unknown,
+    label: string,
+  ): InteractiveCarouselCardContent {
+    const payloadRecord = this.requireRecord(payload, label);
+
+    return new InteractiveCarouselCardContent(
+      this.readOptionalString(payloadRecord, 'headerTitle', label),
+      this.readOptionalString(payloadRecord, 'headerSubtitle', label),
+      payloadRecord.headerMedia == null
+        ? undefined
+        : this.parseMessageContent(payloadRecord.headerMedia, `${label} headerMedia`),
+      this.readOptionalString(payloadRecord, 'bodyText', label),
+      this.readOptionalString(payloadRecord, 'footerText', label),
+      this.parseInteractiveCarouselNativeFlowMessageContent(
+        this.requireRecord(payloadRecord.nativeFlowMessage, `${label} nativeFlowMessage`),
+        `${label} nativeFlowMessage`,
+      ),
+    );
+  }
+
+  private parseInteractiveCarouselNativeFlowMessageContent(
+    payload: unknown,
+    label: string,
+  ): InteractiveCarouselNativeFlowMessageContent {
+    const payloadRecord = this.requireRecord(payload, label);
+
+    return new InteractiveCarouselNativeFlowMessageContent(
+      this.readOptionalArray(payloadRecord, 'buttons', label)
+        .map((entry, index) => this.parseInteractiveCarouselNativeFlowButton(entry, `${label} buttons[${index}]`)),
+      this.readOptionalString(payloadRecord, 'messageParamsJson', label),
+      this.readOptionalNumber(payloadRecord, 'messageVersion', label) ?? 1,
+    );
+  }
+
+  private parseInteractiveCarouselNativeFlowButton(
+    payload: unknown,
+    label: string,
+  ): InteractiveCarouselNativeFlowButton {
+    const payloadRecord = this.requireRecord(payload, label);
+    return new InteractiveCarouselNativeFlowButton(
+      this.readRequiredString(payloadRecord, 'name', label),
+      this.readRequiredString(payloadRecord, 'buttonParamsJson', label),
+    );
+  }
+
+  private serializeInteractiveCarouselCardContent(
+    card: InteractiveCarouselCardContent,
+  ): Record<string, unknown> {
+    return {
+      headerTitle: card.headerTitle,
+      headerSubtitle: card.headerSubtitle,
+      headerMedia: card.headerMedia
+        ? this.serializeMessageContent(card.headerMedia)
+        : undefined,
+      bodyText: card.bodyText,
+      footerText: card.footerText,
+      nativeFlowMessage: this.serializeInteractiveCarouselNativeFlowMessageContent(
+        card.nativeFlowMessage,
+      ),
+    };
+  }
+
+  private serializeInteractiveCarouselNativeFlowMessageContent(
+    nativeFlowMessage: InteractiveCarouselNativeFlowMessageContent,
+  ): Record<string, unknown> {
+    return {
+      buttons: nativeFlowMessage.buttons.map(button => this.serializeInteractiveCarouselNativeFlowButton(button)),
+      messageParamsJson: nativeFlowMessage.messageParamsJson,
+      messageVersion: nativeFlowMessage.messageVersion,
+    };
+  }
+
+  private serializeInteractiveCarouselNativeFlowButton(
+    button: InteractiveCarouselNativeFlowButton,
+  ): Record<string, unknown> {
+    return {
+      name: button.name,
+      buttonParamsJson: button.buttonParamsJson,
+    };
   }
 
   private parseQuotedMessage(payload: unknown, label: string): QuotedMessage {

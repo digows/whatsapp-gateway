@@ -18,6 +18,7 @@ export enum MessageContentType {
   Event = 'event',
   Product = 'product',
   InteractiveResponse = 'interactive_response',
+  InteractiveCarousel = 'interactive_carousel',
   RequestPhoneNumber = 'request_phone_number',
   SharePhoneNumber = 'share_phone_number',
   Delete = 'delete',
@@ -61,6 +62,8 @@ export function parseMessageContentType(value: string): MessageContentType {
       return MessageContentType.Product;
     case MessageContentType.InteractiveResponse:
       return MessageContentType.InteractiveResponse;
+    case MessageContentType.InteractiveCarousel:
+      return MessageContentType.InteractiveCarousel;
     case MessageContentType.RequestPhoneNumber:
       return MessageContentType.RequestPhoneNumber;
     case MessageContentType.SharePhoneNumber:

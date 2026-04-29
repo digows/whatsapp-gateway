@@ -18,6 +18,11 @@ import com.digows.whatsappgateway.messaging.MessageContentType;
 import com.digows.whatsappgateway.messaging.MessageContext;
 import com.digows.whatsappgateway.messaging.MessageCreatedEvent;
 import com.digows.whatsappgateway.messaging.MessageDeletedEvent;
+import com.digows.whatsappgateway.messaging.InteractiveCarouselCardContent;
+import com.digows.whatsappgateway.messaging.InteractiveCarouselMessageContent;
+import com.digows.whatsappgateway.messaging.InteractiveCarouselNativeFlowButton;
+import com.digows.whatsappgateway.messaging.InteractiveCarouselNativeFlowMessageContent;
+import com.digows.whatsappgateway.messaging.MessageContent;
 import com.digows.whatsappgateway.messaging.MessageReference;
 import com.digows.whatsappgateway.messaging.MessageUpdatedEvent;
 import com.digows.whatsappgateway.messaging.MessageUpdateKind;
@@ -233,6 +238,46 @@ class GatewayModelSerializationTest
     Message restoredMessage = objectMapper.readValue(messageJson, Message.class);
     PinMessageContent restoredContent = assertInstanceOf(PinMessageContent.class, restoredMessage.content());
     assertEquals(PinMessageDurationSeconds.SEVEN_DAYS, restoredContent.durationSeconds());
+  }
+
+  @Test
+  void serializesAndDeserializesInteractiveCarouselMessages() throws Exception
+  {
+    InteractiveCarouselMessageContent content = new InteractiveCarouselMessageContent(
+      "Featured products",
+      "Swipe the cards",
+      List.of(
+        new InteractiveCarouselCardContent(
+          "Watch S1",
+          "Water resistant",
+          null,
+          "Premium smartwatch",
+          "Available now",
+          new InteractiveCarouselNativeFlowMessageContent(
+            List.of(
+              new InteractiveCarouselNativeFlowButton(
+                "quick_reply",
+                "{\"display_text\":\"Buy watch\",\"id\":\"buy_watch\"}"
+              )
+            ),
+            null,
+            1
+          )
+        )
+      ),
+      1
+    );
+
+    String json = objectMapper.writeValueAsString(content);
+    assertTrue(json.contains("\"type\":\"interactive_carousel\""));
+
+    MessageContent restored = objectMapper.readValue(json, MessageContent.class);
+    InteractiveCarouselMessageContent restoredContent = assertInstanceOf(InteractiveCarouselMessageContent.class, restored);
+    assertEquals("Featured products", restoredContent.bodyText());
+    assertEquals("Swipe the cards", restoredContent.footerText());
+    assertEquals(1, restoredContent.cards().size());
+    assertEquals("Watch S1", restoredContent.cards().get(0).headerTitle());
+    assertEquals("quick_reply", restoredContent.cards().get(0).nativeFlowMessage().buttons().get(0).name());
   }
 
   @Test

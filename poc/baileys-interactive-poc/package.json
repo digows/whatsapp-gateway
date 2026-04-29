@@ -1,0 +1,19 @@
+{
+  "name": "baileys-interactive-poc",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "auth": "node src/auth.js",
+    "send:test": "node src/send-test.js",
+    "send:legacy:buttons": "node src/send-legacy-buttons.js",
+    "send:interactive:button": "node src/send-interactive-button.js",
+    "send:interactive:carousel": "node src/send-interactive-carousel.js"
+  },
+  "dependencies": {
+    "baileys": "github:digows/baileys",
+    "dotenv": "^16.4.5",
+    "pino": "^9.7.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

@@ -66,6 +66,7 @@ test('domain parsers reject unsupported external values', () => {
   assert.equal(parseMessageContentType('document'), 'document');
   assert.equal(parseMessageContentType('poll'), 'poll');
   assert.equal(parseMessageContentType('pin'), 'pin');
+  assert.equal(parseMessageContentType('interactive_carousel'), 'interactive_carousel');
   assert.equal(parseButtonReplyType('template'), 'template');
   assert.equal(parseEventCallType('video'), 'video');
   assert.equal(parsePinMessageAction('unpin_for_all'), 'unpin_for_all');

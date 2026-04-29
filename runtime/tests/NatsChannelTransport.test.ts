@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PresenceCommand, PresenceCommandAction, PresenceType } from '../src/domain/entities/command/OutboundCommand.js';
-import { EventMessageContent, PinMessageContent, TextMessageContent } from '../src/domain/entities/messaging/MessageContent.js';
+import {
+  EventMessageContent,
+  ImageMessageContent,
+  InteractiveCarouselCardContent,
+  InteractiveCarouselMessageContent,
+  InteractiveCarouselNativeFlowButton,
+  InteractiveCarouselNativeFlowMessageContent,
+  PinMessageContent,
+  TextMessageContent,
+} from '../src/domain/entities/messaging/MessageContent.js';
 import { NatsChannelTransport } from '../src/infrastructure/nats/NatsChannelTransport.js';
 
 test('NatsChannelTransport treats null optional outbound objects as absent', () => {
@@ -153,4 +162,49 @@ test('NatsChannelTransport parses presence commands on the presence command subj
   assert.ok(command instanceof PresenceCommand);
   assert.equal(command.action, PresenceCommandAction.Update);
   assert.equal(command.presence, PresenceType.Composing);
+});
+
+test('NatsChannelTransport round-trips interactive carousel content', () => {
+  const transport = new NatsChannelTransport('whatsapp-web') as any;
+  const content = new InteractiveCarouselMessageContent(
+    'Featured products',
+    'Swipe to compare',
+    [
+      new InteractiveCarouselCardContent(
+        'Watch S1',
+        'Water resistant',
+        new ImageMessageContent(
+          undefined,
+          'https://example.com/watch.jpg',
+          'image/jpeg',
+          1080,
+          1080,
+        ),
+        'Premium smartwatch',
+        'Available now',
+        new InteractiveCarouselNativeFlowMessageContent([
+          new InteractiveCarouselNativeFlowButton(
+            'quick_reply',
+            JSON.stringify({
+              display_text: 'Buy watch',
+              id: 'buy_watch',
+            }),
+          ),
+        ]),
+      ),
+    ],
+    1,
+  );
+
+  const serialized = transport.serializeMessageContent(content);
+  const restored = transport.parseMessageContent(serialized, 'message content');
+
+  assert.ok(restored instanceof InteractiveCarouselMessageContent);
+  assert.equal(restored.bodyText, 'Featured products');
+  assert.equal(restored.footerText, 'Swipe to compare');
+  assert.equal(restored.cards.length, 1);
+  assert.ok(restored.cards[0] instanceof InteractiveCarouselCardContent);
+  assert.ok(restored.cards[0].headerMedia instanceof ImageMessageContent);
+  assert.ok(restored.cards[0].nativeFlowMessage instanceof InteractiveCarouselNativeFlowMessageContent);
+  assert.equal(restored.cards[0].nativeFlowMessage.buttons[0].name, 'quick_reply');
 });

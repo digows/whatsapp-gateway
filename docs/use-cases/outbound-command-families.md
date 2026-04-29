@@ -29,6 +29,16 @@ Supported command families:
 - `privacy`
 - `call`
 
+Within `message/send`, the gateway also supports the `interactive_carousel`
+message content variant for native-flow carousel cards.
+
+`interactive_carousel` is intentionally limited to the variant that has been
+validated through Baileys in this project:
+
+- carousel cards are emitted with WhatsApp `HSCROLL_CARDS`
+- each card uses `nativeFlowMessage`
+- `collectionMessage` and `shopStorefrontMessage` are not part of the contract
+
 ## Entry Point
 
 The actor publishes a command payload to the rendered family-specific command
@@ -58,6 +68,14 @@ subject for a specific session:
   `command-results.message`
 - integrations must not depend on pod affinity; the addressed session may move
   between workers while preserving the same subject contract
+- `interactive_carousel.cards` must contain at least one card
+- each `interactive_carousel` card must contain `nativeFlowMessage.buttons`
+- each `interactive_carousel` card must contain a header title or supported
+  header media
+- supported carousel header media types are `image`, `video`, `document`,
+  `location`, and `product`
+- image, video, document, and product carousel header media must have a usable
+  media URL before provider execution
 
 ## Backward Compatibility
 

@@ -11,6 +11,10 @@ import {
   EventMessageContent,
   GroupInviteMessageContent,
   ImageMessageContent,
+  InteractiveCarouselCardContent,
+  InteractiveCarouselMessageContent,
+  InteractiveCarouselNativeFlowButton,
+  InteractiveCarouselNativeFlowMessageContent,
   InteractiveResponseMessageContent,
   LimitSharingMessageContent,
   ListReplyMessageContent,
@@ -323,6 +327,23 @@ export class BaileysMessageNormalizer {
       );
     }
 
+    if (unwrapped.interactiveMessage?.carouselMessage?.cards) {
+      const cards = Array.isArray(unwrapped.interactiveMessage.carouselMessage.cards)
+        ? unwrapped.interactiveMessage.carouselMessage.cards
+          .map((card: any) => this.extractInteractiveCarouselCardContent(card))
+          .filter((card): card is InteractiveCarouselCardContent => card !== null)
+        : [];
+
+      if (cards.length > 0) {
+        return new InteractiveCarouselMessageContent(
+          unwrapped.interactiveMessage.body?.text ?? undefined,
+          unwrapped.interactiveMessage.footer?.text ?? undefined,
+          cards,
+          this.readOptionalNumber(unwrapped.interactiveMessage.carouselMessage.messageVersion) ?? 1,
+        );
+      }
+    }
+
     if (unwrapped.groupInviteMessage?.inviteCode && unwrapped.groupInviteMessage?.groupJid) {
       return new GroupInviteMessageContent(
         unwrapped.groupInviteMessage.groupJid,
@@ -489,6 +510,130 @@ export class BaileysMessageNormalizer {
       this.readOptionalNumber(locationMessage?.sequenceNumber),
       this.readOptionalNumber(locationMessage?.timeOffset),
     );
+  }
+
+  private static extractInteractiveCarouselCardContent(
+    card: any,
+  ): InteractiveCarouselCardContent | null {
+    if (!this.isRecord(card)) {
+      return null;
+    }
+
+    const nativeFlowMessage = card.nativeFlowMessage;
+    if (!this.isRecord(nativeFlowMessage) || !Array.isArray(nativeFlowMessage.buttons) || nativeFlowMessage.buttons.length === 0) {
+      return null;
+    }
+
+    const buttons = nativeFlowMessage.buttons
+      .map((button: any) => this.extractInteractiveCarouselNativeFlowButton(button))
+      .filter((button): button is InteractiveCarouselNativeFlowButton => button !== null);
+
+    if (buttons.length === 0) {
+      return null;
+    }
+
+    const headerMedia = this.extractInteractiveCarouselHeaderMedia(card.header);
+
+    try {
+      return new InteractiveCarouselCardContent(
+        typeof card.header?.title === 'string' ? card.header.title : undefined,
+        typeof card.header?.subtitle === 'string' ? card.header.subtitle : undefined,
+        headerMedia ?? undefined,
+        typeof card.body?.text === 'string' ? card.body.text : undefined,
+        typeof card.footer?.text === 'string' ? card.footer.text : undefined,
+        new InteractiveCarouselNativeFlowMessageContent(
+          buttons,
+          typeof nativeFlowMessage.messageParamsJson === 'string'
+            ? nativeFlowMessage.messageParamsJson
+            : undefined,
+          this.readOptionalNumber(nativeFlowMessage.messageVersion) ?? 1,
+        ),
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  private static extractInteractiveCarouselNativeFlowButton(
+    button: any,
+  ): InteractiveCarouselNativeFlowButton | null {
+    if (!this.isRecord(button)) {
+      return null;
+    }
+
+    const name = typeof button.name === 'string' ? button.name : undefined;
+    const buttonParamsJson = typeof button.buttonParamsJson === 'string' ? button.buttonParamsJson : undefined;
+
+    if (!name || !buttonParamsJson) {
+      return null;
+    }
+
+    try {
+      return new InteractiveCarouselNativeFlowButton(name, buttonParamsJson);
+    } catch {
+      return null;
+    }
+  }
+
+  private static extractInteractiveCarouselHeaderMedia(header: any): MessageContent | null {
+    if (!this.isRecord(header)) {
+      return null;
+    }
+
+    if (header.imageMessage) {
+      return new ImageMessageContent(
+        undefined,
+        undefined,
+        header.imageMessage.mimetype ?? undefined,
+        this.readOptionalNumber(header.imageMessage.width),
+        this.readOptionalNumber(header.imageMessage.height),
+      );
+    }
+
+    if (header.videoMessage) {
+      return new VideoMessageContent(
+        undefined,
+        undefined,
+        header.videoMessage.mimetype ?? undefined,
+        this.readOptionalNumber(header.videoMessage.width),
+        this.readOptionalNumber(header.videoMessage.height),
+        header.videoMessage.gifPlayback === true,
+        header.videoMessage.ptv === true,
+      );
+    }
+
+    if (header.documentMessage) {
+      return new DocumentMessageContent(
+        undefined,
+        undefined,
+        header.documentMessage.fileName ?? undefined,
+        header.documentMessage.mimetype ?? undefined,
+      );
+    }
+
+    if (header.locationMessage) {
+      return this.buildLocationContent(header.locationMessage);
+    }
+
+    if (header.productMessage?.product) {
+      return new ProductMessageContent(
+        header.productMessage.product.productId ?? undefined,
+        header.productMessage.product.title ?? undefined,
+        header.productMessage.product.description ?? undefined,
+        header.productMessage.product.currencyCode ?? undefined,
+        this.readOptionalNumber(header.productMessage.product.priceAmount1000),
+        header.productMessage.product.retailerId ?? undefined,
+        header.productMessage.product.url ?? undefined,
+        undefined,
+        header.productMessage.businessOwnerJid ?? undefined,
+        header.productMessage.body ?? undefined,
+        header.productMessage.footer ?? undefined,
+        header.productMessage.catalog?.title ?? undefined,
+        header.productMessage.catalog?.description ?? undefined,
+      );
+    }
+
+    return null;
   }
 
   private static extractContextInfo(message: any): any | undefined {

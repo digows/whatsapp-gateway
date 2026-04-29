@@ -13,6 +13,7 @@ It contains:
 - messaging models and inbound/delivery events
 - outbound command models and generic command execution results
 - request models for the public REST API
+- carousel interactive message models for outbound WhatsApp commerce-style messages
 
 Session-observed lifecycle exposed by the SDK:
 
@@ -66,7 +67,7 @@ GitHub Packages Maven coordinates:
 <dependency>
   <groupId>com.digows.whatsappgateway</groupId>
   <artifactId>java-whatsappgateway-sdk</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.1-SNAPSHOT</version>
 </dependency>
 ```
 

@@ -699,6 +699,128 @@ export class InteractiveResponseMessageContent extends MessageContent {
   }
 }
 
+function isSupportedInteractiveCarouselHeaderMediaType(type: MessageContentType): boolean {
+  switch (type) {
+    case MessageContentType.Image:
+    case MessageContentType.Video:
+    case MessageContentType.Document:
+    case MessageContentType.Location:
+    case MessageContentType.Product:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Button definition used by a native-flow interactive carousel card.
+ */
+export class InteractiveCarouselNativeFlowButton {
+  constructor(
+    public readonly name: string,
+    public readonly buttonParamsJson: string,
+  ) {
+    if (typeof name !== 'string' || !name.trim()) {
+      throw new Error('InteractiveCarouselNativeFlowButton requires a non-empty name.');
+    }
+
+    if (typeof buttonParamsJson !== 'string' || !buttonParamsJson.trim()) {
+      throw new Error('InteractiveCarouselNativeFlowButton requires buttonParamsJson.');
+    }
+  }
+
+  public fingerprint(): string {
+    return [this.name, this.buttonParamsJson].join(':');
+  }
+}
+
+/**
+ * Native flow actions attached to a carousel card.
+ */
+export class InteractiveCarouselNativeFlowMessageContent {
+  constructor(
+    public readonly buttons: readonly InteractiveCarouselNativeFlowButton[],
+    public readonly messageParamsJson?: string,
+    public readonly messageVersion = 1,
+  ) {
+    if (!Array.isArray(buttons) || !buttons.length) {
+      throw new Error('InteractiveCarouselNativeFlowMessageContent requires at least one button.');
+    }
+  }
+
+  public fingerprint(): string {
+    return [
+      String(this.messageVersion),
+      this.messageParamsJson ?? '',
+      ...this.buttons.map(button => button.fingerprint()),
+    ].join('|');
+  }
+}
+
+/**
+ * One interactive carousel card.
+ */
+export class InteractiveCarouselCardContent {
+  constructor(
+    public readonly headerTitle: string | undefined,
+    public readonly headerSubtitle: string | undefined,
+    public readonly headerMedia: MessageContent | undefined,
+    public readonly bodyText: string | undefined,
+    public readonly footerText: string | undefined,
+    public readonly nativeFlowMessage: InteractiveCarouselNativeFlowMessageContent,
+  ) {
+    if (!nativeFlowMessage) {
+      throw new Error('InteractiveCarouselCardContent requires nativeFlowMessage.');
+    }
+
+    if (!headerTitle?.trim() && !headerMedia) {
+      throw new Error('InteractiveCarouselCardContent requires a headerTitle or headerMedia.');
+    }
+
+    if (headerMedia && !isSupportedInteractiveCarouselHeaderMediaType(headerMedia.type)) {
+      throw new Error(`Unsupported interactive carousel header media type "${headerMedia.type}".`);
+    }
+  }
+
+  public fingerprint(): string {
+    return [
+      this.headerTitle ?? '',
+      this.headerSubtitle ?? '',
+      this.headerMedia?.fingerprint() ?? '',
+      this.bodyText ?? '',
+      this.footerText ?? '',
+      this.nativeFlowMessage.fingerprint(),
+    ].join('|');
+  }
+}
+
+/**
+ * Carousel of interactive cards rendered by WhatsApp.
+ */
+export class InteractiveCarouselMessageContent extends MessageContent {
+  constructor(
+    public readonly bodyText?: string,
+    public readonly footerText?: string,
+    public readonly cards: readonly InteractiveCarouselCardContent[] = [],
+    public readonly messageVersion = 1,
+  ) {
+    super(MessageContentType.InteractiveCarousel);
+
+    if (!Array.isArray(cards) || !cards.length) {
+      throw new Error('InteractiveCarouselMessageContent requires at least one card.');
+    }
+  }
+
+  protected override getFingerprintParts(): readonly string[] {
+    return [
+      String(this.messageVersion),
+      this.bodyText ?? '',
+      this.footerText ?? '',
+      ...this.cards.map(card => card.fingerprint()),
+    ];
+  }
+}
+
 /**
  * Request for the remote party to share a phone number.
  */
