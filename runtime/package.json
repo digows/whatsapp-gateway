@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-web-provider",
-  "version": "1.0.1",
+  "version": "3.1.0",
   "description": "WhatsApp gateway worker using Baileys",
   "type": "module",
   "scripts": {
