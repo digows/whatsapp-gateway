@@ -144,6 +144,22 @@ type InteractiveCarouselHeaderMediaBuilder = (
   headerMedia: MessageContent,
 ) => Promise<Record<string, unknown> | undefined>;
 
+type RemoteMediaKind = 'image' | 'video' | 'audio' | 'document' | 'sticker';
+
+class RemoteMediaFetchError extends Error {
+  constructor(
+    message: string,
+    public readonly mediaUrl: string,
+    public readonly statusCode?: number,
+    options?: {
+      cause?: unknown;
+    },
+  ) {
+    super(message, options);
+    this.name = 'RemoteMediaFetchError';
+  }
+}
+
 /**
  * Single-session Baileys runtime.
  * It owns the WhatsApp socket, auth state, message normalization and anti-ban behavior.
@@ -393,7 +409,7 @@ export class BaileysProvider {
     try {
       const response = await this.sock.sendMessage(
         recipientJid,
-        this.toBaileysContent(command.message),
+        await this.toBaileysContent(command.message),
       );
       await this.antiBan.afterSend(recipientJid, decision.content, decision.trackingKey);
       return this.buildDeliveryResult(
@@ -424,12 +440,33 @@ export class BaileysProvider {
       throw new Error('no active socket');
     }
 
-    const waMessage = await this.buildInteractiveCarouselWAMessage(recipientJid, content);
-    await this.sock.relayMessage(recipientJid, waMessage.message, {
-      messageId: waMessage.key.id,
-    });
+    try {
+      const waMessage = await this.buildInteractiveCarouselWAMessage(recipientJid, content);
+      await this.sock.relayMessage(recipientJid, waMessage.message, {
+        messageId: waMessage.key.id,
+      });
 
-    return waMessage.key.id;
+      return waMessage.key.id;
+    } catch (error) {
+      if (!this.shouldFallbackInteractiveCarouselWithoutMedia(content, error)) {
+        throw error;
+      }
+
+      console.warn(
+        `[BaileysProvider] Interactive carousel media fetch failed for ${recipientJid}; retrying without header media. reason=${error instanceof Error ? error.message : String(error)}`,
+      );
+
+      const waMessage = await this.buildInteractiveCarouselWAMessage(
+        recipientJid,
+        content,
+        async () => undefined,
+      );
+      await this.sock.relayMessage(recipientJid, waMessage.message, {
+        messageId: waMessage.key.id,
+      });
+
+      return waMessage.key.id;
+    }
   }
 
   private async buildInteractiveCarouselWAMessage(
@@ -531,11 +568,17 @@ export class BaileysProvider {
         throw new Error('interactive carousel image header requires mediaUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(
+        headerMedia.mediaUrl,
+        'image',
+      );
+
       return {
         imageMessage: await this.prepareInteractiveCarouselMediaMessage(
           recipientJid,
           {
-            image: { url: headerMedia.mediaUrl },
+            image: resolvedMedia.buffer,
+            mimetype: headerMedia.mimeType ?? resolvedMedia.mimeType,
           },
         ),
       };
@@ -546,12 +589,17 @@ export class BaileysProvider {
         throw new Error('interactive carousel video header requires mediaUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(
+        headerMedia.mediaUrl,
+        'video',
+      );
+
       return {
         videoMessage: await this.prepareInteractiveCarouselMediaMessage(
           recipientJid,
           {
-            video: { url: headerMedia.mediaUrl },
-            mimetype: headerMedia.mimeType,
+            video: resolvedMedia.buffer,
+            mimetype: headerMedia.mimeType ?? resolvedMedia.mimeType,
             gifPlayback: headerMedia.gifPlayback,
             ptv: headerMedia.videoNote,
           },
@@ -564,12 +612,17 @@ export class BaileysProvider {
         throw new Error('interactive carousel document header requires mediaUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(
+        headerMedia.mediaUrl,
+        'document',
+      );
+
       return {
         documentMessage: await this.prepareInteractiveCarouselMediaMessage(
           recipientJid,
           {
-            document: { url: headerMedia.mediaUrl },
-            mimetype: headerMedia.mimeType ?? 'application/octet-stream',
+            document: resolvedMedia.buffer,
+            mimetype: headerMedia.mimeType ?? resolvedMedia.mimeType ?? 'application/octet-stream',
             fileName: headerMedia.fileName ?? headerMedia.caption ?? 'document',
           },
         ),
@@ -600,10 +653,16 @@ export class BaileysProvider {
         throw new Error('interactive carousel product header requires productImageUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(
+        headerMedia.productImageUrl,
+        'image',
+      );
+
       const productImage = await this.prepareInteractiveCarouselMediaMessage(
         recipientJid,
         {
-          image: { url: headerMedia.productImageUrl },
+          image: resolvedMedia.buffer,
+          mimetype: resolvedMedia.mimeType,
         },
       );
 
@@ -654,6 +713,21 @@ export class BaileysProvider {
     }
 
     return message as Record<string, unknown>;
+  }
+
+  private shouldFallbackInteractiveCarouselWithoutMedia(
+    content: InteractiveCarouselMessageContent,
+    error: unknown,
+  ): boolean {
+    const isRemoteMediaFetchError =
+      error instanceof RemoteMediaFetchError
+      || (error instanceof Error && error.name === 'RemoteMediaFetchError');
+
+    if (!isRemoteMediaFetchError) {
+      return false;
+    }
+
+    return content.cards.every(card => !card.headerMedia || Boolean(card.headerTitle?.trim()));
   }
 
   private async executePresenceCommand(command: PresenceCommand): Promise<OutboundCommandResult> {
@@ -2079,7 +2153,7 @@ export class BaileysProvider {
     );
   }
 
-  private toBaileysContent(message: Message): any {
+  private async toBaileysContent(message: Message): Promise<any> {
     const { content } = message;
     let payload: Record<string, unknown>;
 
@@ -2090,10 +2164,12 @@ export class BaileysProvider {
         throw new Error('image content requires mediaUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(content.mediaUrl, 'image');
+
       payload = {
-        image: { url: content.mediaUrl },
+        image: resolvedMedia.buffer,
         caption: content.caption,
-        mimetype: content.mimeType,
+        mimetype: content.mimeType ?? resolvedMedia.mimeType,
         width: content.width,
         height: content.height,
       };
@@ -2102,9 +2178,11 @@ export class BaileysProvider {
         throw new Error('audio content requires mediaUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(content.mediaUrl, 'audio');
+
       payload = {
-        audio: { url: content.mediaUrl },
-        mimetype: content.mimeType,
+        audio: resolvedMedia.buffer,
+        mimetype: content.mimeType ?? resolvedMedia.mimeType,
         seconds: content.durationSeconds,
         ptt: content.voiceNote,
       };
@@ -2113,10 +2191,12 @@ export class BaileysProvider {
         throw new Error('video content requires mediaUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(content.mediaUrl, 'video');
+
       payload = {
-        video: { url: content.mediaUrl },
+        video: resolvedMedia.buffer,
         caption: content.caption,
-        mimetype: content.mimeType,
+        mimetype: content.mimeType ?? resolvedMedia.mimeType,
         width: content.width,
         height: content.height,
         gifPlayback: content.gifPlayback,
@@ -2127,9 +2207,11 @@ export class BaileysProvider {
         throw new Error('document content requires mediaUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(content.mediaUrl, 'document');
+
       payload = {
-        document: { url: content.mediaUrl },
-        mimetype: content.mimeType,
+        document: resolvedMedia.buffer,
+        mimetype: content.mimeType ?? resolvedMedia.mimeType,
         fileName: content.fileName ?? content.caption ?? 'document',
         caption: content.caption,
       };
@@ -2138,9 +2220,11 @@ export class BaileysProvider {
         throw new Error('sticker content requires mediaUrl');
       }
 
+      const resolvedMedia = await this.fetchRemoteMediaBuffer(content.mediaUrl, 'sticker');
+
       payload = {
-        sticker: { url: content.mediaUrl },
-        mimetype: content.mimeType,
+        sticker: resolvedMedia.buffer,
+        mimetype: content.mimeType ?? resolvedMedia.mimeType,
         isAnimated: content.animated,
         width: content.width,
         height: content.height,
@@ -2348,6 +2432,155 @@ export class BaileysProvider {
     }
 
     return payload;
+  }
+
+  private async fetchRemoteMediaBuffer(
+    mediaUrl: string,
+    remoteMediaKind: RemoteMediaKind,
+  ): Promise<{
+    buffer: Buffer;
+    mimeType?: string;
+  }> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= env.MEDIA_FETCH_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await fetch(mediaUrl, {
+          method: 'GET',
+          redirect: 'follow',
+          headers: {
+            'user-agent': env.MEDIA_FETCH_USER_AGENT,
+            accept: this.buildRemoteMediaAcceptHeader(remoteMediaKind),
+          },
+          signal: AbortSignal.timeout(env.MEDIA_FETCH_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          throw new RemoteMediaFetchError(
+            `Failed to fetch remote media: status=${response.status} url=${mediaUrl}`,
+            mediaUrl,
+            response.status,
+          );
+        }
+
+        const mimeType = this.normalizeRemoteMediaMimeType(response.headers.get('content-type'));
+        const expectedMimePrefix = this.getExpectedMimePrefix(remoteMediaKind);
+
+        if (
+          mimeType
+          && mimeType !== 'application/octet-stream'
+          && !mimeType.startsWith(expectedMimePrefix)
+        ) {
+          throw new RemoteMediaFetchError(
+            `Failed to fetch remote media: unexpected content-type=${mimeType} url=${mediaUrl}`,
+            mediaUrl,
+            response.status,
+          );
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        if (!buffer.length) {
+          throw new RemoteMediaFetchError(
+            `Failed to fetch remote media: empty response body url=${mediaUrl}`,
+            mediaUrl,
+            response.status,
+          );
+        }
+
+        return {
+          buffer,
+          mimeType,
+        };
+      } catch (error) {
+        lastError = error;
+
+        if (!this.shouldRetryRemoteMediaFetch(error, attempt)) {
+          break;
+        }
+
+        await this.sleep(250 * attempt);
+      }
+    }
+
+    if (lastError instanceof RemoteMediaFetchError) {
+      throw lastError;
+    }
+
+    throw new RemoteMediaFetchError(
+      `Failed to fetch remote media: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      mediaUrl,
+      undefined,
+      {
+        cause: lastError,
+      },
+    );
+  }
+
+  private shouldRetryRemoteMediaFetch(
+    error: unknown,
+    attempt: number,
+  ): boolean {
+    if (attempt >= env.MEDIA_FETCH_MAX_ATTEMPTS) {
+      return false;
+    }
+
+    if (error instanceof RemoteMediaFetchError) {
+      return error.statusCode != null
+        && [408, 425, 429, 500, 502, 503, 504].includes(error.statusCode);
+    }
+
+    if (error instanceof DOMException) {
+      return error.name === 'AbortError' || error.name === 'TimeoutError';
+    }
+
+    if (error instanceof TypeError) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private normalizeRemoteMediaMimeType(contentTypeHeader: string | null): string | undefined {
+    if (!contentTypeHeader) {
+      return undefined;
+    }
+
+    const mimeType = contentTypeHeader.split(';', 1)[0]?.trim().toLowerCase();
+    return mimeType || undefined;
+  }
+
+  private getExpectedMimePrefix(remoteMediaKind: RemoteMediaKind): string {
+    switch (remoteMediaKind) {
+      case 'image':
+      case 'sticker':
+        return 'image/';
+      case 'video':
+        return 'video/';
+      case 'audio':
+        return 'audio/';
+      case 'document':
+        return 'application/';
+      default:
+        return 'application/';
+    }
+  }
+
+  private buildRemoteMediaAcceptHeader(remoteMediaKind: RemoteMediaKind): string {
+    switch (remoteMediaKind) {
+      case 'image':
+      case 'sticker':
+        return 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8';
+      case 'video':
+        return 'video/*,*/*;q=0.8';
+      case 'audio':
+        return 'audio/*,*/*;q=0.8';
+      case 'document':
+        return '*/*';
+      default:
+        return '*/*';
+    }
   }
 
   private normalizeRecipientId(recipientId: string): string {

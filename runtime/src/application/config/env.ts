@@ -126,6 +126,14 @@ const envSchema = z.object({
   BAILEYS_LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('warn'),
 
   /**
+   * Remote media fetch settings used before uploading external files to WhatsApp.
+   * This avoids depending on third-party origins being fetchable by the downstream transport.
+   */
+  MEDIA_FETCH_TIMEOUT_MS: z.coerce.number().default(15000),
+  MEDIA_FETCH_MAX_ATTEMPTS: z.coerce.number().default(2),
+  MEDIA_FETCH_USER_AGENT: z.string().default('WhatsAppGateway/1.0'),
+
+  /**
    * Option to disable distributed locking for single-node local environments.
    */
   DISABLE_REDLOCK: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
