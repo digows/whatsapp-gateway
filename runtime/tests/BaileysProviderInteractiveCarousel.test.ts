@@ -47,12 +47,12 @@ test('BaileysProvider builds a view-once interactive carousel message', async ()
     }),
   );
 
-  assert.equal(waMessage.message.viewOnceMessage.message.interactiveMessage.carouselMessage.carouselCardType, proto.Message.InteractiveMessage.CarouselMessage.CarouselCardType.HSCROLL_CARDS);
-  assert.equal(waMessage.message.viewOnceMessage.message.interactiveMessage.body.text, 'Featured products');
-  assert.equal(waMessage.message.viewOnceMessage.message.interactiveMessage.footer.text, 'Swipe the cards');
-  assert.equal(waMessage.message.viewOnceMessage.message.interactiveMessage.carouselMessage.cards.length, 1);
-  assert.equal(waMessage.message.viewOnceMessage.message.interactiveMessage.carouselMessage.cards[0].header.title, 'Watch S1');
-  assert.equal(waMessage.message.viewOnceMessage.message.interactiveMessage.carouselMessage.cards[0].nativeFlowMessage.buttons[0].name, 'quick_reply');
+  assert.equal(waMessage.message.interactiveMessage.carouselMessage.carouselCardType, proto.Message.InteractiveMessage.CarouselMessage.CarouselCardType.HSCROLL_CARDS);
+  assert.equal(waMessage.message.interactiveMessage.body.text, 'Featured products');
+  assert.equal(waMessage.message.interactiveMessage.footer.text, 'Swipe the cards');
+  assert.equal(waMessage.message.interactiveMessage.carouselMessage.cards.length, 1);
+  assert.equal(waMessage.message.interactiveMessage.carouselMessage.cards[0].header.title, 'Watch S1');
+  assert.equal(waMessage.message.interactiveMessage.carouselMessage.cards[0].nativeFlowMessage.buttons[0].name, 'quick_reply');
 });
 
 test('BaileysProvider retries interactive carousel without header media when remote fetch fails', async () => {
@@ -120,11 +120,7 @@ test('BaileysProvider retries interactive carousel without header media when rem
     return {
       key: { id: 'fallback-message-id' },
       message: {
-        viewOnceMessage: {
-          message: {
-            interactiveMessage: {},
-          },
-        },
+        interactiveMessage: {},
       },
     };
   };

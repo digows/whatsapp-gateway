@@ -35,6 +35,7 @@ message content variant for native-flow carousel cards.
 `interactive_carousel` is intentionally limited to the variant that has been
 validated through Baileys in this project:
 
+- the outbound proto uses top-level `interactiveMessage`
 - carousel cards are emitted with WhatsApp `HSCROLL_CARDS`
 - each card uses `nativeFlowMessage`
 - `collectionMessage` and `shopStorefrontMessage` are not part of the contract

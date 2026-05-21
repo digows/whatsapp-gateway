@@ -484,31 +484,23 @@ export class BaileysProvider {
     return generateWAMessageFromContent(
       recipientJid,
       {
-        viewOnceMessage: {
-          message: {
-            messageContextInfo: {
-              deviceListMetadata: {},
-              deviceListMetadataVersion: 2,
-            },
-            interactiveMessage: proto.Message.InteractiveMessage.create({
-              body: content.bodyText
-                ? proto.Message.InteractiveMessage.Body.create({
-                    text: content.bodyText,
-                  })
-                : undefined,
-              footer: content.footerText
-                ? proto.Message.InteractiveMessage.Footer.create({
-                    text: content.footerText,
-                  })
-                : undefined,
-              carouselMessage: proto.Message.InteractiveMessage.CarouselMessage.create({
-                messageVersion: content.messageVersion,
-                carouselCardType: proto.Message.InteractiveMessage.CarouselMessage.CarouselCardType.HSCROLL_CARDS,
-                cards,
-              }),
-            }),
-          },
-        },
+        interactiveMessage: proto.Message.InteractiveMessage.create({
+          body: content.bodyText
+            ? proto.Message.InteractiveMessage.Body.create({
+                text: content.bodyText,
+              })
+            : undefined,
+          footer: content.footerText
+            ? proto.Message.InteractiveMessage.Footer.create({
+                text: content.footerText,
+              })
+            : undefined,
+          carouselMessage: proto.Message.InteractiveMessage.CarouselMessage.create({
+            messageVersion: content.messageVersion,
+            carouselCardType: proto.Message.InteractiveMessage.CarouselMessage.CarouselCardType.HSCROLL_CARDS,
+            cards,
+          }),
+        }),
       },
       {
         userJid: this.sock?.user?.id ?? recipientJid,

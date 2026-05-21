@@ -92,7 +92,7 @@ npm run send:interactive:carousel -- --to 5511999999999
 Optional custom images for carousel:
 
 ```bash
-npm run send:interactive:carousel -- --to 5511999999999 --image1 "https://example.com/1.jpg" --image2 "https://example.com/2.jpg"
+npm run send:interactive:carousel -- --to 5511999999999 --image1 "https://horizonplay.fbitsstatic.net/img/p/apple-iphone-14-pro-max-128gb-5g-vitrine-tela-super-retina-xdr-oled-6-7-cor-preto-espacial-150457/337049.jpg" --image2 "https://t2.tudocdn.net/808135"
 ```
 
 By default carousel reads image URLs from:
