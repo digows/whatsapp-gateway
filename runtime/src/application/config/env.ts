@@ -29,6 +29,7 @@ const envSchema = z.object({
   POSTGRES_SSL_ENABLED: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
   POSTGRES_SSL_REJECT_UNAUTHORIZED: z.preprocess((v) => v !== 'false' && v !== false, z.boolean().default(true)),
   POSTGRES_SSL_CA: z.string().optional(),
+  POSTGRES_MAX_POOL_SIZE: z.coerce.number().int().min(1).default(3),
 
   /**
    * PostgreSQL Schema name for this provider.

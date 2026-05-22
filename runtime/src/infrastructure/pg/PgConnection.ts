@@ -31,7 +31,7 @@ export class PgConnection {
       this.pool = new Pool({
         connectionString: env.POSTGRES_URL,
         ssl: this.buildSslConfig(),
-        max: 20,
+        max: env.POSTGRES_MAX_POOL_SIZE,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
       });
