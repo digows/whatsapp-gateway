@@ -440,15 +440,17 @@ export class BaileysProvider {
       throw new Error('no active socket');
     }
 
+    const compatibleContent = this.filterInteractiveCarouselForClientCompatibility(recipientJid, content);
+
     try {
-      const waMessage = await this.buildInteractiveCarouselWAMessage(recipientJid, content);
+      const waMessage = await this.buildInteractiveCarouselWAMessage(recipientJid, compatibleContent);
       await this.sock.relayMessage(recipientJid, waMessage.message, {
         messageId: waMessage.key.id,
       });
 
       return waMessage.key.id;
     } catch (error) {
-      if (!this.shouldFallbackInteractiveCarouselWithoutMedia(content, error)) {
+      if (!this.shouldFallbackInteractiveCarouselWithoutMedia(compatibleContent, error)) {
         throw error;
       }
 
@@ -458,7 +460,7 @@ export class BaileysProvider {
 
       const waMessage = await this.buildInteractiveCarouselWAMessage(
         recipientJid,
-        content,
+        compatibleContent,
         async () => undefined,
       );
       await this.sock.relayMessage(recipientJid, waMessage.message, {
@@ -467,6 +469,54 @@ export class BaileysProvider {
 
       return waMessage.key.id;
     }
+  }
+
+  /**
+   * Filters carousel cards down to those that render reliably on every WhatsApp client.
+   *
+   * <p>WhatsApp Web silently fails to render an interactive carousel whose cards carry
+   * {@code quick_reply} buttons — the message simply does not appear in the conversation,
+   * with no error surfaced to the sender. iOS tolerates both {@code quick_reply} and
+   * {@code cta_url}. To produce consistent behavior across clients the gateway drops
+   * cards whose buttons are not all {@code cta_url} before relaying to Baileys.</p>
+   *
+   * <p>If every card would be dropped the caller receives an explicit error so the
+   * problem surfaces instead of being silently swallowed.</p>
+   */
+  private filterInteractiveCarouselForClientCompatibility(
+    recipientJid: string,
+    content: InteractiveCarouselMessageContent,
+  ): InteractiveCarouselMessageContent {
+    const compatibleCards = content.cards.filter(card =>
+      card.nativeFlowMessage.buttons.length > 0
+      && card.nativeFlowMessage.buttons.every(button => button.name === 'cta_url'),
+    );
+
+    const droppedCount = content.cards.length - compatibleCards.length;
+    if (droppedCount === 0) {
+      return content;
+    }
+
+    console.warn(
+      `[BaileysProvider] Dropped ${droppedCount} of ${content.cards.length} carousel card(s) for ${recipientJid} `
+      + 'because their buttons are not all cta_url; quick_reply buttons cause WhatsApp Web '
+      + 'to silently fail to render the message.',
+    );
+
+    if (compatibleCards.length === 0) {
+      throw new Error(
+        'Interactive carousel was rejected because every card uses a non-cta_url button '
+        + '(e.g. quick_reply). WhatsApp Web silently fails to render such carousels. '
+        + 'Provide an actionUrl on each card so the gateway can emit a cta_url button.',
+      );
+    }
+
+    return new InteractiveCarouselMessageContent(
+      content.bodyText,
+      content.footerText,
+      compatibleCards,
+      content.messageVersion,
+    );
   }
 
   private async buildInteractiveCarouselWAMessage(
