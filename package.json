@@ -1,0 +1,24 @@
+{
+  "name": "whatsapp-gateway",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.9.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test runtime/test/*.test.ts packages/chat-adapter/test/*.test.ts",
+    "format": "dprint fmt --config dprint.json",
+    "format:check": "dprint check --config dprint.json",
+    "check": "pnpm format:check && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@types/node": "26.5.1",
+    "@types/pg": "8.23.1",
+    "@types/qrcode": "1.5.6",
+    "dprint": "0.57.4",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3"
+  }
+}

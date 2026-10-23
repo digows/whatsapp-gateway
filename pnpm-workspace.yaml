@@ -1,0 +1,9 @@
+packages:
+  - runtime
+  - packages/*
+
+allowBuilds:
+  esbuild@0.28.2: true
+  baileys@https://github.com/digows/baileys/releases/download/digows-7.0.0-rc14-interactive.1/baileys-digows-7.0.0-rc14-interactive.1.tgz: false
+  protobufjs: false
+  dprint: true

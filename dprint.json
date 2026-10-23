@@ -1,0 +1,27 @@
+{
+  "lineWidth": 110,
+  "indentWidth": 2,
+  "typescript": {
+    "bracePosition": "nextLine",
+    "nextControlFlowPosition": "nextLine",
+    "quoteStyle": "alwaysDouble"
+  },
+  "json": {},
+  "includes": [
+    "runtime/{src,test}/**/*.ts",
+    "packages/**/*.ts",
+    "**/package.json",
+    "tsconfig.json",
+    "dprint.json"
+  ],
+  "excludes": [
+    "**/node_modules",
+    "**/dist",
+    "poc",
+    "sdks"
+  ],
+  "plugins": [
+    "https://plugins.dprint.dev/typescript-0.96.1.wasm",
+    "https://plugins.dprint.dev/json-0.23.0.wasm"
+  ]
+}

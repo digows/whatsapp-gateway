@@ -1,0 +1,185 @@
+{
+  "libraryRevision": "0af2386292907f7d9742d8d41f830d8c48208fa1",
+  "testDatesUtc": [
+    "2026-10-06",
+    "2026-10-07"
+  ],
+  "renderingEvidence": "Human observations; account and client build numbers were not recorded",
+  "normalization": "Application labels and option-ID prefixes renamed consistently; transport IDs retained. Secrets, recipient hashes and media metadata in structural fixtures are synthetic replacements. Fixtures are not captured server echoes.",
+  "externalApplicationDependencies": false,
+  "fixtures": [
+    {
+      "replyMessageId": "3EB00CCEB74541287D3B40",
+      "wireType": "templateButtonReplyMessage",
+      "selectedIdentifier": "sample_N30_2",
+      "targetMessageId": "3EB0674932A3AD1164574F",
+      "response": {
+        "selectedId": "sample_N30_2",
+        "selectedDisplayText": "Escolher cartão 2",
+        "selectedIndex": 0,
+        "selectedCarouselCardIndex": 1,
+        "contextInfo": {
+          "stanzaId": "3EB0674932A3AD1164574F"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3EB023F6F0C2281CA732FB",
+      "wireType": "templateButtonReplyMessage",
+      "selectedIdentifier": "sample_N40_2",
+      "targetMessageId": "3EB076642E60DAADA85FC9",
+      "response": {
+        "selectedId": "sample_N40_2",
+        "selectedDisplayText": "Escolher cartão 2",
+        "selectedIndex": 0,
+        "selectedCarouselCardIndex": 1,
+        "contextInfo": {
+          "stanzaId": "3EB076642E60DAADA85FC9"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3A8D4647A16A5720439F",
+      "wireType": "listResponseMessage",
+      "selectedIdentifier": "sample_N04_ios",
+      "targetMessageId": "3EB0C0A93420F84145AAB6",
+      "response": {
+        "singleSelectReply": {
+          "selectedRowId": "sample_N04_ios"
+        },
+        "title": "Teste iOS",
+        "contextInfo": {
+          "stanzaId": "3EB0C0A93420F84145AAB6"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3EB037BF85E2FCB0A989C6",
+      "wireType": "listResponseMessage",
+      "selectedIdentifier": "sample_N04_web",
+      "targetMessageId": "3EB0C0A93420F84145AAB6",
+      "response": {
+        "singleSelectReply": {
+          "selectedRowId": "sample_N04_web"
+        },
+        "title": "Teste Web",
+        "contextInfo": {
+          "stanzaId": "3EB0C0A93420F84145AAB6"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3EB0102117B6747D8B9F77",
+      "wireType": "templateButtonReplyMessage",
+      "selectedIdentifier": "sample_N02_ios",
+      "targetMessageId": "3EB020C5C288E340277D4E",
+      "response": {
+        "selectedId": "sample_N02_ios",
+        "selectedDisplayText": "Teste iOS",
+        "selectedIndex": 0,
+        "contextInfo": {
+          "stanzaId": "3EB020C5C288E340277D4E"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3EB02029B9831DD4042562",
+      "wireType": "templateButtonReplyMessage",
+      "selectedIdentifier": "sample_N01_ios",
+      "targetMessageId": "3EB0EB976F9D991EE48594",
+      "response": {
+        "selectedId": "sample_N01_ios",
+        "selectedDisplayText": "Teste iOS",
+        "selectedIndex": 0,
+        "contextInfo": {
+          "stanzaId": "3EB0EB976F9D991EE48594"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3EB0FA3425651ADA28365D",
+      "wireType": "templateButtonReplyMessage",
+      "selectedIdentifier": "sample_N05_2",
+      "targetMessageId": "3EB03B2688D12CC8A11DA1",
+      "response": {
+        "selectedId": "sample_N05_2",
+        "selectedDisplayText": "Escolher cartão 2",
+        "selectedIndex": 0,
+        "selectedCarouselCardIndex": 1,
+        "contextInfo": {
+          "stanzaId": "3EB03B2688D12CC8A11DA1"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3A25BBF20487CDD8F0FB",
+      "wireType": "buttonsResponseMessage",
+      "selectedIdentifier": "sample_N22_ios",
+      "targetMessageId": "3EB052696FDF765C55DA71",
+      "response": {
+        "selectedButtonId": "sample_N22_ios",
+        "selectedDisplayText": "Teste iOS",
+        "type": "DISPLAY_TEXT",
+        "contextInfo": {
+          "stanzaId": "3EB052696FDF765C55DA71"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3EB0B173E57F3879D91E5B",
+      "wireType": "buttonsResponseMessage",
+      "selectedIdentifier": "sample_N24_web",
+      "targetMessageId": "3EB079421274E13E6DA3F1",
+      "response": {
+        "selectedButtonId": "sample_N24_web",
+        "selectedDisplayText": "Teste Web",
+        "type": "DISPLAY_TEXT",
+        "contextInfo": {
+          "stanzaId": "3EB079421274E13E6DA3F1"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3A474DB3B3F12FF49E90",
+      "wireType": "buttonsResponseMessage",
+      "selectedIdentifier": "sample_N23_ios",
+      "targetMessageId": "3EB0D99E7FACBD4720E48C",
+      "response": {
+        "selectedButtonId": "sample_N23_ios",
+        "selectedDisplayText": "Teste iOS",
+        "type": "DISPLAY_TEXT",
+        "contextInfo": {
+          "stanzaId": "3EB0D99E7FACBD4720E48C"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3AD50F5FCFF4552A8AF8",
+      "wireType": "buttonsResponseMessage",
+      "selectedIdentifier": "sample_N26_web",
+      "targetMessageId": "3EB0F55B613C2EDDAD1176",
+      "response": {
+        "selectedButtonId": "sample_N26_web",
+        "selectedDisplayText": "Teste Web",
+        "type": "DISPLAY_TEXT",
+        "contextInfo": {
+          "stanzaId": "3EB0F55B613C2EDDAD1176"
+        }
+      }
+    },
+    {
+      "replyMessageId": "3A5A7775F2045130718D",
+      "wireType": "buttonsResponseMessage",
+      "selectedIdentifier": "sample_N25_ios",
+      "targetMessageId": "3EB0B3B09730BCE0355648",
+      "response": {
+        "selectedButtonId": "sample_N25_ios",
+        "selectedDisplayText": "Teste iOS",
+        "type": "DISPLAY_TEXT",
+        "contextInfo": {
+          "stanzaId": "3EB0B3B09730BCE0355648"
+        }
+      }
+    }
+  ]
+}
