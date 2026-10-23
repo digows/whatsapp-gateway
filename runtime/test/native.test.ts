@@ -452,3 +452,55 @@ test("repeated QR observations do not extend the bounded unpaired attempt", asyn
     await bounded.close();
   }
 });
+
+test("an unsupported inbound message retains its failure and does not stop subsequent user messages", async () =>
+{
+  const id = randomUUID();
+  await store.createAccount(id);
+  let connection: BaileysConnection | undefined;
+  let fixture: NativeSocketFixture | undefined;
+  const isolated = new Gateway(store, (_account, lease) =>
+  {
+    connection = new BaileysConnection(store, lease, media, configuration =>
+    {
+      fixture = new NativeSocketFixture(configuration);
+      return fixture.socket;
+    });
+    return connection;
+  });
+  try
+  {
+    await isolated.start(id);
+    assert.ok(fixture);
+    fixture.pair();
+    fixture.update("open");
+    await connection?.drainEvents();
+    fixture.events.emit("messages.upsert", {
+      messages: [{
+        key: { id: "unsupported", remoteJid: "200@s.whatsapp.net" },
+        messageTimestamp: 1234,
+        message: {
+          viewOnceMessage: { message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1 } } },
+        },
+      }, {
+        key: { id: "valid-after-unsupported", remoteJid: "200@s.whatsapp.net" },
+        messageTimestamp: 1235,
+        message: { conversation: "Continue" },
+      }],
+    });
+    await connection?.drainEvents();
+    assert.equal((await store.account(id)).state, "CONNECTED");
+    assert.match(await store.native(id, "valid-after-unsupported"), /Continue/);
+    const rejected = await store.transaction(async client =>
+      (await client.query(
+        "SELECT count(*) FROM gateway.event WHERE account_id=$1 AND kind='NORMALIZATION_FAILED'",
+        [id],
+      )).rows[0]
+    );
+    assert.equal(rejected?.count, "1");
+  }
+  finally
+  {
+    await isolated.close();
+  }
+});

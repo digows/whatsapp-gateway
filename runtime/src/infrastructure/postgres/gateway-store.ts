@@ -389,6 +389,18 @@ export class PostgresGatewayStore
       );
     });
   }
+  async retainFailure(lease: AccountLease, native: string, errorName: string): Promise<void>
+  {
+    const id = "normalization-failed:" + createHash("sha256").update(native).digest("hex");
+    await this.transaction(async client =>
+    {
+      await this.assertOwnership(client, lease);
+      await client.query(
+        "INSERT INTO gateway.event(workspace_id,account_id,id,message,native,kind,error_name) VALUES($1,$2,$3,NULL,$4,'NORMALIZATION_FAILED',$5) ON CONFLICT DO NOTHING",
+        [this.workspaceId, lease.accountId, id, native, errorName],
+      );
+    });
+  }
   async native(accountId: string, messageId: string): Promise<string>
   {
     return this.transaction(async client =>

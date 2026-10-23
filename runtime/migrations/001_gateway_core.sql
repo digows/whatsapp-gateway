@@ -19,7 +19,9 @@ CREATE TABLE gateway.operation (
  PRIMARY KEY(workspace_id,account_id,key), FOREIGN KEY(workspace_id,account_id) REFERENCES gateway.account
 );
 CREATE TABLE gateway.event (
- workspace_id uuid NOT NULL, account_id uuid NOT NULL, id text NOT NULL, message jsonb NOT NULL, native text NOT NULL,
+ workspace_id uuid NOT NULL, account_id uuid NOT NULL, id text NOT NULL, message jsonb, native text NOT NULL,
+ kind text NOT NULL DEFAULT 'MESSAGE' CHECK(kind IN ('MESSAGE','NORMALIZATION_FAILED')), error_name text,
+ CHECK((kind='MESSAGE' AND message IS NOT NULL AND error_name IS NULL) OR (kind='NORMALIZATION_FAILED' AND message IS NULL AND error_name IS NOT NULL)),
  created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(workspace_id,account_id,id),
  FOREIGN KEY(workspace_id,account_id) REFERENCES gateway.account
 );

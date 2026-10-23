@@ -1,5 +1,6 @@
 import {
   type Account,
+  type InboundMessage,
   InboundMessageSchema,
   type MessageReference,
   type OutboundMessage,
@@ -18,7 +19,8 @@ import makeWASocket, {
 } from "baileys";
 import pino from "pino";
 import QRCode from "qrcode";
-import type { ConnectionEvents, WhatsAppConnection } from "../../domain/connection.ts";
+import type { ConnectionEvents, PreparedWhatsAppSend, WhatsAppConnection } from "../../domain/connection.ts";
+import { describeWhatsAppError } from "../../domain/error-details.ts";
 import type { IMediaRepository } from "../../domain/media-storage.ts";
 import { AccountLease, PostgresGatewayStore } from "../postgres/gateway-store.ts";
 import { BaileysAuthenticationStore } from "./baileys-authentication-store.ts";
@@ -28,7 +30,7 @@ import {
   inboundMessageContext,
 } from "./baileys-inbound-content.ts";
 import { BaileysMessageCache } from "./baileys-message-cache.ts";
-import { type PreparedWhatsAppSend, prepareOutboundContent } from "./baileys-outbound-content.ts";
+import { prepareOutboundContent } from "./baileys-outbound-content.ts";
 import { closeBaileysSocket, withBaileysTimeout } from "./baileys-socket-lifecycle.ts";
 export type SocketConfiguration = Parameters<typeof makeWASocket>[0];
 export type SocketFactory = (configuration: SocketConfiguration) => WASocket;
@@ -259,32 +261,42 @@ export class BaileysConnection implements WhatsAppConnection
       address: (jid, alternate) => this.address(jid, alternate),
       cachedMessage: key => this.cache.readMessage(key),
     };
-    const metadata = await inboundMessageContext(context);
-    const timestamp = message.messageTimestamp;
-    const seconds = typeof timestamp === "number" ? timestamp : timestamp?.toNumber();
-    if (seconds === undefined || !Number.isSafeInteger(seconds))
+    const serialized = JSON.stringify(message, BufferJSON.replacer);
+    let normalized: InboundMessage;
+    try
     {
-      throw new Error("Native message time unavailable");
+      const metadata = await inboundMessageContext(context);
+      const timestamp = message.messageTimestamp;
+      const seconds = typeof timestamp === "number" ? timestamp : timestamp?.toNumber();
+      if (seconds === undefined || !Number.isSafeInteger(seconds))
+      {
+        throw new Error("Native message time unavailable");
+      }
+      normalized = InboundMessageSchema.parse({
+        channel: "WHATSAPP",
+        receivingAddress: receiving,
+        chatAddress: await this.address(chat, message.key.remoteJidAlt),
+        senderAddress: message.key.fromMe
+          ? receiving
+          : await this.address(
+            message.key.participant ?? chat,
+            message.key.participantAlt ?? message.key.remoteJidAlt,
+          ),
+        senderDisplayName: message.pushName ?? undefined,
+        mentionsReceiver: (metadata.mentionedAddresses?.includes(receiving) ?? false)
+          || metadata.quotedMessage?.senderAddress === receiving,
+        channelMessageId: message.key.id,
+        occurredAt: new Date(seconds * 1000).toISOString(),
+        ...metadata,
+        ...await new BaileysInboundContent(context).normalize(),
+      });
     }
-    const normalized = InboundMessageSchema.parse({
-      channel: "WHATSAPP",
-      receivingAddress: receiving,
-      chatAddress: await this.address(chat, message.key.remoteJidAlt),
-      senderAddress: message.key.fromMe
-        ? receiving
-        : await this.address(
-          message.key.participant ?? chat,
-          message.key.participantAlt ?? message.key.remoteJidAlt,
-        ),
-      senderDisplayName: message.pushName ?? undefined,
-      mentionsReceiver: (metadata.mentionedAddresses?.includes(receiving) ?? false)
-        || metadata.quotedMessage?.senderAddress === receiving,
-      channelMessageId: message.key.id,
-      occurredAt: new Date(seconds * 1000).toISOString(),
-      ...metadata,
-      ...await new BaileysInboundContent(context).normalize(),
-    });
-    await this.events?.received(normalized, JSON.stringify(message, BufferJSON.replacer));
+    catch (error)
+    {
+      await this.events?.rejected(serialized, describeWhatsAppError(error).errorName);
+      return;
+    }
+    await this.events?.received(normalized, serialized);
   }
   async prepare(message: OutboundMessage, index: number, nativeId: string): Promise<PreparedWhatsAppSend>
   {

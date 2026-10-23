@@ -1,6 +1,4 @@
 import { z } from "zod";
-import type { InboundMessage } from "./content/inbound-message.ts";
-import type { MediaReference } from "./content/media-reference.ts";
 import type { OutboundMessage } from "./content/outbound-message.ts";
 
 export const AccountScopeSchema = z.strictObject({ workspaceId: z.uuid(), accountId: z.uuid() });
@@ -31,11 +29,6 @@ export interface OperationResult
   readonly acceptedParts: number;
   readonly state: OperationState;
 }
-export interface GatewayEvent extends AccountScope
-{
-  readonly id: string;
-  readonly message: InboundMessage;
-}
 /** A confirmed integration boundary; implementations must not translate UNKNOWN into retry. */
 export interface GatewayOperations
 {
@@ -44,12 +37,6 @@ export interface GatewayOperations
   presence(accountId: string, chatId: string, composing: boolean): Promise<void>;
   readMedia(accountId: string, sourceId: string): Promise<Uint8Array>;
 }
-export interface MaterializedMedia
-{
-  readonly reference: MediaReference;
-  readonly sourceId: string;
-}
-
 export interface DeliveryObservation
 {
   readonly channelMessageId: string;

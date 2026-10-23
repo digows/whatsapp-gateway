@@ -5,12 +5,19 @@ import type {
   OutboundMessage,
   SessionState,
 } from "@digows/whatsapp-gateway-contracts";
-import type { PreparedWhatsAppSend } from "../infrastructure/baileys/baileys-outbound-content.ts";
+import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
+
+export interface PreparedWhatsAppSend
+{
+  readonly content: AnyMessageContent;
+  readonly options: MiscMessageGenerationOptions;
+}
 
 export interface ConnectionEvents
 {
   state(state: SessionState, nativeJid?: string, qr?: string): Promise<void>;
   receipt(observation: DeliveryObservation): Promise<void>;
+  rejected(native: string, errorName: string): Promise<void>;
   received(message: InboundMessage, native: string): Promise<void>;
 }
 export interface WhatsAppConnection
@@ -21,4 +28,3 @@ export interface WhatsAppConnection
   presence(chat: string, composing: boolean): Promise<void>;
   stop(): Promise<void>;
 }
-export type ConnectionFactory = (account: Account) => WhatsAppConnection;

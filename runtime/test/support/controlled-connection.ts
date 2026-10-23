@@ -1,6 +1,6 @@
 import type { Account, OutboundMessage } from "@digows/whatsapp-gateway-contracts";
 import type { ConnectionEvents, WhatsAppConnection } from "../../src/domain/connection.ts";
-import type { PreparedWhatsAppSend } from "../../src/infrastructure/baileys/baileys-outbound-content.ts";
+import type { PreparedWhatsAppSend } from "../../src/domain/connection.ts";
 export class ControlledConnection implements WhatsAppConnection
 {
   readonly sent: PreparedWhatsAppSend[] = [];

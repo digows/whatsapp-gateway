@@ -92,7 +92,11 @@ children remain separately identified. Selection callbacks retain actual IDs, so
 and only indices actually present. Empty native reaction text represents removal.
 
 N47 carousel iOS selection remains disabled in the accepted evidence; horizontal navigation on iOS
-is unconfirmed. No poll-vote or event-reply capability is invented. Unqualified legacy declarations
+is unconfirmed. No poll-vote or event-reply capability is invented.
+A normalization failure retains a private technical failure event rather than converting the
+message to successful empty content or terminating the connected account. Other messages in the
+same native batch continue. Failure to persist that evidence still propagates as an operational
+failure; no automatic replay or new transmission contract is implied. Unqualified legacy declarations
 for group/community/newsletter/profile/privacy/call operations are outside this increment; their
 old presence does not establish delivered behavior or a requirement to port them.
 

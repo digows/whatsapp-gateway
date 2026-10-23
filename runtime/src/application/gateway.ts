@@ -68,6 +68,15 @@ class HostedAccount
     await this.connection.start(await this.store.account(this.lease.accountId), {
       state: (state, jid, qr) => this.store.setState(this.lease, state, jid, qr),
       receipt: observation => this.store.recordReceipt(this.lease, observation),
+      rejected: async (native, errorName) =>
+      {
+        await this.store.retainFailure(this.lease, native, errorName);
+        pino().warn({
+          event: "gateway_message_normalization_failed",
+          accountId: this.lease.accountId,
+          errorName,
+        });
+      },
       received: async (message, native) =>
       {
         if (!this.lease.alive || this.controller.signal.aborted) throw new Error("Account ownership lost");

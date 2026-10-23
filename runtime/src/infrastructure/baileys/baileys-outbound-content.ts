@@ -9,11 +9,7 @@ import {
 import type { IMediaRepository } from "../../domain/media-storage.ts";
 import { outboundPartCount, outboundPartId } from "../../domain/outbound-parts.ts";
 
-export interface PreparedWhatsAppSend
-{
-  readonly content: AnyMessageContent;
-  readonly options: MiscMessageGenerationOptions;
-}
+import type { PreparedWhatsAppSend } from "../../domain/connection.ts";
 
 export interface OutboundContentContext
 {
