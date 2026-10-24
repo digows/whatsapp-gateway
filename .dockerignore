@@ -5,6 +5,7 @@
 !tsconfig.json
 !scripts/
 !scripts/build.mjs
+!scripts/release.mjs
 !packages/
 !packages/contracts/
 !packages/contracts/package.json

@@ -47,6 +47,15 @@ def main():
         "Usage: TMPDIR=<owned directory> python3 scripts/qualify-container.py <image>",
     )
     image = sys.argv[1]
+    metadata = json.loads(docker("image", "inspect", image))[0]
+    require(metadata["Os"] == "linux" and metadata["Architecture"] == "arm64", "Expected linux/arm64 image")
+    image_labels = metadata["Config"]["Labels"]
+    for variable, label_key in [
+        ("GATEWAY_EXPECTED_VERSION", "org.opencontainers.image.version"),
+        ("GATEWAY_EXPECTED_REVISION", "org.opencontainers.image.revision"),
+    ]:
+        if os.environ.get(variable):
+            require(image_labels.get(label_key) == os.environ[variable], "Image release label mismatch: " + label_key)
     directory = Path(tempfile.mkdtemp(prefix="gateway-container-", dir=os.environ["TMPDIR"]))
     qualification_id = str(uuid.uuid4())
     label_name = "com.digows.whatsapp-gateway.qualification"
@@ -213,6 +222,8 @@ console.log('PENDING');
         restarted = json.loads(docker("inspect", application_name))[0]
         require(restarted["State"]["ExitCode"] == 0, "Restarted image shutdown failed")
         result.update({
+            "version": image_labels.get("org.opencontainers.image.version"),
+            "revision": image_labels.get("org.opencontainers.image.revision"),
             "imageId": application["Image"], "startupMs": startup_ms,
             "shutdownMs": shutdown_ms, "restartMs": restart_ms,
             "exitCode": application["State"]["ExitCode"],

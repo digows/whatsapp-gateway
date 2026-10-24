@@ -582,6 +582,18 @@ scoped request and the actual server response; it does not establish every brows
 No live pairing, external message, production deployment or production DML is part of qualification.
 Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
+Release packages share SemVer 2.0.0 across root, runtime, contracts and Adapter.
+Annotated `v<version>` tags must match all manifests and target a commit on main.
+The release workflow runs configured qualification and validates the packed
+compiled consumer exports/dependencies/checksums, then smoke-tests the ARM64
+image and its exact version/revision labels before image publication. Stable
+GitHub Releases depend on both qualification and image publication, and attach
+the same versioned consumer tarballs plus `SHA256SUMS`. Image tags include the
+version, moving major/latest aliases and immutable source SHA; the release
+records the registry digest. Manual SHA publication retains its exact reviewed
+main-SHA check. No npm publication, protocol bump or SQL schema bump is implied:
+wire `apiVersion: "1"` and SQL schema 9 are independently owned identifiers.
+
 
 ## Gateway-observed history and remote queries
 

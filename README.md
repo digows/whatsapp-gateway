@@ -178,17 +178,28 @@ qualified publication platform is **linux/arm64**. No amd64 image or multi-platf
 claimed. The image contains the runtime and contracts, without Chat SDK or Mastra dependencies.
 
 ```sh
-docker buildx build --platform linux/arm64 --load -t whatsapp-gateway:local .
+GATEWAY_IMAGE=ghcr.io/digows/whatsapp-gateway:2.0.0
+docker pull "$GATEWAY_IMAGE"
 docker volume create whatsapp-gateway-data
 # gateway.json must be readable by container UID 1000 and use directory /data/workspaces.
 docker run --rm --mount type=volume,src=whatsapp-gateway-data,dst=/data \
   --mount type=bind,src=/absolute/path/gateway.json,dst=/run/secrets/gateway.json,readonly \
-  whatsapp-gateway:local migrate
+  "$GATEWAY_IMAGE" migrate
 docker run --name whatsapp-gateway --stop-timeout 90 -p 127.0.0.1:8080:8080 \
   --mount type=volume,src=whatsapp-gateway-data,dst=/data \
   --mount type=bind,src=/absolute/path/gateway.json,dst=/run/secrets/gateway.json,readonly \
-  whatsapp-gateway:local serve
+  "$GATEWAY_IMAGE" serve
 docker stop whatsapp-gateway
+```
+
+For a local source build, select its own image tag and use that value with the same migrate/serve
+commands above:
+
+```sh
+GATEWAY_IMAGE=whatsapp-gateway:local
+docker buildx build --platform linux/arm64 --load --tag "$GATEWAY_IMAGE" \
+  --build-arg GATEWAY_VERSION="$(node scripts/release.mjs check)" \
+  --build-arg GATEWAY_REVISION="$(git rev-parse HEAD)" .
 ```
 
 Bind paths belong to the Docker daemon host when using a remote context. Keep configuration outside
@@ -204,8 +215,39 @@ durable intake, SIGTERM and restart, then removes only
 its resources. Set `TMPDIR` to an owned disposable directory and pass a locally available image.
 It uses no external network or real WhatsApp session. The
 [workflow](.github/workflows/qualify-and-publish.yml) runs configured checks and archives consumer
-tarballs; manual publication requires the exact reviewed main SHA, qualifies the built arm64 image
-and pushes that image to GHCR. A workflow definition alone is not a published release.
+tarballs and `SHA256SUMS`. Manual publication requires the exact reviewed main SHA and publishes
+its immutable SHA image. Annotated release tags additionally publish versioned images and a stable
+GitHub Release after all configured checks and the container smoke pass. A workflow definition
+alone is not proof of publication.
+
+### Versioning and releases
+
+The repository, runtime, contracts and Chat Adapter share **SemVer 2.0.0**.
+Git tags use `v<version>` (for example `v2.0.0`); GHCR uses `2.0.0`, the moving major alias `2`,
+and `latest`. Only **linux/arm64** is qualified. Pin the version or, for immutable deployments, the
+image digest reported in the GitHub Release. The SHA image tag also identifies its source commit.
+Major and latest aliases can move on subsequent stable releases.
+
+Package SemVer is independent of the wire protocol (`apiVersion: "1"`) and database schema (9).
+Release 2.0.0 does not change either identifier or imply that the proposed Mastra durable consumer
+binding is complete. Its measured native-framework limitations remain documented below and in the
+[owning use case](docs/use-cases/gateway-core.md).
+
+Maintainers update all four manifests together, add release notes under `docs/releases/<version>.md`,
+and run `pnpm release:check`. After review, push the accepted main commit and create an annotated tag
+on that exact commit:
+
+```sh
+git tag -a v2.0.0 <accepted-commit> -m 'WhatsApp Gateway 2.0.0'
+git push origin main
+git push origin v2.0.0
+```
+
+The tag workflow rejects mismatched versions, lightweight tags and commits outside main. It runs
+the configured checks, validates compiled consumer packages, smoke-tests the image and verifies
+its version/revision labels before publication. It then publishes the stable GitHub Release with
+the exact consumer archives and checksums. Never move a released tag or replace release assets;
+use a new patch version for corrections. No npm registry publication is performed.
 
 ### Compose HTTP
 
@@ -411,13 +453,22 @@ These limits are documented in the [owning use case](docs/use-cases/gateway-core
 
 ### Install the consumer packages
 
-The source package versions are currently `0.0.0`; no npm registry release is claimed. Run
-`pnpm build`, then pack the contracts and Adapter into an owned artifact directory, or obtain the
-matching `gateway-consumer-packages-<commit>` CI artifact:
+Download the versioned archives and `SHA256SUMS` from the selected GitHub Release. For 2.0.0:
+
+```sh
+gh release download v2.0.0 --repo digows/whatsapp-gateway \
+  --pattern '*.tgz' --pattern SHA256SUMS --dir ./gateway-2.0.0
+cd gateway-2.0.0
+shasum -a 256 -c SHA256SUMS
+```
+
+Alternatively, run `pnpm build` and pack from the matching source revision into an owned artifact
+directory, or obtain the matching `gateway-consumer-packages-<commit>` CI artifact:
 
 ```sh
 pnpm --dir packages/contracts pack --pack-destination /absolute/path/artifacts
 pnpm --dir packages/chat-adapter pack --pack-destination /absolute/path/artifacts
+node scripts/release.mjs artifacts /absolute/path/artifacts
 ```
 
 Copy both tarballs into the consumer project and pin pnpm 12.9.1. Install both files plus
@@ -426,8 +477,15 @@ consumer's `pnpm-workspace.yaml` so the Adapter's contracts dependency resolves 
 
 ```yaml
 overrides:
-  '@digows/whatsapp-gateway-contracts': file:./digows-whatsapp-gateway-contracts-0.0.0.tgz
+  '@digows/whatsapp-gateway-contracts': file:./digows-whatsapp-gateway-contracts-2.0.0.tgz
   chat: 4.43.0
+```
+
+```sh
+pnpm add ./digows-whatsapp-gateway-contracts-2.0.0.tgz \
+  ./digows-chat-adapter-whatsapp-gateway-2.0.0.tgz chat@4.43.0
+# Only consumers using the optional Mastra composition need this peer:
+pnpm add @mastra/core@1.79.0
 ```
 
 Import the compiled Adapter from `@digows/chat-adapter-whatsapp-gateway`. The optional
