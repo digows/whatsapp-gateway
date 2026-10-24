@@ -8,3 +8,4 @@ allowBuilds:
   protobufjs: false
   dprint: true
   better-sqlite3@13.0.3: true
+  "@scarf/scarf@1.4.0": false

@@ -2,14 +2,15 @@
 
 This document owns the transport-independent gateway behavior reviewed on October 23, 2026.
 The runtime, portable contracts and application-side Chat SDK projection are implemented here.
-The versioned command contract and SQL ingress are implemented. HTTP/Redis transports, webhook
+The versioned command contract, SQL ingress and HTTP transport are implemented. Redis transport, webhook
 acknowledgement and automatic placement remain pending increments of the approved design.
 No legacy NATS subject is retained as a compatibility contract.
 
 ## Actors and boundaries
 
 An authenticated integration supplies a trusted workspace context and a gateway account ID.
-The core does not authenticate HTTP requests: a future transport must establish that context.
+The embedded HTTP transport authenticates bearer credentials and maps them to explicit principal grants.
+The core remains transport-independent; in-process embedders establish their trusted context.
 Gateway-owned UUIDs are normalized to lower-case before map keys, locks, SQL identity and SDK thread
 encoding. These UUIDs are separate from native WhatsApp JIDs. Send-operation snapshots/results carry
 workspace/account explicitly; persistence rejects an operation whose identity differs from its lease.
@@ -80,8 +81,47 @@ IN_FLIGHT sends recover as UNKNOWN and remain UNKNOWN in the command response, w
 resend. COMPLETED means command evaluation finished; it does not turn UNKNOWN into success or
 ACCEPTED into delivery. SQL failures while recording a completion leave recovery possible rather
 than rewriting the command as an execution failure. Command history is separate from later webhook
-retention. Presently an embedder calls `runOne()`; coordinator scheduling and remote transports are
+retention. Presently an embedder calls `runOne()`; coordinator scheduling and the Redis transport are
 subsequent increments, not claimed runtime capabilities.
+
+## HTTP commands, queries and interactive documentation
+
+`GatewayHttpTransport` is independently enabled; disabling it opens no listener and does not require
+credentials. Enabling it requires explicit bearer credentials, each mapped to a trusted
+`GatewayPrincipal`. Tokens have at least 32 characters and are hashed before comparison with
+constant-time digest comparison. Duplicate credentials or mismatched workspace routing fail startup.
+Serve it behind TLS in deployments that expose it beyond the host; the embedded listener is HTTP,
+with default host 127.0.0.1/port 8080. No authentication token, native payload or raw media URL appears
+in the request logs. Remote account/operation results must match the route's authorized scope.
+
+- `POST /v1/commands`: validate version/content/scope, commit SQL intake and return 202. A replay
+  can return its already completed receipt, still with the original identity/sequence.
+- `GET /v1/accounts/{workspaceId}/{accountId}`: scoped account state and available pairing QR.
+- `GET /v1/accounts/{workspaceId}/{accountId}/commands/{requestId}`: durable command outcome.
+- `GET /v1/accounts/{workspaceId}/{accountId}/operations/{key}`: native send-operation observation.
+- `GET /v1/accounts/{workspaceId}/{accountId}/media?sourceId=...`: bounded, lazy decrypted bytes,
+  without an object store or through configured S3 materialization. Source expiry/unavailability
+  is explicit; no media-key/provider-URL response. Responses use private/no-store caching.
+
+The same owning Zod schemas generate [OpenAPI 3.1.1](https://spec.openapis.org/oas/v3.1.1.html) at `/openapi.json`. `/docs` serves pinned local
+[Swagger UI assets](https://swagger.io/docs/open-source-tools/swagger-ui/usage/installation/) with the actual bearer security scheme and callable operations, without an external
+validator/CDN or persistent browser credentials. Documentation is public and contains no account data.
+The OpenAPI document is independently parsed/validated in HTTP integration tests; no manual schema
+copy is maintained. Cross-field identity and accepted-count invariants are also checked at runtime.
+
+HTTP accepts only JSON command bodies, defaults to a 1 MiB bound (maximum configurable 16 MiB),
+and applies an explicit 15-second body deadline in addition to Node's HTTP timeouts. Declared and
+chunked over-limit bodies fail with 413; incomplete bodies expire with 408. Invalid input is 400,
+missing/invalid credentials 401, unauthorized scope 403, unavailable scoped resources 404,
+request-ID conflicts 409, wrong media type 415 and storage/provider failures 503. Malformed provider
+results are 503 rather than blaming the caller; raw dependency errors are not returned.
+
+Closing the transport stops admission/listening, waits for active handlers and closes connections
+at the configured shutdown deadline (default 15 seconds). Persisted commands survive HTTP shutdown
+or caller disconnection; stopping the server does not cancel an accepted native operation. Close
+HTTP before its gateway and storage. Gateway media and SQL operations retain their own bounded
+execution timeouts. This increment is an embeddable HTTP server, not a separately published runtime,
+Redis qualification, webhook implementation or production deployment.
 
 ## Session flow and ownership
 
@@ -260,5 +300,5 @@ Component tests cover finite typing and pacing invariants. The SDK tests
 exercise its actual Message and Attachment types.
 
 These tests do not establish physical client rendering, live receipt, WhatsApp server availability,
-final HTTP/broker delivery semantics or application/business approval. No live pairing, external
+broker/webhook delivery semantics or full browser UI qualification or application/business approval. No live pairing, external
 message, deployment, public package/image publication or production DML is part of this increment.

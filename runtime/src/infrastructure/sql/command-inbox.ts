@@ -12,6 +12,7 @@ import {
 import { type Selectable, sql } from "kysely";
 import { createHash, randomUUID } from "node:crypto";
 import type { ClaimedGatewayCommand, GatewayCommandInbox } from "../../domain/command-inbox.ts";
+import { GatewayConflictError, GatewayResourceUnavailableError } from "../../domain/errors.ts";
 import type { AccountLease } from "../../domain/gateway-store.ts";
 import { canonical, SqlGatewayStore } from "./gateway-store.ts";
 import { type CommandTable, jsonValue } from "./tables.ts";
@@ -34,7 +35,7 @@ export class SqlCommandInbox implements GatewayCommandInbox
       const account = await transaction.updateTable("account").set({ generation: sql`generation` })
         .where("workspace_id", "=", this.workspaceId).where("id", "=", command.accountId).returning("id")
         .executeTakeFirst();
-      if (!account) throw new Error("Account unavailable");
+      if (!account) throw new GatewayResourceUnavailableError("Account unavailable");
       const existing = await transaction.selectFrom("command").selectAll().where(
         "workspace_id",
         "=",
@@ -44,7 +45,10 @@ export class SqlCommandInbox implements GatewayCommandInbox
         .executeTakeFirst();
       if (existing)
       {
-        if (existing.digest !== digest) throw new Error("Command request has a different payload");
+        if (existing.digest !== digest)
+        {
+          throw new GatewayConflictError("Command request has a different payload");
+        }
         return commandResult(existing);
       }
       const last = await transaction.selectFrom("command").select("sequence").where(
@@ -82,7 +86,7 @@ export class SqlCommandInbox implements GatewayCommandInbox
         this.workspaceId,
       )
         .where("account_id", "=", accountId).where("request_id", "=", requestId).executeTakeFirst();
-      if (!row) throw new Error("Command unavailable");
+      if (!row) throw new GatewayResourceUnavailableError("Command unavailable");
       return commandResult(row);
     });
   }

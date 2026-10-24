@@ -8,8 +8,9 @@ and media fetched on demand. SQLite local mode or PostgreSQL shared storage keep
 PostgreSQL enforces workspace isolation with Row Level Security; SQLite enforces workspace/account
 isolation in application queries and runs under one exclusive local runtime.
 
-**Current delivery:** an embeddable core, portable contracts and a partial Chat SDK mapping.
-There is no standalone HTTP server, broker consumer or published ready-to-use Chat SDK Adapter yet.
+**Current delivery:** an embeddable core with an authenticated HTTP server, portable contracts and
+a partial Chat SDK mapping. Automatic fleet placement, Redis, webhooks and the complete Chat SDK
+Adapter remain in progress; no standalone distribution is published.
 
 ## Built for agent integrations
 
@@ -35,6 +36,7 @@ partial mapping; a complete ready-to-use Adapter remains a target.
 | --- | --- |
 | Accounts and sessions | Multiple accounts per workspace, QR pairing, saved-auth restoration, restart-required handling, logout cleanup and bounded reconnects |
 | Session safety | Exclusive ownership per account, generation checks, stale-callback rejection and shutdown cleanup |
+| HTTP | Authenticated commands/queries, scoped lazy media and generated OpenAPI with local interactive docs |
 | Durable commands | Versioned scoped requests, explicit grants, per-account SQL ingress ordering and generation-fenced recovery |
 | Durable sends | Per-account ordering, stable caller keys, payload-conflict detection, reserved native IDs and explicit `UNKNOWN` outcomes |
 | Contact lookup | Account-scoped registered/unregistered/indeterminate results and authoritative native IDs; no country-specific number rewriting |
@@ -96,7 +98,41 @@ versions and invalid storage/topology combinations fail at startup.
 For PostgreSQL, give a separate runtime role `USAGE` on schema `gateway` and `SELECT`, `INSERT`,
 `UPDATE`, `DELETE` on its tables. It must have neither superuser privileges nor `BYPASSRLS`.
 All tenant tables have forced RLS. SQLite provides local application isolation, not RLS equivalence.
-The application establishes the trusted workspace; the core does not authenticate remote callers.
+The HTTP transport authenticates configured bearer credentials and checks workspace/account grants.
+In-process embedders establish their own trusted workspace context.
+
+### Compose HTTP
+
+Create workspace-specific command ingress alongside the gateway, then enable the HTTP listener.
+The token must come from a private configuration source; the example does not create a credential.
+
+```ts
+import {
+  GatewayCommandIngress,
+  GatewayHttpTransport,
+  GatewayPrincipal,
+  SqlCommandInbox,
+} from "@digows/whatsapp-gateway-runtime";
+
+const commands = new GatewayCommandIngress(new SqlCommandInbox(store));
+const principal = new GatewayPrincipal("agent-application", [{
+  workspaceId: store.workspaceId,
+  accountIds: [account.accountId],
+}]);
+const http = new GatewayHttpTransport(
+  { enabled: true, host: "127.0.0.1", port: 8080 },
+  [{ store, commands, gateway }],
+  [{ token: process.env["GATEWAY_HTTP_TOKEN"]!, principal }],
+);
+await http.start();
+```
+
+`/docs` provides local interactive OpenAPI. `POST /v1/commands` returns 202 after durable SQL
+intake; poll the account-scoped command endpoint for the outcome. The embedder currently drives
+`GatewayCommandWorker.runOne(lease)` on the exclusive account owner. HTTP intake can run on a
+separate PostgreSQL instance of the gateway without a local socket. An accepted command can remain
+queued until an owner executes it. Selecting `{ enabled: false }` opens no HTTP listener.
+Automatic ownership scheduling, Redis and webhooks remain separate unfinished increments.
 
 ### Compose the core
 
@@ -179,7 +215,7 @@ GATEWAY_TEST_DATABASE_URL="$DISPOSABLE_RUNTIME_DATABASE_URL" \
 GATEWAY_TEST_ADMIN_DATABASE_URL="$DISPOSABLE_ADMIN_DATABASE_URL" pnpm test
 ```
 
-`pnpm check` runs all three checks. Use an owned disposable PostgreSQL database with both migrations
+`pnpm check` runs all three checks. Use an owned disposable PostgreSQL database with all migrations
 and the restricted runtime role described above. Storage compatibility tests additionally require
 an explicit disposable admin URL to create/drop isolated verification databases. Set `TMPDIR` to an
 owned disposable directory for SQLite files and child-process checks. Tests require explicit fixture URLs;
@@ -188,11 +224,11 @@ tests do not require QR pairing or live WhatsApp sends. There is no separate lin
 
 ## Next, not implemented yet
 
-- Independently configurable HTTP commands/queries, webhook events and Redis Streams messaging.
+- Independently configurable webhook events and Redis Streams messaging.
 - A complete, ready-to-use Chat SDK Adapter.
 - Automatic account placement, balancing and failover across peer runtimes.
 - Durable webhook retries with explicit delivery and retention policies.
 
-These are design targets, not current setup options. NATS is a future compatibility target.
-There is no full WhatsApp history service. Live client/S3 parity, application replay qualification,
+These are approved design targets, not current setup options. No NATS transport is included.
+There is no full WhatsApp history service. Live client/R2 qualification, application replay qualification,
 release packaging and deployment remain separate validation work.

@@ -13,6 +13,10 @@ export class GatewayCommandIngress
 {
   constructor(private readonly inbox: GatewayCommandInbox)
   {}
+  get workspaceId(): string
+  {
+    return this.inbox.workspaceId;
+  }
   async submit(principal: GatewayPrincipal, input: unknown): Promise<GatewayCommandResult>
   {
     const command = GatewayCommandSchema.parse(input);

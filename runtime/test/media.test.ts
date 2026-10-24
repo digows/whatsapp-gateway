@@ -9,10 +9,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from "node:path";
 import { test } from "node:test";
 import { GatewayChatMapping } from "../../packages/chat-adapter/src/index.ts";
+import { GatewayCommandIngress } from "../src/application/command-ingress.ts";
 import { Gateway } from "../src/application/gateway.ts";
+import { GatewayPrincipal } from "../src/domain/authorization.ts";
 import { encodeWhatsAppMediaSource } from "../src/domain/media-source.ts";
 import { BaileysConnection } from "../src/infrastructure/baileys/baileys-connection.ts";
+import { GatewayHttpTransport } from "../src/infrastructure/http/transport.ts";
 import { createMediaStorage } from "../src/infrastructure/s3/configuration.ts";
+import { SqlCommandInbox } from "../src/infrastructure/sql/command-inbox.ts";
 import {
   type GatewayStorage,
   migrateGatewayStorage,
@@ -381,3 +385,51 @@ test("altered encrypted native bytes fail authentication before bytes reach the 
     await fixture.close();
   }
 });
+
+for (const materialize of [false, true])
+{
+  test(`authenticated HTTP retrieves lazy native media with S3 mode ${materialize}`, async () =>
+  {
+    const fixture = new MediaFixture();
+    let http: GatewayHttpTransport | undefined;
+    try
+    {
+      await fixture.start(materialize);
+      const store = fixture.storage.workspace(fixture.workspaceId);
+      const principal = new GatewayPrincipal("media-agent", [{
+        workspaceId: fixture.workspaceId,
+        accountIds: [fixture.accountId],
+      }]);
+      const token = randomBytes(32).toString("hex");
+      http = new GatewayHttpTransport({ enabled: true, port: 0 }, [{
+        store,
+        commands: new GatewayCommandIngress(new SqlCommandInbox(store)),
+        gateway: fixture.gateway,
+      }], [{ token, principal }]);
+      await http.start();
+      const url = http.origin + `/v1/accounts/${fixture.workspaceId}/${fixture.accountId}/media?sourceId=`
+        + encodeURIComponent(fixture.sourceId);
+      assert.equal((await fetch(url)).status, 401);
+      assert.equal(fixture.mediaRequests, 0);
+      const headers = { authorization: `Bearer ${token}` };
+      const forbidden = url.replace(fixture.accountId, randomUUID());
+      assert.equal((await fetch(forbidden, { headers })).status, 403);
+      assert.equal(fixture.mediaRequests, 0);
+      const response = await fetch(url, { headers });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), "application/octet-stream");
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), fixture.payload);
+      assert.equal(fixture.objectWrites, materialize ? 1 : 0);
+      fixture.expired = true;
+      const afterExpiry = await fetch(url, { headers });
+      assert.equal(afterExpiry.status, materialize ? 200 : 503);
+      if (materialize) assert.deepEqual(Buffer.from(await afterExpiry.arrayBuffer()), fixture.payload);
+      else assert.deepEqual(await afterExpiry.json(), { apiVersion: "1", code: "UNAVAILABLE" });
+    }
+    finally
+    {
+      await http?.close();
+      await fixture.close();
+    }
+  });
+}

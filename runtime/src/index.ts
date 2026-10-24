@@ -20,3 +20,12 @@ export { GatewayCommandIngress, GatewayCommandWorker } from "./application/comma
 export { type AccountGrant, GatewayAuthorizationError, GatewayPrincipal } from "./domain/authorization.ts";
 export { type ClaimedGatewayCommand, type GatewayCommandInbox } from "./domain/command-inbox.ts";
 export { SqlCommandInbox } from "./infrastructure/sql/command-inbox.ts";
+
+export { createGatewayOpenApi } from "./infrastructure/http/openapi.ts";
+export {
+  type GatewayHttpConfiguration,
+  type GatewayHttpConfigurationInput,
+  type GatewayHttpCredential,
+  GatewayHttpTransport,
+  type GatewayHttpWorkspace,
+} from "./infrastructure/http/transport.ts";

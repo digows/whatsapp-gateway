@@ -14,6 +14,7 @@ import {
 import { type Selectable, sql, type Transaction } from "kysely";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { GatewayResourceUnavailableError } from "../../domain/errors.ts";
 import {
   type AccountLease,
   type AuthenticationMutation,
@@ -89,7 +90,7 @@ export class SqlGatewayStore implements GatewayStore
         "=",
         this.workspaceId,
       ).where("id", "=", accountId).executeTakeFirst();
-      if (!row) throw new Error("Account unavailable");
+      if (!row) throw new GatewayResourceUnavailableError("Account unavailable");
       return this.scopedAccount(row);
     });
   }
@@ -116,7 +117,7 @@ export class SqlGatewayStore implements GatewayStore
         "=",
         this.workspaceId,
       ).where("id", "=", accountId).returning("generation").executeTakeFirst();
-      if (!row) throw new Error("Account unavailable");
+      if (!row) throw new GatewayResourceUnavailableError("Account unavailable");
       await transaction.updateTable("operation").set({ state: "UNKNOWN" }).where(
         "workspace_id",
         "=",
@@ -168,7 +169,7 @@ export class SqlGatewayStore implements GatewayStore
         this.workspaceId,
       ).where("account_id", "=", lease.accountId).where("key", "=", message.idempotencyKey)
         .executeTakeFirst();
-      if (!row) throw new Error("Operation unavailable");
+      if (!row) throw new GatewayResourceUnavailableError("Operation unavailable");
       if (row.digest !== digest) throw new Error("Operation key has a different payload");
       if (row.state === "IN_FLIGHT")
       {
@@ -220,7 +221,7 @@ export class SqlGatewayStore implements GatewayStore
         "=",
         this.workspaceId,
       ).where("account_id", "=", accountId).where("key", "=", key).executeTakeFirst();
-      if (!row) throw new Error("Operation unavailable");
+      if (!row) throw new GatewayResourceUnavailableError("Operation unavailable");
       return operationResult(row);
     });
   }

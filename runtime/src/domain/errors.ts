@@ -6,3 +6,19 @@ export class AccountOwnedError extends Error
     this.name = "AccountOwnedError";
   }
 }
+export class GatewayConflictError extends Error
+{
+  constructor(message: string)
+  {
+    super(message);
+    this.name = "GatewayConflictError";
+  }
+}
+export class GatewayResourceUnavailableError extends Error
+{
+  constructor(message: string)
+  {
+    super(message);
+    this.name = "GatewayResourceUnavailableError";
+  }
+}
