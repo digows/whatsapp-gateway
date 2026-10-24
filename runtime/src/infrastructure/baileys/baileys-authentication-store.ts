@@ -7,7 +7,7 @@ import {
   type SignalDataSet,
   type SignalDataTypeMap,
 } from "baileys";
-import type { AuthenticationMutation as WhatsAppAuthenticationMutation } from "../postgres/gateway-store.ts";
+import type { AuthenticationMutation as WhatsAppAuthenticationMutation } from "../../domain/gateway-store.ts";
 export interface AuthenticationRecords
 {
   readAuthentication(accountId: string, category: string, keyId: string): Promise<string | null>;

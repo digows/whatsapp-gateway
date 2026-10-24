@@ -9,20 +9,50 @@ remain undecided. No legacy NATS subject is retained as a compatibility contract
 
 An authenticated integration supplies a trusted workspace context and a gateway account ID.
 The core does not authenticate HTTP requests: a future transport must establish that context.
-PostgreSQL RLS isolates all technical rows by `workspace_id`; callers never select a workspace
+PostgreSQL RLS isolates technical tenant rows by `workspace_id`; SQLite local mode enforces the same
+workspace/account keys in application queries and constraints, without database RLS. Callers never select a workspace
 from an unverified incoming event. Account IDs, WhatsApp JIDs and phone aliases are transport
 identity, not application Person, Household or Case policy.
 
-The versioned fresh-baseline schema is `runtime/migrations/001_gateway_core.sql`.
-Apply it as an administrative migration role, then grant the runtime role schema usage and
-SELECT/INSERT/UPDATE/DELETE on its tables. The runtime role must not be a superuser or have
-BYPASSRLS. There is no automatic destructive migration or legacy data conversion.
+## Storage selection and startup
+
+`StorageConfigurationSchema` accepts only the implemented `sqlite` and `postgresql` engines.
+SQLite requires a durable local filename and `mode: local`; PostgreSQL accepts local or shared
+cluster mode and is currently qualified against PostgreSQL 18. Another Kysely dialect is not a
+supported backend. Changing configuration does not transfer data between engines.
+
+`migrateGatewayStorage()` is an explicit administrative step. PostgreSQL uses the immutable
+`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`; SQLite uses
+`runtime/migrations/sqlite/001_gateway_core.sql`. Schema version metadata is intentionally system-level,
+not tenant-owned. Unknown versions fail instead of being reset. Migration does not convert legacy
+authentication directories or old deployments. PostgreSQL migration calls serialize on an advisory lock.
+
+`openGatewayStorage()` verifies the actual schema version/required columns and driver capabilities
+before exposing scoped stores. PostgreSQL requires the qualified server version, a non-superuser,
+non-BYPASSRLS runtime role, forced RLS on every tenant table and the expected workspace policies.
+SQLite requires foreign keys, valid existing foreign-key integrity, JSON support and the SQL version
+needed by the implemented queries. Invalid combinations fail explicitly and release their resources.
+
+SQLite requires a private regular database file (0600) and rejects symbolic links or group/other
+access. It retains an OS-backed exclusive lock for the runtime's database connection lifetime. A second
+runtime/process cannot open that file concurrently; process death releases the OS lock. Multiple
+workspaces/accounts share the one storage instance through `storage.workspace(workspaceId)`. SQLite
+WAL files are local, never a cross-host/shared-filesystem ownership mechanism. PostgreSQL preserves
+its dedicated account advisory locks and generation fences. The configured cluster mode currently
+qualifies shared storage/ownership; automatic placement/transport routing is a separate pending increment.
+
+Apply migrations with an administrative role; grant the PostgreSQL runtime role schema usage and
+SELECT/INSERT/UPDATE/DELETE on its tables. The runtime does not silently migrate on startup.
+Close gateways before closing their shared storage. The PostgreSQL convenience store also verifies
+compatibility before its first transaction. Core and Baileys authentication use the owning store/lease
+ports, not PostgreSQL client types. Serialized Baileys credentials/Signal keys remain private SQL data.
 
 ## Session flow and ownership
 
-`PostgresGatewayStore.createAccount()` creates a scoped account without starting WhatsApp.
-`Gateway.start()` acquires one PostgreSQL advisory-lock connection and advances the ownership
-generation before creating the Baileys connection. Concurrent starts in one Gateway share that
+`store.createAccount()` creates a scoped account without starting WhatsApp.
+`Gateway.start()` acquires exclusive account ownership and advances the ownership
+generation (a dedicated advisory-lock connection in PostgreSQL; a local lease under SQLite file
+exclusivity) before creating the Baileys connection. Concurrent starts in one Gateway share that
 start; another owner is rejected. A failed connection factory releases the acquired connection.
 
 The state is STOPPED, CONNECTING, AWAITING_PAIRING, CONNECTED, LOGGED_OUT or FAILED.
@@ -45,7 +75,7 @@ advertised as an exactly-once external-effect guarantee.
 ## Send flow and recovery
 
 The application supplies a stable operation key and validated portable content to `send()`.
-Within an account, operations are serialized. PostgreSQL reserves a payload digest and native IDs
+Within an account, operations are serialized. The SQL store reserves a payload digest and native IDs
 for every album parent/part before transmission. The same key and digest returns the original
 result; reusing a key with another payload is a conflict. Native IDs also exclude bot echoes while
 preserving handset-originated messages, including self-chat.
@@ -129,7 +159,9 @@ No stub webhook or pretend connected broker exists. No full WhatsApp history ser
 
 ## Validation and limits
 
-Integration tests use PostgreSQL with a non-owner RLS role and controlled Baileys sockets. They
+Integration tests use real SQLite and PostgreSQL drivers, a non-owner PostgreSQL RLS role and
+controlled Baileys sockets. Storage scenarios cover invalid configurations/schema/roles/policies,
+workspace/account separation, a competing SQLite process and SIGKILL recovery to UNKNOWN. They
 exercise ownership, stable-key sends/conflicts, UNKNOWN recovery, QR/515/restart/logout, media,
 rich native inputs, receipts and cleanup. Captured predecessor interactive responses in
 `runtime/test/fixtures/native-response-fixtures.json` preserve the library revision, observation dates,

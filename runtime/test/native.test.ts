@@ -1,5 +1,6 @@
 import { type MediaReference, type OutboundMessage } from "@digows/whatsapp-gateway-contracts";
 import { type WAMessage } from "baileys";
+import { sql } from "kysely";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
@@ -492,9 +493,10 @@ test("an unsupported inbound message retains its failure and does not stop subse
     assert.equal((await store.account(id)).state, "CONNECTED");
     assert.match(await store.native(id, "valid-after-unsupported"), /Continue/);
     const rejected = await store.transaction(async client =>
-      (await client.query(
-        "SELECT count(*) FROM gateway.event WHERE account_id=$1 AND kind='NORMALIZATION_FAILED'",
-        [id],
+      (await sql<
+        Record<string, string>
+      >`SELECT count(*) FROM gateway.event WHERE account_id=${id} AND kind='NORMALIZATION_FAILED'`.execute(
+        client,
       )).rows[0]
     );
     assert.equal(rejected?.count, "1");

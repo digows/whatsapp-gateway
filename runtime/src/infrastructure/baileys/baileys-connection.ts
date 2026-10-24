@@ -21,8 +21,8 @@ import pino from "pino";
 import QRCode from "qrcode";
 import type { ConnectionEvents, PreparedWhatsAppSend, WhatsAppConnection } from "../../domain/connection.ts";
 import { describeWhatsAppError } from "../../domain/error-details.ts";
+import { type AccountLease, type GatewayStore } from "../../domain/gateway-store.ts";
 import type { IMediaRepository } from "../../domain/media-storage.ts";
-import { AccountLease, PostgresGatewayStore } from "../postgres/gateway-store.ts";
 import { BaileysAuthenticationStore } from "./baileys-authentication-store.ts";
 import {
   BaileysInboundContent,
@@ -53,7 +53,7 @@ export class BaileysConnection implements WhatsAppConnection
   private retry = 0;
   private pairingDeadline = 0;
   constructor(
-    store: PostgresGatewayStore,
+    store: GatewayStore,
     private readonly lease: AccountLease,
     private readonly media: IMediaRepository | null = null,
     private readonly factory: SocketFactory = makeWASocket,

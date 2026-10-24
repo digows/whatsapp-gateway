@@ -1,9 +1,10 @@
+import { sql } from "kysely";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { Gateway } from "../src/application/gateway.ts";
+import type { AccountLease } from "../src/domain/gateway-store.ts";
 import { SendOperation } from "../src/domain/send-operation.ts";
-import type { AccountLease } from "../src/infrastructure/postgres/gateway-store.ts";
 import { PostgresGatewayStore } from "../src/infrastructure/postgres/gateway-store.ts";
 import { ControlledConnection } from "./support/controlled-connection.ts";
 
@@ -138,16 +139,14 @@ test("PostgreSQL RLS rejects tenant writes and unqualified reads cannot see anot
   const id = randomUUID();
   await other.createAccount(id);
   const rows = await store.transaction(async client =>
-    (await client.query("SELECT workspace_id FROM gateway.account")).rows
+    (await sql<Record<string, string>>`SELECT workspace_id FROM gateway.account`.execute(client)).rows
   );
   assert.ok(rows.every(row => row.workspace_id === workspace));
   await assert.rejects(
     store.transaction(async client =>
     {
-      await client.query("INSERT INTO gateway.account(workspace_id,id) VALUES($1,$2)", [
-        other.workspaceId,
-        randomUUID(),
-      ]);
+      await sql`INSERT INTO gateway.account(workspace_id,id) VALUES(${other.workspaceId},${randomUUID()})`
+        .execute(client);
     }),
     /row-level security/,
   );

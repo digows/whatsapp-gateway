@@ -4,8 +4,9 @@ A multi-account WhatsApp gateway for **AI agents and agent frameworks**, written
 and built on a pinned
 [custom Baileys release](https://github.com/digows/baileys/releases/tag/digows-7.0.0-rc14-interactive.1).
 It manages multiple accounts, durable send operations, paced delivery, rich interactive messages
-and media fetched on demand. PostgreSQL stores authentication and technical state, with workspace
-isolation enforced by Row Level Security.
+and media fetched on demand. SQLite local mode or PostgreSQL shared storage keeps authentication and technical state.
+PostgreSQL enforces workspace isolation with Row Level Security; SQLite enforces workspace/account
+isolation in application queries and runs under one exclusive local runtime.
 
 **Current delivery:** an embeddable core, portable contracts and a partial Chat SDK mapping.
 There is no standalone HTTP server, broker consumer or published ready-to-use Chat SDK Adapter yet.
@@ -33,7 +34,7 @@ partial mapping; a complete ready-to-use Adapter remains a target.
 | Area | Available now |
 | --- | --- |
 | Accounts and sessions | Multiple accounts per workspace, QR pairing, saved-auth restoration, restart-required handling, logout cleanup and bounded reconnects |
-| Session safety | One PostgreSQL owner per account, generation checks, stale-callback rejection and shutdown cleanup |
+| Session safety | Exclusive ownership per account, generation checks, stale-callback rejection and shutdown cleanup |
 | Durable sends | Per-account ordering, stable caller keys, payload-conflict detection, reserved native IDs and explicit `UNKNOWN` outcomes |
 | Pacing | Randomized spacing, a rolling rate limit, progressive daily limits, a daily ceiling and inactivity reset |
 | Typing | Bounded pre-send presence and a finite incoming-message heartbeat; reply, handset activity and shutdown stop it |
@@ -72,8 +73,9 @@ Baileys to connect to WhatsApp Web; it is not Meta's official WhatsApp Business 
 
 ## Get started from source
 
-Requirements: Node.js 24 or newer, pnpm 12.9.1 and PostgreSQL. Integration tests are exercised with
-PostgreSQL 18. Configure an S3-compatible client and bucket when using stored media.
+Requirements: Node.js 24 or newer and pnpm 12.9.1. Choose a local SQLite file or PostgreSQL 18.
+Shared multi-runtime storage requires PostgreSQL; SQLite is restricted to one runtime on local disk.
+Configure an S3-compatible client and bucket when using stored media.
 
 ```sh
 git clone https://github.com/digows/whatsapp-gateway.git
@@ -81,19 +83,17 @@ cd whatsapp-gateway
 pnpm install --frozen-lockfile
 ```
 
-Apply [the baseline migration](runtime/migrations/001_gateway_core.sql) to an **empty database**
-with an administrative migration role. It creates the `gateway` schema; it is not a migration
-from an earlier deployment and does not run automatically.
+Migrations are explicit. Use `migrateGatewayStorage(configuration)` once with administrative access,
+then `openGatewayStorage(configuration)` for startup. PostgreSQL applies the
+[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql);
+SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql). These do not convert
+legacy deployments or copy data when switching backends. Unsupported engines, incompatible schema
+versions and invalid storage/topology combinations fail at startup.
 
-```sh
-psql "$GATEWAY_MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -f runtime/migrations/001_gateway_core.sql
-```
-
-Give a separate runtime role `USAGE` on schema `gateway` and `SELECT`, `INSERT`, `UPDATE`, `DELETE`
-on its tables. That role must have neither superuser privileges nor `BYPASSRLS`. All tenant tables
-have forced RLS. The application establishes the trusted workspace; the core does not authenticate
-remote callers or authorize a workspace chosen from an arbitrary payload.
+For PostgreSQL, give a separate runtime role `USAGE` on schema `gateway` and `SELECT`, `INSERT`,
+`UPDATE`, `DELETE` on its tables. It must have neither superuser privileges nor `BYPASSRLS`.
+All tenant tables have forced RLS. SQLite provides local application isolation, not RLS equivalence.
+The application establishes the trusted workspace; the core does not authenticate remote callers.
 
 ### Compose the core
 
@@ -103,14 +103,16 @@ This example provisions an account without opening a WhatsApp connection:
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { BaileysConnection, Gateway, PostgresGatewayStore } from "./runtime/src/index.ts";
+import { BaileysConnection, Gateway, migrateGatewayStorage, openGatewayStorage } from "./runtime/src/index.ts";
 
-const databaseUrl = process.env["GATEWAY_DATABASE_URL"];
-if (!databaseUrl) throw new Error("GATEWAY_DATABASE_URL is required");
+const configuration = { engine: "sqlite", filename: "./gateway.sqlite", mode: "local" } as const;
+// Explicit setup step; PostgreSQL migrations require an administrative connection.
+await migrateGatewayStorage(configuration);
+const storage = await openGatewayStorage(configuration);
 
 // Supply the workspace from your application's authenticated context.
 const workspaceId = randomUUID();
-const store = new PostgresGatewayStore(databaseUrl, workspaceId);
+const store = storage.workspace(workspaceId);
 const gateway = new Gateway(store, (_account, lease) => new BaileysConnection(store, lease));
 
 try
@@ -121,14 +123,16 @@ try
 finally
 {
   await gateway.close();
-  await store.close();
+  await storage.close();
 }
 ```
 
 Retain the workspace/account IDs in your application. Explicit `gateway.start(accountId)` begins
 connection or pairing; inspect `store.account(accountId)` for state and the private QR PNG data URL.
 Starting returns before the session necessarily becomes `CONNECTED`. `gateway.restore()` makes a
-single pass over saved paired accounts. Close the gateway before closing the store.
+single pass over saved paired accounts. Close the gateway before closing shared storage.
+For PostgreSQL, select `{ engine: "postgresql", url, mode: "cluster" }` with the restricted runtime URL.
+Cluster storage currently supplies exclusive ownership; automatic placement is still pending.
 
 For outbound operations, use the [portable schemas](packages/contracts/src/index.ts) and retain the
 caller-owned `idempotencyKey`. Retry/status lookup must use the same workspace, account and key.
@@ -145,11 +149,14 @@ event intake/dispatch, history and standard card/action/formatting translation r
 ```sh
 pnpm format:check
 pnpm typecheck
-GATEWAY_TEST_DATABASE_URL="$DISPOSABLE_RUNTIME_DATABASE_URL" pnpm test
+GATEWAY_TEST_DATABASE_URL="$DISPOSABLE_RUNTIME_DATABASE_URL" \
+GATEWAY_TEST_ADMIN_DATABASE_URL="$DISPOSABLE_ADMIN_DATABASE_URL" pnpm test
 ```
 
-`pnpm check` runs all three checks. Use an owned disposable PostgreSQL database with the baseline
-migration and restricted runtime role described above. Tests require the explicit database URL;
+`pnpm check` runs all three checks. Use an owned disposable PostgreSQL database with both migrations
+and the restricted runtime role described above. Storage compatibility tests additionally require
+an explicit disposable admin URL to create/drop isolated verification databases. Set `TMPDIR` to an
+owned disposable directory for SQLite files and child-process checks. Tests require explicit fixture URLs;
 they do not load `.env` or fall back to another database. Native socket I/O is controlled, so these
 tests do not require QR pairing or live WhatsApp sends. There is no separate lint script.
 
@@ -157,7 +164,6 @@ tests do not require QR pairing or live WhatsApp sends. There is no separate lin
 
 - Independently configurable HTTP commands/queries, webhook events and Redis Streams messaging.
 - A complete, ready-to-use Chat SDK Adapter.
-- A lightweight SQLite mode alongside PostgreSQL.
 - Automatic account placement, balancing and failover across peer runtimes.
 - Durable webhook retries with explicit delivery and retention policies.
 - A public contact-registration lookup with registered, unregistered and indeterminate outcomes.

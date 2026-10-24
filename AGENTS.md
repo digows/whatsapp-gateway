@@ -47,10 +47,12 @@ Act as a rigorous senior software engineer and architecture partner.
 
 ## Multi-Tenancy Rules
 
-- Tenant isolation is enforced by `workspace_id` plus PostgreSQL Row Level Security (RLS).
+- PostgreSQL tenant isolation is enforced by `workspace_id` plus Row Level Security (RLS).
+- SQLite is supported only in the explicitly selected local single-runtime mode. Its workspace/account isolation is application-enforced and must be tested; do not claim PostgreSQL RLS or distributed ownership equivalence.
+- Shared multi-runtime operation requires the qualified PostgreSQL backend. Selecting another backend does not migrate existing data.
 - Do not introduce tenant-specific PostgreSQL schemas for business data.
 - Every tenant-owned relational entity must explicitly support the `workspace` boundary.
-- Every new tenant-owned table must be versioned together with its RLS policy.
+- Every new tenant-owned PostgreSQL table must be versioned together with its RLS policy; SQLite migrations must preserve the same explicit workspace/account keys and constraints.
 - Only entities that are intentionally pre-tenant or system-level may omit `workspace_id`, and that exception must be documented explicitly.
 
 ## Validation Rules

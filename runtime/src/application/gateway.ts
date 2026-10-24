@@ -12,6 +12,7 @@ import pino from "pino";
 import { z } from "zod";
 import type { WhatsAppConnection } from "../domain/connection.ts";
 import { AccountOwnedError } from "../domain/errors.ts";
+import { type AccountLease, type GatewayStore } from "../domain/gateway-store.ts";
 import { decodeWhatsAppMediaSource } from "../domain/media-source.ts";
 import type { IMediaRepository } from "../domain/media-storage.ts";
 import { outboundPartCount } from "../domain/outbound-parts.ts";
@@ -21,7 +22,6 @@ import {
   BaileysTypingActivity,
   baileysTypingConfiguration,
 } from "../infrastructure/baileys/baileys-typing-activity.ts";
-import { AccountLease, PostgresGatewayStore } from "../infrastructure/postgres/gateway-store.ts";
 export const GatewayConfigurationSchema = z.object({
   minimumDelayMs: z.number().int().nonnegative().default(1500),
   maximumDelayMs: z.number().int().nonnegative().default(5000),
@@ -51,7 +51,7 @@ class HostedAccount
   constructor(
     readonly lease: AccountLease,
     readonly connection: WhatsAppConnection,
-    private readonly store: PostgresGatewayStore,
+    private readonly store: GatewayStore,
     private readonly configuration: GatewayConfiguration,
   )
   {}
@@ -275,7 +275,7 @@ export class Gateway implements GatewayOperations
   private closed = false;
   private readonly configuration: GatewayConfiguration;
   constructor(
-    private readonly store: PostgresGatewayStore,
+    private readonly store: GatewayStore,
     private readonly factory: GatewayConnectionFactory,
     configuration: GatewayConfigurationInput = {},
     private readonly media?: IMediaRepository,
