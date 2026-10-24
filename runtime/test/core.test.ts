@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { SendOperation } from "../src/domain/send-operation.ts";
 
+const operationScope = { workspaceId: randomUUID(), accountId: randomUUID() };
+
 test("dispatch uncertainty cannot be reset into a second send", () =>
 {
-  const operation = new SendOperation("key", "digest", ["native-1"]);
+  const operation = new SendOperation("key", "digest", ["native-1"], operationScope);
   assert.equal(operation.state, "PENDING");
   operation.dispatch(0);
   operation.unknown();
@@ -14,7 +17,7 @@ test("dispatch uncertainty cannot be reset into a second send", () =>
 
 test("multipart progress preserves the accepted prefix", () =>
 {
-  const operation = new SendOperation("album", "digest", ["parent", "child"]);
+  const operation = new SendOperation("album", "digest", ["parent", "child"], operationScope);
   operation.dispatch(0);
   operation.accept(0);
   operation.dispatch(1);

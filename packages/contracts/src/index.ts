@@ -34,3 +34,5 @@ export * from "./content/sticker-content.ts";
 export * from "./content/text-content.ts";
 export * from "./content/video-content.ts";
 export * from "./gateway.ts";
+
+export * from "./contact-registration.ts";

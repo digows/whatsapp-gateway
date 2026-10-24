@@ -30,13 +30,21 @@ export async function withBaileysTimeout<Result>(
   task: Promise<Result>,
   timeoutMs: number,
   operation: string,
+  signal?: AbortSignal,
 ): Promise<Result>
 {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let interrupted: (() => void) | undefined;
   try
   {
     return await Promise.race([
       task,
+      new Promise<never>((_resolve, reject) =>
+      {
+        interrupted = () => reject(new Error(`WhatsApp ${operation} interrupted`));
+        if (signal?.aborted) interrupted();
+        else signal?.addEventListener("abort", interrupted, { once: true });
+      }),
       new Promise<never>((_resolve, reject) =>
       {
         timer = setTimeout(() => reject(new BaileysOperationTimeoutError(operation)), timeoutMs);
@@ -46,6 +54,7 @@ export async function withBaileysTimeout<Result>(
   finally
   {
     clearTimeout(timer);
+    if (interrupted) signal?.removeEventListener("abort", interrupted);
   }
 }
 

@@ -1,5 +1,8 @@
 import {
   type Account,
+  type ContactRegistration,
+  ContactRegistrationSchema,
+  GatewayIdentifierSchema,
   type GatewayOperations,
   materializedMessageMediaParts,
   type OperationResult,
@@ -196,7 +199,7 @@ class HostedAccount
         await delay(await this.store.pace(this.lease, this.configuration), undefined, {
           signal: this.controller.signal,
         });
-        const typing = await this.typing(input.recipientAddress);
+        const typing = await this.typing(prepared.recipientAddress);
         await typing.start(this.configuration.sendTimeoutMs);
         try
         {
@@ -207,7 +210,7 @@ class HostedAccount
           try
           {
             await bounded(
-              this.connection.send(input.recipientAddress, prepared),
+              this.connection.send(prepared),
               this.configuration.sendTimeoutMs,
             );
             const accepted = SendOperation.restore(operation.snapshot());
@@ -286,8 +289,9 @@ export class Gateway implements GatewayOperations
   {
     this.configuration = GatewayConfigurationSchema.parse(configuration);
   }
-  async start(accountId: string): Promise<void>
+  async start(requestedAccountId: string): Promise<void>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     if (this.closed) throw new Error("Gateway is closed");
     let pending = this.accounts.get(accountId);
     if (!pending)
@@ -343,23 +347,27 @@ export class Gateway implements GatewayOperations
       }
     }
   }
-  async restart(accountId: string): Promise<void>
+  async restart(requestedAccountId: string): Promise<void>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     await this.stop(accountId);
     await this.start(accountId);
   }
-  private async hosted(accountId: string): Promise<HostedAccount>
+  private async hosted(requestedAccountId: string): Promise<HostedAccount>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     const pending = this.accounts.get(accountId);
     if (!pending) throw new Error("Account is not owned here");
     return pending;
   }
-  async ownership(accountId: string): Promise<AccountLease>
+  async ownership(requestedAccountId: string): Promise<AccountLease>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return (await this.hosted(accountId)).lease;
   }
-  async send(accountId: string, input: OutboundMessage): Promise<OperationResult>
+  async send(requestedAccountId: string, input: OutboundMessage): Promise<OperationResult>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     const message = OutboundMessageSchema.parse(input);
     for (const part of materializedMessageMediaParts(message))
     {
@@ -370,18 +378,32 @@ export class Gateway implements GatewayOperations
     }
     return (await this.hosted(accountId)).send(message);
   }
-  async operation(accountId: string, key: string): Promise<OperationResult>
+  async lookupContactAddress(requestedAccountId: string, address: string): Promise<ContactRegistration>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
+    const hosted = await this.hosted(accountId);
+    const result = ContactRegistrationSchema.parse(await hosted.connection.lookupContactAddress(address));
+    if (result.workspaceId !== this.store.workspaceId || result.accountId !== accountId)
+    {
+      throw new Error("Contact lookup result scope mismatch");
+    }
+    return result;
+  }
+  async operation(requestedAccountId: string, key: string): Promise<OperationResult>
+  {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.store.operation(accountId, key);
   }
-  async presence(accountId: string, chat: string, composing: boolean): Promise<void>
+  async presence(requestedAccountId: string, chat: string, composing: boolean): Promise<void>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     const hosted = await this.hosted(accountId);
     if (!hosted.lease.alive) throw new Error("Account ownership lost");
     await hosted.presence(chat, composing);
   }
-  async readMedia(accountId: string, sourceId: string): Promise<Uint8Array>
+  async readMedia(requestedAccountId: string, sourceId: string): Promise<Uint8Array>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     const identity = decodeWhatsAppMediaSource(sourceId);
     if (identity.accountId !== accountId || identity.workspaceId !== this.store.workspaceId)
     {
@@ -411,8 +433,9 @@ export class Gateway implements GatewayOperations
     );
     return media.read(reference, this.configuration.maximumMediaBytes);
   }
-  async stop(accountId: string): Promise<void>
+  async stop(requestedAccountId: string): Promise<void>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     const pending = this.accounts.get(accountId);
     if (!pending) return;
     try

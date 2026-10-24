@@ -99,6 +99,13 @@ for (const engine of ["sqlite", "postgresql"] as const)
         return socket;
       }, { minimumDelayMs: 0, maximumDelayMs: 0, typingDelayMs: 0 });
       await gateway.start(accountId);
+      await gateway.start(accountId.toUpperCase());
+      assert.equal(sockets.length, 1);
+      await assert.rejects(store.acquire(accountId.toUpperCase()), /owned/);
+      assert.equal(
+        (await storage.workspace(workspaceId.toUpperCase()).account(accountId.toUpperCase())).workspaceId,
+        workspaceId,
+      );
       await assert.rejects(store.acquire(accountId), /owned/);
       const lease = await gateway.ownership(accountId);
       await assert.rejects(other.setState(lease, "FAILED"), /ownership/);
@@ -113,8 +120,20 @@ for (const engine of ["sqlite", "postgresql"] as const)
       const operation = await store.reserve(lease, message, 1);
       operation.dispatch(0);
       await store.save(lease, operation);
-      await assert.rejects(other.operation(accountId, "persisted"), /unavailable/);
       await assert.rejects(store.operation(otherAccountId, "persisted"), /unavailable/);
+      const differentAccount = await store.acquire(otherAccountId);
+      try
+      {
+        await store.reserve(differentAccount, { ...message, text: "different account" }, 1);
+        await assert.rejects(store.save(differentAccount, operation), /scope/);
+      }
+      finally
+      {
+        await differentAccount.release();
+      }
+
+      await assert.rejects(other.operation(accountId, "persisted"), /unavailable/);
+
       await store.writeAuthentication(lease, [{
         category: "fixture",
         keyId: "secret",
@@ -151,6 +170,10 @@ for (const engine of ["sqlite", "postgresql"] as const)
         await gateway.stop(accountId);
       }
       assert.equal(sockets[0]?.sent.length, 0);
+      assert.equal(
+        (await restoredStore.operation(accountId.toUpperCase(), "persisted")).accountId,
+        accountId,
+      );
     }
     finally
     {

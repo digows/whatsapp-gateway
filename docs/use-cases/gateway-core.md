@@ -9,6 +9,10 @@ remain undecided. No legacy NATS subject is retained as a compatibility contract
 
 An authenticated integration supplies a trusted workspace context and a gateway account ID.
 The core does not authenticate HTTP requests: a future transport must establish that context.
+Gateway-owned UUIDs are normalized to lower-case before map keys, locks, SQL identity and SDK thread
+encoding. These UUIDs are separate from native WhatsApp JIDs. Send-operation snapshots/results carry
+workspace/account explicitly; persistence rejects an operation whose identity differs from its lease.
+The SDK also rejects a returned operation from another scope.
 PostgreSQL RLS isolates technical tenant rows by `workspace_id`; SQLite local mode enforces the same
 workspace/account keys in application queries and constraints, without database RLS. Callers never select a workspace
 from an unverified incoming event. Account IDs, WhatsApp JIDs and phone aliases are transport
@@ -75,7 +79,9 @@ advertised as an exactly-once external-effect guarantee.
 ## Send flow and recovery
 
 The application supplies a stable operation key and validated portable content to `send()`.
-Within an account, operations are serialized. The SQL store reserves a payload digest and native IDs
+Within an account, operations are serialized. Preparation resolves the native recipient before
+dispatch; typing and transmission use that same prepared address, without another phone lookup
+after recording IN_FLIGHT. The SQL store reserves a payload digest and native IDs
 for every album parent/part before transmission. The same key and digest returns the original
 result; reusing a key with another payload is a conflict. Native IDs also exclude bot echoes while
 preserving handset-originated messages, including self-chat.
@@ -167,6 +173,26 @@ SQL retains protocol envelopes/metadata, not downloaded/decrypted media objects.
 and business retention belong to the consumer. No filesystem media backend, automatic incoming
 attachment archive or full history service is added. Outgoing stored media still uses the configured
 media repository; direct incoming access does not silently invent an outbound object store.
+
+## Contact-address registration
+
+`lookupContactAddress(accountId, address)` runs on an initialized, locally owned account/session.
+It returns the authenticated account's workspace/account, original address and one of REGISTERED,
+UNREGISTERED or INDETERMINATE. REGISTERED includes the authoritative native `resolvedAddress`;
+no country-specific digit rewrite or fabricated WhatsApp ID is used. Phone queries accept E.164
+or a phone-number JID. A LID/group/unsupported input is indeterminate, not an unregistered number.
+
+The pinned `onWhatsApp()` helper drops negative entries. This path instead uses its public
+`USyncQuery`/`USyncUser` contact query and preserves explicit `in`/`out` profile results. Unknown
+contact node types, missing/extra results, absent contact fields, mismatched negative phone identity,
+query errors, timeout or session-generation change cannot become UNREGISTERED. Native error-node
+validation is retained. A negative is accepted only for the queried phone; a positive preserves
+returned native PN/LID authority. A ten-second query deadline is cancellable on session stop.
+
+The query is read-only and does not send a WhatsApp message. Phone-originated sends reuse the same
+query semantics during preparation; an indeterminate lookup fails preparation explicitly. For a
+durable application job, resolve once and retain `resolvedAddress` in its send payload. The native
+query/decoder fixtures qualify the implemented profile, not current live WhatsApp registration.
 
 ## Chat SDK integration boundary
 

@@ -45,19 +45,21 @@ export class GatewayChatMapping implements
     | "endTyping"
   >
 {
+  readonly scope: AccountScope;
   constructor(
-    readonly scope: AccountScope,
+    scope: AccountScope,
     private readonly nativeJid: string,
     readonly gateway: GatewayOperations,
   )
   {
-    AccountScopeSchema.parse(scope);
+    this.scope = Object.freeze(AccountScopeSchema.parse(scope));
   }
   encodeThreadId(value: GatewayThread): string
   {
-    this.assertScope(value);
+    const scope = AccountScopeSchema.parse({ workspaceId: value.workspaceId, accountId: value.accountId });
+    this.assertScope(scope);
     return `whatsapp-gateway:${
-      Buffer.from(JSON.stringify([value.workspaceId, value.accountId, value.chatId])).toString("base64url")
+      Buffer.from(JSON.stringify([scope.workspaceId, scope.accountId, value.chatId])).toString("base64url")
     }`;
   }
   decodeThreadId(value: string): GatewayThread
@@ -75,7 +77,7 @@ export class GatewayChatMapping implements
     {
       throw new Error("Invalid gateway thread");
     }
-    const thread = { workspaceId, accountId, chatId };
+    const thread = { ...AccountScopeSchema.parse({ workspaceId, accountId }), chatId };
     this.assertScope(thread);
     if (this.encodeThreadId(thread) !== value) throw new Error("Noncanonical gateway thread");
     return thread;
@@ -87,7 +89,8 @@ export class GatewayChatMapping implements
   }
   private assertScope(value: AccountScope): void
   {
-    if (value.workspaceId !== this.scope.workspaceId || value.accountId !== this.scope.accountId)
+    const scope = AccountScopeSchema.parse({ workspaceId: value.workspaceId, accountId: value.accountId });
+    if (scope.workspaceId !== this.scope.workspaceId || scope.accountId !== this.scope.accountId)
     {
       throw new Error("Gateway thread scope mismatch");
     }
@@ -211,6 +214,7 @@ export class GatewayChatMapping implements
       text,
     };
     const operation = await this.gateway.send(this.scope.accountId, outbound);
+    this.assertScope(operation);
     if (operation.state !== "ACCEPTED") throw new GatewayOutcomeError(operation);
     const id = operation.nativeIds[0];
     if (!id) throw new Error("Accepted operation has no native identity");

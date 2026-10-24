@@ -1,5 +1,6 @@
 import type {
   Account,
+  ContactRegistration,
   DeliveryObservation,
   InboundMessage,
   OutboundMessage,
@@ -9,6 +10,7 @@ import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
 
 export interface PreparedWhatsAppSend
 {
+  readonly recipientAddress: string;
   readonly content: AnyMessageContent;
   readonly options: MiscMessageGenerationOptions;
 }
@@ -23,8 +25,9 @@ export interface ConnectionEvents
 export interface WhatsAppConnection
 {
   start(account: Account, events: ConnectionEvents): Promise<void>;
+  lookupContactAddress(address: string): Promise<ContactRegistration>;
   prepare(message: OutboundMessage, index: number, nativeId: string): Promise<PreparedWhatsAppSend>;
-  send(recipient: string, prepared: PreparedWhatsAppSend): Promise<void>;
+  send(prepared: PreparedWhatsAppSend): Promise<void>;
   presence(chat: string, composing: boolean): Promise<void>;
   stop(): Promise<void>;
 }

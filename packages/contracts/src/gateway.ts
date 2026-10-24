@@ -1,7 +1,12 @@
 import { z } from "zod";
+import type { ContactRegistration } from "./contact-registration.ts";
 import type { OutboundMessage } from "./content/outbound-message.ts";
 
-export const AccountScopeSchema = z.strictObject({ workspaceId: z.uuid(), accountId: z.uuid() });
+export const GatewayIdentifierSchema = z.uuid().transform(value => value.toLowerCase());
+export const AccountScopeSchema = z.strictObject({
+  workspaceId: GatewayIdentifierSchema,
+  accountId: GatewayIdentifierSchema,
+});
 export type AccountScope = z.infer<typeof AccountScopeSchema>;
 export const SessionStateSchema = z.enum([
   "STOPPED",
@@ -21,7 +26,7 @@ export interface Account extends AccountScope
   readonly nativeJid: string | null;
   readonly qr: string | null;
 }
-export interface OperationResult
+export interface OperationResult extends AccountScope
 {
   readonly key: string;
   readonly digest: string;
@@ -32,6 +37,7 @@ export interface OperationResult
 /** A confirmed integration boundary; implementations must not translate UNKNOWN into retry. */
 export interface GatewayOperations
 {
+  lookupContactAddress(accountId: string, address: string): Promise<ContactRegistration>;
   send(accountId: string, message: OutboundMessage): Promise<OperationResult>;
   operation(accountId: string, key: string): Promise<OperationResult>;
   presence(accountId: string, chatId: string, composing: boolean): Promise<void>;

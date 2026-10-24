@@ -1,10 +1,18 @@
-import type { GatewayOperations, OperationResult, OutboundMessage } from "@digows/whatsapp-gateway-contracts";
+import type {
+  AccountScope,
+  ContactRegistration,
+  GatewayOperations,
+  OperationResult,
+  OutboundMessage,
+} from "@digows/whatsapp-gateway-contracts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { GatewayChatMapping, GatewayOutcomeError } from "../src/index.ts";
 class Operations implements GatewayOperations
 {
+  constructor(private readonly scope: AccountScope)
+  {}
   readonly keys: string[] = [];
   reads = 0;
   state: OperationResult["state"] = "ACCEPTED";
@@ -12,6 +20,7 @@ class Operations implements GatewayOperations
   {
     this.keys.push(message.idempotencyKey);
     return {
+      ...this.scope,
       key: message.idempotencyKey,
       digest: "fixture",
       nativeIds: ["native"],
@@ -21,7 +30,18 @@ class Operations implements GatewayOperations
   }
   async operation(_account: string, key: string): Promise<OperationResult>
   {
-    return { key, digest: "fixture", nativeIds: ["native"], acceptedParts: 1, state: this.state };
+    return {
+      ...this.scope,
+      key,
+      digest: "fixture",
+      nativeIds: ["native"],
+      acceptedParts: 1,
+      state: this.state,
+    };
+  }
+  async lookupContactAddress(): Promise<ContactRegistration>
+  {
+    throw new Error("Registration fixture is not configured");
   }
   async presence(): Promise<void>
   {}
@@ -34,7 +54,7 @@ class Operations implements GatewayOperations
 test("actual Chat SDK Message retains self-chat authorship and fetches media only on demand", async () =>
 {
   const scope = { workspaceId: randomUUID(), accountId: randomUUID() };
-  const operations = new Operations();
+  const operations = new Operations(scope);
   const mapping = new GatewayChatMapping(scope, "123@s.whatsapp.net", operations);
   const message = mapping.parseMessage({
     channel: "WHATSAPP",
@@ -70,7 +90,7 @@ test("actual Chat SDK Message retains self-chat authorship and fetches media onl
 test("explicit operation key survives caller replay and UNKNOWN is never a fresh automatic post", async () =>
 {
   const scope = { workspaceId: randomUUID(), accountId: randomUUID() };
-  const operations = new Operations();
+  const operations = new Operations(scope);
   const mapping = new GatewayChatMapping(scope, "123@s.whatsapp.net", operations);
   const thread = mapping.encodeThreadId({ ...scope, chatId: "456@s.whatsapp.net" });
   await mapping.postWithKey(thread, "test", "stable");
@@ -83,4 +103,23 @@ test("explicit operation key survives caller replay and UNKNOWN is never a fresh
     mapping.postMessage(thread, { card: { type: "card", children: [] } }),
     /cannot be flattened/,
   );
+});
+
+test("SDK contexts canonicalize UUIDs and reject another account's operation result", async () =>
+{
+  const scope = { workspaceId: randomUUID(), accountId: randomUUID() };
+  const uppercase = {
+    workspaceId: scope.workspaceId.toUpperCase(),
+    accountId: scope.accountId.toUpperCase(),
+  };
+  const mapping = new GatewayChatMapping(uppercase, "123@s.whatsapp.net", new Operations(scope));
+  assert.deepEqual(mapping.scope, scope);
+  const thread = mapping.encodeThreadId({ ...uppercase, chatId: "456@s.whatsapp.net" });
+  assert.deepEqual(mapping.decodeThreadId(thread), { ...scope, chatId: "456@s.whatsapp.net" });
+  const mismatched = new GatewayChatMapping(
+    scope,
+    "123@s.whatsapp.net",
+    new Operations({ ...scope, accountId: randomUUID() }),
+  );
+  await assert.rejects(mismatched.postWithKey(thread, "message", "scope-mismatch"), /scope/);
 });

@@ -308,5 +308,5 @@ export async function prepareOutboundContent(
       }
       break;
   }
-  return { content, options };
+  return { recipientAddress: context.recipientJid, content, options };
 }

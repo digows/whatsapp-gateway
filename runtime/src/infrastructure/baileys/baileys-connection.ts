@@ -1,5 +1,6 @@
 import {
   type Account,
+  type ContactRegistration,
   type InboundMessage,
   InboundMessageSchema,
   type MessageReference,
@@ -24,6 +25,7 @@ import { describeWhatsAppError } from "../../domain/error-details.ts";
 import { type AccountLease, type GatewayStore } from "../../domain/gateway-store.ts";
 import type { IMediaRepository } from "../../domain/media-storage.ts";
 import { BaileysAuthenticationStore } from "./baileys-authentication-store.ts";
+import { lookupNativeContact } from "./baileys-contact-registration.ts";
 import {
   BaileysInboundContent,
   type InboundContentContext,
@@ -58,8 +60,13 @@ export class BaileysConnection implements WhatsAppConnection
     private readonly media: IMediaRepository | null = null,
     private readonly factory: SocketFactory = makeWASocket,
     private readonly pairingTimeoutMs = 30000,
+    private readonly registrationTimeoutMs = 10000,
   )
   {
+    if (
+      !Number.isSafeInteger(registrationTimeoutMs) || registrationTimeoutMs < 1
+      || registrationTimeoutMs > 60000
+    ) throw new Error("Registration timeout is invalid");
     this.authenticationStore = new BaileysAuthenticationStore(lease.accountId, {
       readAuthentication: (accountId, category, key) => store.readAuthentication(accountId, category, key),
       writeAuthentication: async (accountId, mutations) =>
@@ -302,19 +309,24 @@ export class BaileysConnection implements WhatsAppConnection
   {
     const sender = this.authentication?.creds.me?.id;
     if (!sender) throw new Error("WhatsApp identity unavailable");
+    const recipientJid = await this.recipient(message.recipientAddress);
     if (
       "quotedMessage" in message && message.quotedMessage?.chatAddress
       && await this.recipient(message.quotedMessage.chatAddress)
-        !== await this.recipient(message.recipientAddress)
+        !== recipientJid
     ) throw new Error("Quote chat differs from recipient");
     const prepared = await prepareOutboundContent(message, {
       media: this.media,
-      recipientJid: await this.recipient(message.recipientAddress),
+      recipientJid,
       senderJid: jidNormalizedUser(sender),
       addressJid: address => this.recipient(address),
       quote: reference => this.quote(reference),
     }, index);
-    return { content: prepared.content, options: { ...prepared.options, messageId: nativeId } };
+    return {
+      recipientAddress: prepared.recipientAddress,
+      content: prepared.content,
+      options: { ...prepared.options, messageId: nativeId },
+    };
   }
   private async quote(reference: MessageReference): Promise<WAMessage>
   {
@@ -341,20 +353,44 @@ export class BaileysConnection implements WhatsAppConnection
     if (/^[0-9]+(?:-[0-9]+)?@g\.us$/u.test(address)) return address;
     if (address.endsWith("@s.whatsapp.net") || address.endsWith("@lid")) return jidNormalizedUser(address);
     if (!/^\+[1-9][0-9]{1,14}$/u.test(address)) throw new Error("WhatsApp recipient identity invalid");
-    const candidate = (await this.socket?.onWhatsApp(address.slice(1)))?.find(result => result.exists);
-    if (!candidate) throw new Error("WhatsApp recipient is not registered");
-    return jidNormalizedUser(candidate.jid);
+    const registration = await this.lookupContactAddress(address);
+    if (registration.status === "UNREGISTERED") throw new Error("WhatsApp recipient is not registered");
+    if (registration.status !== "REGISTERED")
+    {
+      throw new Error("WhatsApp recipient registration is indeterminate");
+    }
+    return registration.resolvedAddress;
   }
-  async send(recipient: string, prepared: PreparedWhatsAppSend): Promise<void>
+  async lookupContactAddress(address: string): Promise<ContactRegistration>
+  {
+    const account = this.account;
+    if (!account) throw new Error("WhatsApp account is not initialized");
+    const socket = this.socket;
+    if (!socket || this.stopped || !this.lease.alive || !this.authentication?.creds.me)
+    {
+      return {
+        workspaceId: account.workspaceId,
+        accountId: account.accountId,
+        address,
+        status: "INDETERMINATE",
+        reason: "UNAVAILABLE",
+      };
+    }
+    return lookupNativeContact(
+      socket,
+      account,
+      address,
+      this.abort.signal,
+      () => this.socket === socket && !this.stopped && this.lease.alive,
+      this.registrationTimeoutMs,
+    );
+  }
+
+  async send(prepared: PreparedWhatsAppSend): Promise<void>
   {
     const socket = this.socket;
     if (!socket || !this.lease.alive || this.stopped) throw new Error("WhatsApp socket unavailable");
-    const jid = await this.recipient(recipient);
-    if (this.socket !== socket || !this.lease.alive || this.stopped)
-    {
-      throw new Error("WhatsApp ownership changed before dispatch");
-    }
-    const pending = socket.sendMessage(jid, prepared.content, prepared.options);
+    const pending = socket.sendMessage(prepared.recipientAddress, prepared.content, prepared.options);
     let interrupted: (() => void) | undefined;
     try
     {

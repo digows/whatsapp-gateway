@@ -1,4 +1,9 @@
-import type { OperationResult, OperationState } from "@digows/whatsapp-gateway-contracts";
+import {
+  type AccountScope,
+  AccountScopeSchema,
+  type OperationResult,
+  type OperationState,
+} from "@digows/whatsapp-gateway-contracts";
 
 export class SendOperation implements OperationResult
 {
@@ -12,11 +17,29 @@ export class SendOperation implements OperationResult
   {
     return this.acceptedCount;
   }
-  constructor(readonly key: string, readonly digest: string, readonly nativeIds: readonly string[])
-  {}
+  get workspaceId(): string
+  {
+    return this.scope.workspaceId;
+  }
+  get accountId(): string
+  {
+    return this.scope.accountId;
+  }
+  private readonly scope: AccountScope;
+  constructor(
+    readonly key: string,
+    readonly digest: string,
+    readonly nativeIds: readonly string[],
+    scope: AccountScope,
+  )
+  {
+    this.scope = Object.freeze(
+      AccountScopeSchema.parse({ workspaceId: scope.workspaceId, accountId: scope.accountId }),
+    );
+  }
   static restore(result: OperationResult): SendOperation
   {
-    const operation = new SendOperation(result.key, result.digest, result.nativeIds);
+    const operation = new SendOperation(result.key, result.digest, result.nativeIds, result);
     operation.currentState = result.state;
     operation.acceptedCount = result.acceptedParts;
     return operation;
@@ -28,6 +51,8 @@ export class SendOperation implements OperationResult
   snapshot(): OperationResult
   {
     return Object.freeze({
+      workspaceId: this.workspaceId,
+      accountId: this.accountId,
       key: this.key,
       digest: this.digest,
       nativeIds: Object.freeze([...this.nativeIds]),

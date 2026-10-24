@@ -1,3 +1,4 @@
+import type { USyncQuery, USyncQueryResult } from "baileys";
 import type { AnyMessageContent, AuthenticationState, MiscMessageGenerationOptions, WASocket } from "baileys";
 import { EventEmitter } from "node:events";
 import type { SocketConfiguration } from "../../src/infrastructure/baileys/baileys-connection.ts";
@@ -7,12 +8,14 @@ export interface SentNative
   readonly content: AnyMessageContent;
   readonly options: MiscMessageGenerationOptions | undefined;
 }
+export type RegistrationQuery = (query: USyncQuery) => Promise<USyncQueryResult | undefined>;
 export class NativeSocketFixture
 {
   readonly events = new EventEmitter();
   readonly transport = new EventEmitter();
   readonly sent: SentNative[] = [];
   readonly authentication: AuthenticationState;
+  registration: RegistrationQuery | undefined;
   closed = false;
   readonly socket: WASocket;
   constructor(configuration: SocketConfiguration)
@@ -40,6 +43,11 @@ export class NativeSocketFixture
       sendPresenceUpdate: async () => undefined,
       onWhatsApp: async (...values: string[]) =>
         values.map(value => ({ exists: true, jid: `${value}@s.whatsapp.net` })),
+      executeUSyncQuery: async (query: USyncQuery) =>
+      {
+        if (!this.registration) throw new Error("Contact query fixture is not configured");
+        return this.registration(query);
+      },
       signalRepository: { lidMapping: { getPNForLID: async () => undefined } },
       sendMessage: async (
         recipient: string,

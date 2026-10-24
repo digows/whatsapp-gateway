@@ -36,6 +36,7 @@ partial mapping; a complete ready-to-use Adapter remains a target.
 | Accounts and sessions | Multiple accounts per workspace, QR pairing, saved-auth restoration, restart-required handling, logout cleanup and bounded reconnects |
 | Session safety | Exclusive ownership per account, generation checks, stale-callback rejection and shutdown cleanup |
 | Durable sends | Per-account ordering, stable caller keys, payload-conflict detection, reserved native IDs and explicit `UNKNOWN` outcomes |
+| Contact lookup | Account-scoped registered/unregistered/indeterminate results and authoritative native IDs; no country-specific number rewriting |
 | Pacing | Randomized spacing, a rolling rate limit, progressive daily limits, a daily ceiling and inactivity reset |
 | Typing | Bounded pre-send presence and a finite incoming-message heartbeat; reply, handset activity and shutdown stop it |
 | Rich content | Text, explicit link previews, images, video/GIF/video notes, audio/voice notes, files, stickers, contacts, locations, polls, events and albums |
@@ -141,6 +142,12 @@ A changed payload under the same key is a conflict. An `UNKNOWN` outcome must be
 `gateway.operation(accountId, key)`; it must not trigger a fresh automatic send. Database ownership
 cannot fence an effect already dispatched to WhatsApp.
 
+Use `gateway.lookupContactAddress(accountId, address)` to resolve a phone address. A `REGISTERED`
+result contains `resolvedAddress`; retain that native address in durable send jobs. Explicit
+negatives remain distinct from incomplete responses, timeout, unavailable sessions and unsupported
+identities. Lookup does not send a message. Operation results carry workspace/account, and UUID
+case aliases normalize to the same account identity in the core, locks, SQL and SDK context.
+
 The [Chat SDK mapping](packages/chat-adapter/src/index.ts) exposes `postWithKey()` for durable caller
 identity. A new ordinary `postMessage()` call allocates a new key. Full Adapter initialization,
 event intake/dispatch, history and standard card/action/formatting translation remain incomplete.
@@ -184,7 +191,6 @@ tests do not require QR pairing or live WhatsApp sends. There is no separate lin
 - A complete, ready-to-use Chat SDK Adapter.
 - Automatic account placement, balancing and failover across peer runtimes.
 - Durable webhook retries with explicit delivery and retention policies.
-- A public contact-registration lookup with registered, unregistered and indeterminate outcomes.
 
 These are design targets, not current setup options. NATS is a future compatibility target.
 There is no full WhatsApp history service. Live client/S3 parity, application replay qualification,

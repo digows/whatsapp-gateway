@@ -2,6 +2,7 @@ import {
   type Account,
   AccountScopeSchema,
   type DeliveryObservation,
+  GatewayIdentifierSchema,
   type InboundMessage,
   type MediaReference,
   MediaReferenceSchema,
@@ -25,9 +26,10 @@ import { type AccountTable, type GatewayTables, jsonValue, type OperationTable }
 export type GatewayTransaction = Transaction<GatewayTables>;
 export class SqlGatewayStore implements GatewayStore
 {
-  constructor(protected readonly storage: GatewayStorage, readonly workspaceId: string)
+  readonly workspaceId: string;
+  constructor(protected readonly storage: GatewayStorage, workspaceId: string)
   {
-    z.uuid().parse(workspaceId);
+    this.workspaceId = GatewayIdentifierSchema.parse(workspaceId);
   }
   async transaction<Result>(work: (transaction: GatewayTransaction) => Promise<Result>): Promise<Result>
   {
@@ -40,8 +42,9 @@ export class SqlGatewayStore implements GatewayStore
       return work(transaction);
     });
   }
-  async createAccount(accountId = randomUUID()): Promise<Account>
+  async createAccount(requestedAccountId = randomUUID()): Promise<Account>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     AccountScopeSchema.parse({ workspaceId: this.workspaceId, accountId });
     await this.transaction(async transaction =>
     {
@@ -76,8 +79,9 @@ export class SqlGatewayStore implements GatewayStore
       qr: row.qr,
     };
   }
-  async account(accountId: string): Promise<Account>
+  async account(requestedAccountId: string): Promise<Account>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
     {
       const row = await transaction.selectFrom("account").selectAll().where(
@@ -96,13 +100,15 @@ export class SqlGatewayStore implements GatewayStore
         .orderBy("id").execute()).map(row => this.scopedAccount(row))
     );
   }
-  async acquire(accountId: string): Promise<AccountLease>
+  async acquire(requestedAccountId: string): Promise<AccountLease>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     await this.account(accountId);
     return this.storage.acquire(this, accountId);
   }
-  async advanceGeneration(accountId: string): Promise<number>
+  async advanceGeneration(requestedAccountId: string): Promise<number>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
     {
       const row = await transaction.updateTable("account").set({ generation: sql`generation+1` }).where(
@@ -178,6 +184,10 @@ export class SqlGatewayStore implements GatewayStore
   }
   async save(lease: AccountLease, operation: SendOperation): Promise<void>
   {
+    if (operation.workspaceId !== this.workspaceId || operation.accountId !== lease.accountId)
+    {
+      throw new Error("Send operation scope mismatch");
+    }
     await this.transaction(async transaction =>
     {
       await this.assertOwnership(transaction, lease);
@@ -200,8 +210,9 @@ export class SqlGatewayStore implements GatewayStore
       if (updated.numUpdatedRows !== 1n) throw new Error("Operation terminal state cannot be overwritten");
     });
   }
-  async operation(accountId: string, key: string): Promise<OperationResult>
+  async operation(requestedAccountId: string, key: string): Promise<OperationResult>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
     {
       const row = await transaction.selectFrom("operation").selectAll().where(
@@ -213,8 +224,13 @@ export class SqlGatewayStore implements GatewayStore
       return operationResult(row);
     });
   }
-  async readAuthentication(accountId: string, category: string, keyId: string): Promise<string | null>
+  async readAuthentication(
+    requestedAccountId: string,
+    category: string,
+    keyId: string,
+  ): Promise<string | null>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
       (await transaction.selectFrom("authentication").select("serialized_value").where(
         "workspace_id",
@@ -283,8 +299,9 @@ export class SqlGatewayStore implements GatewayStore
       }).onConflict(conflict => conflict.doNothing()).execute();
     });
   }
-  async receipts(accountId: string, messageId: string): Promise<readonly DeliveryObservation[]>
+  async receipts(requestedAccountId: string, messageId: string): Promise<readonly DeliveryObservation[]>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
       (await transaction.selectFrom("delivery").selectAll().where("workspace_id", "=", this.workspaceId)
         .where("account_id", "=", accountId).where("message_id", "=", messageId).orderBy("observed_at")
@@ -330,8 +347,9 @@ export class SqlGatewayStore implements GatewayStore
       }).onConflict(conflict => conflict.doNothing()).execute();
     });
   }
-  async native(accountId: string, messageId: string): Promise<string>
+  async native(requestedAccountId: string, messageId: string): Promise<string>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
     {
       const predicate = this.storage.engine === "postgresql"
@@ -346,8 +364,9 @@ export class SqlGatewayStore implements GatewayStore
       return row.native;
     });
   }
-  async hasSent(accountId: string, messageId: string): Promise<boolean>
+  async hasSent(requestedAccountId: string, messageId: string): Promise<boolean>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
     {
       const predicate = this.storage.engine === "postgresql"
@@ -360,8 +379,9 @@ export class SqlGatewayStore implements GatewayStore
       ).where("account_id", "=", accountId).where(predicate).executeTakeFirst()) !== undefined;
     });
   }
-  async materialized(accountId: string, sourceId: string): Promise<MediaReference | null>
+  async materialized(requestedAccountId: string, sourceId: string): Promise<MediaReference | null>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
     {
       const row = await transaction.selectFrom("media").select("reference").where(
@@ -373,11 +393,12 @@ export class SqlGatewayStore implements GatewayStore
     });
   }
   async materialize(
-    accountId: string,
+    requestedAccountId: string,
     sourceId: string,
     work: () => Promise<MediaReference>,
   ): Promise<MediaReference>
   {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
     {
       if (this.storage.engine === "postgresql")
@@ -435,6 +456,8 @@ export class SqlGatewayStore implements GatewayStore
 function operationResult(row: Selectable<OperationTable>): OperationResult
 {
   return {
+    workspaceId: row.workspace_id,
+    accountId: row.account_id,
     key: row.key,
     digest: row.digest,
     nativeIds: z.array(z.string()).parse(jsonValue(row.native_ids)),
