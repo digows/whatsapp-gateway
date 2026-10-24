@@ -35,17 +35,19 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      TMPDIR: ${{ runner.temp }}
-      XDG_CACHE_HOME: ${{ runner.temp }}/gateway-cache
       GATEWAY_TEST_DATABASE_URL: postgresql://fixture_runtime:gateway-runtime-only@127.0.0.1:5432/gateway_fixture
       GATEWAY_TEST_ADMIN_DATABASE_URL: postgresql://fixture_admin:gateway-fixture-only@127.0.0.1:5432/gateway_fixture
       GATEWAY_TEST_REDIS_URL: redis://127.0.0.1:6379
-      GATEWAY_TEST_PNPM_STORE: ${{ runner.temp }}/pnpm-store
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.18.0
+      - name: Configure runner-owned temporary paths
+        run: |
+          printf 'TMPDIR=%s\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'XDG_CACHE_HOME=%s/gateway-cache\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'GATEWAY_TEST_PNPM_STORE=%s/pnpm-store\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Select the pinned package manager
         run: npm install --global pnpm@12.9.1
       - name: Install and compile
