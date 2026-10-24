@@ -40,4 +40,5 @@ export * from "./contact-registration.ts";
 export * from "./desired-account.ts";
 export * from "./events.ts";
 export * from "./queries.ts";
+export * from "./streams.ts";
 export * from "./webhook-authentication.ts";

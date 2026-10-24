@@ -51,3 +51,12 @@ export {
   GatewayWebhookDispatcher,
   type WebhookDispatcherConfiguration,
 } from "./infrastructure/webhook/dispatcher.ts";
+
+export { createGatewayAsyncApi } from "./infrastructure/redis/asyncapi.ts";
+export {
+  type GatewayRedisAccountBinding,
+  type GatewayRedisConfiguration,
+  type GatewayRedisConfigurationInput,
+  GatewayRedisTransport,
+} from "./infrastructure/redis/transport.ts";
+export { SqlRedisStreamStore } from "./infrastructure/sql/redis-stream-store.ts";

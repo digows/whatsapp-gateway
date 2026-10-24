@@ -2,8 +2,8 @@
 
 This document owns the transport-independent gateway behavior reviewed on October 23, 2026.
 The runtime, portable contracts and application-side Chat SDK projection are implemented here.
-The versioned command contract, SQL ingress and HTTP transport are implemented. Embedded placement is implemented. Public CloudEvents and signed SQL webhook delivery are implemented; Redis transport
-remains a pending increment of the approved design.
+The versioned command contract, SQL ingress and HTTP transport are implemented. Embedded placement is implemented. Public CloudEvents and signed SQL webhook delivery are implemented; Redis Streams command/result/event delivery and AsyncAPI are implemented. Redis read-only query handling,
+the full remote Adapter and standalone delivery remain pending increments of the approved design.
 No legacy NATS subject is retained as a compatibility contract.
 
 ## Actors and boundaries
@@ -28,8 +28,8 @@ cluster mode and is currently qualified against PostgreSQL 18. Another Kysely di
 supported backend. Changing configuration does not transfer data between engines.
 
 `migrateGatewayStorage()` is an explicit administrative step. PostgreSQL uses the immutable
-`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` `005_public_events.sql` and `006_webhook_outbox.sql`; SQLite uses
-`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` `004_public_events.sql` and `005_webhook_outbox.sql`. Schema version metadata is intentionally system-level,
+`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` `005_public_events.sql` `006_webhook_outbox.sql` and `007_redis_streams.sql`; SQLite uses
+`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` `004_public_events.sql` `005_webhook_outbox.sql` and `006_redis_streams.sql`. Schema version metadata is intentionally system-level,
 not tenant-owned. Unknown versions fail instead of being reset. Migration does not convert legacy
 authentication directories or old deployments. PostgreSQL migration calls serialize on an advisory lock.
 
@@ -107,7 +107,7 @@ transitions remain visible. `SqlGatewayEventLog.after(accountId, sequence, limit
 committed events in per-account sequence, with stable IDs across process/storage reopen. There is
 no global cross-account order. This trusted in-process reader does not replace transport authentication.
 The log is not automatically trimmed in this increment; future delivery-state retention must not delete
-this history/idempotency or rescan it to recreate successful webhook deliveries. Public SQL retention and webhook delivery are implemented; Redis publication remains pending.
+this history/idempotency or rescan it to recreate successful webhook deliveries. Public SQL retention and webhook delivery are implemented; Redis publication uses separate SQL cursors.
 No delivery guarantee is inferred from the CloudEvents format itself.
 
 ## Signed webhook outbox, retries and retention
@@ -158,6 +158,59 @@ must also parse `GatewayCloudEventSchema` and match the event ID/workspace/accou
 scope before invoking application code. Destination secrets stay in private scoped SQL/configuration,
 never public events, logs or API responses. TLS is an operator deployment requirement beyond local
 fixtures. No standard-webhooks protocol alias or physical endpoint interoperability is claimed.
+
+## Redis Streams command intake and publication
+
+`GatewayRedisTransport` is independently enabled. Disabled mode opens no Redis connection. Enabled
+mode currently qualifies Redis 8.2 (measured 8.2.10), AOF enabled and `noeviction`; incompatible startup
+fails explicitly. It uses the pinned node-redis client rather than a generic broker abstraction.
+Account bindings come from trusted operator principals and explicit account IDs, not message fields.
+`gatewayStreamNames(prefix, scope)` owns deterministic lowercase UUID stream names:
+`{prefix}:{workspaceId}:{accountId}:commands`, `:results` and `:events` (default prefix `gateway:v1`).
+Separate account keys let Redis ACLs restrict producer/consumer access before application validation.
+Runtime credentials also require INFO/stream operations/WAITAOF/TIME permissions described below.
+
+The only command stream field is `payload`, UTF-8 JSON of `GatewayCommandSchema`. A per-boot consumer
+uses `XREADGROUP` in group `gateway` by default. It recovers idle PEL entries using `XAUTOCLAIM`, with
+30-second default idle threshold and a retained scan cursor. A shared consumer group need not receive
+on the native account owner: common SQL intake routes subsequent execution to the actual owner.
+The runtime first persists validated commands and a source-message receipt/publication, then XACKs.
+Invalid version/schema, forged account scope and request-ID conflicts get a durable bounded rejection
+receipt before ACK. SQL failure leaves the source pending. Duplicate/reclaimed intake preserves the
+original command/effect key. Missing externally deleted pending payloads raise an operational error.
+
+Intake receipts and command state observations go to `:results`; other public CloudEvents go to
+`:events`. Receipt `status: QUEUED` means intake, separate from a terminal command outcome. Correlate
+scope/request ID, and preserve terminal outcomes rather than regressing them on an older receipt
+snapshot. Each publisher uses an exclusive SQL cursor claim. It sends XADD then
+[WAITAOF](https://redis.io/docs/latest/commands/waitaof/) for local AOF acknowledgement before
+advancing the SQL cursor. A failure between Redis persistence and SQL completion can duplicate the
+same CloudEvent ID, so consumers must deduplicate. Round-robin account/stream scheduling prevents
+one source queue from monopolizing the publisher. SQL history remains available independently.
+No replicated-Redis failover or exactly-once receiver effect is claimed by local AOF acknowledgement.
+
+A newly registered stream destination starts at the current SQL tail in one account transaction;
+restarts resume its existing cursor. Enabling Redis does not automatically dispatch old historical
+messages into an Agent. Retained Redis entries can be replayed with a separate consumer group, using
+stable public IDs for deduplication. This is distinct from reading gateway-observed message history
+and never requests full WhatsApp history download. Queries/media over Redis remain a pending increment.
+
+`trimOnce(retentionMs)` uses Redis server time and exact
+[XTRIM MINID ACKED](https://redis.io/docs/latest/commands/xtrim/), supported by the qualified server.
+Zero disables trimming. Trimming requires all consumer groups to have acknowledged an eligible
+entry; pending and unread bodies remain. Age is an eligibility window, not a hard memory cap when
+consumers lag. XACK itself removes PEL membership, not the stream payload. SQL source receipts,
+message history and operation keys are not deleted by stream retention. Administrative replay/reset
+or deletion of groups/streams is outside the ordinary consumer loop. Empty old consumer names are
+not pruned by blindly deleting PEL ownership. A disconnected client reconnects and repeats capability
+verification/group registration; offline command queueing is disabled, and network operations are bounded.
+
+The generated AsyncAPI 3.0.0 document at `/asyncapi.json` (or `createGatewayAsyncApi(prefix)`) uses
+those same command/CloudEvent schemas, with a stream-field extension describing the actual Redis
+mapping. It does not invent a standard Pub/Sub binding for Streams. Actual parser validation and
+restricted producer/runtime ACL fixtures qualify these bindings. HTTP documentation accepts an
+optional matching Redis namespace when embedded; the standalone bootstrap will supply configured
+values. Independent HTTP queries/webhooks do not require a Redis process.
 
 ## HTTP commands, queries and interactive documentation
 
@@ -254,7 +307,7 @@ Closing a participant cancels its timers, waits for reconciliation/heartbeat, ad
 closes the gateway and command workers, then removes its membership. It preserves durable desired
 state and send history. Expiry recovers membership after ungraceful process loss; live account locks
 still govern handoff. Close the participant before its shared storage. Automatic SQL scheduling is
-implemented; Redis Streams publication remains a separate pending increment.
+implemented; Redis Streams publication runs independently of the session coordinator.
 
 ## Session flow and ownership
 

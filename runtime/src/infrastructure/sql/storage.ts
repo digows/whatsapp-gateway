@@ -73,8 +73,10 @@ const tenantTables = [
   "public_event",
   "webhook_destination",
   "webhook_delivery",
+  "stream_receipt",
+  "stream_cursor",
 ];
-const schemaVersion = 6;
+const schemaVersion = 7;
 
 export class GatewayStorage
 {
@@ -319,6 +321,24 @@ export class GatewayStorage
         "last_status",
         "failure",
       ]).limit(0).execute();
+      await this.database.selectFrom("stream_receipt").select([
+        "workspace_id",
+        "account_id",
+        "source_stream",
+        "source_message_id",
+        "digest",
+        "receipt",
+      ]).limit(0).execute();
+      await this.database.selectFrom("stream_cursor").select([
+        "workspace_id",
+        "account_id",
+        "stream_name",
+        "kind",
+        "position",
+        "claim_token",
+        "claimed_sequence",
+        "lease_until",
+      ]).limit(0).execute();
     }
     catch (error)
     {
@@ -504,6 +524,16 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
           ),
         );
       }
+      const streamsVersion: unknown = database.prepare("SELECT version FROM schema_version").get();
+      if (z.object({ version: z.literal(6) }).safeParse(streamsVersion).success)
+      {
+        database.exec(
+          await readFile(
+            new URL("../../../migrations/sqlite/006_redis_streams.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+      }
       const row: unknown = database.prepare("SELECT version FROM schema_version").get();
       if (z.object({ version: z.literal(schemaVersion) }).safeParse(row).success === false)
       {
@@ -561,6 +591,13 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
     {
       await connection.query(
         await readFile(new URL("../../../migrations/006_webhook_outbox.sql", import.meta.url), "utf8"),
+      );
+    }
+    const streamsVersion = await connection.query("SELECT version FROM gateway.schema_version");
+    if (streamsVersion.rows.length === 1 && streamsVersion.rows[0]?.version === 6)
+    {
+      await connection.query(
+        await readFile(new URL("../../../migrations/007_redis_streams.sql", import.meta.url), "utf8"),
       );
     }
     const version = await connection.query("SELECT version FROM gateway.schema_version");

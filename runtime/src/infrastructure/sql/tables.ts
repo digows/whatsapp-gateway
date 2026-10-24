@@ -144,6 +144,26 @@ export interface WebhookDeliveryTable
   last_status: number | null;
   failure: WebhookAttemptFailure | null;
 }
+export interface StreamReceiptTable
+{
+  workspace_id: string;
+  account_id: string;
+  source_stream: string;
+  source_message_id: string;
+  digest: string;
+  receipt: JsonColumn;
+}
+export interface StreamCursorTable
+{
+  workspace_id: string;
+  account_id: string;
+  stream_name: string;
+  kind: "events" | "results";
+  position: number;
+  claim_token: string | null;
+  claimed_sequence: number | null;
+  lease_until: NullableTimestampColumn;
+}
 export interface GatewayTables
 {
   account: AccountTable;
@@ -160,6 +180,8 @@ export interface GatewayTables
   public_event: PublicEventTable;
   webhook_destination: WebhookDestinationTable;
   webhook_delivery: WebhookDeliveryTable;
+  stream_receipt: StreamReceiptTable;
+  stream_cursor: StreamCursorTable;
 }
 export function jsonValue(value: unknown): unknown
 {

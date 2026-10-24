@@ -9,10 +9,15 @@ import {
   GatewayIdentifierSchema,
   OperationResultSchema,
 } from "./gateway.ts";
+import { GatewayStreamReceiptSchema } from "./streams.ts";
 const messageData = AccountScopeSchema.extend({ message: InboundMessageSchema });
 const receiptData = AccountScopeSchema.extend(DeliveryObservationSchema.shape);
 const rejectionData = AccountScopeSchema.extend({ errorName: z.string().min(1) });
 export const GatewayEventPayloadSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("com.digows.whatsapp.ingress.receipt.v1"),
+    data: GatewayStreamReceiptSchema,
+  }),
   z.strictObject({ type: z.literal("com.digows.whatsapp.account.updated.v1"), data: AccountSchema }),
   z.strictObject({ type: z.literal("com.digows.whatsapp.account.desired.v1"), data: DesiredAccountSchema }),
   z.strictObject({ type: z.literal("com.digows.whatsapp.message.received.v1"), data: messageData }),

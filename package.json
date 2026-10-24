@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "13.1.0",
+    "@asyncapi/parser": "3.6.6",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "26.5.1",
     "@types/pg": "8.23.1",

@@ -198,6 +198,7 @@ for (const engine of ["sqlite", "postgresql"] as const)
       const document = await SwaggerParser.validate(await openapi.json());
       assert.ok("openapi" in document);
       assert.equal(document.openapi, "3.1.1");
+      assert.equal((await fetch(base + "/asyncapi.json")).status, 200);
       const docs = await fetch(base + "/docs");
       assert.match(await docs.text(), /swagger-ui-bundle.js/);
       const javascript = await fetch(base + "/docs/swagger-ui-bundle.js");

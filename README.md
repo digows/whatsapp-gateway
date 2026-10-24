@@ -9,7 +9,7 @@ PostgreSQL enforces workspace isolation with Row Level Security; SQLite enforces
 isolation in application queries and runs under one exclusive local runtime.
 
 **Current delivery:** an embeddable core with an authenticated HTTP server, portable contracts and
-embedded fleet coordination and a partial Chat SDK mapping. Redis and the complete Chat SDK
+embedded fleet coordination and a partial Chat SDK mapping. Redis query handling and the complete Chat SDK
 Adapter remain in progress; no standalone distribution is published.
 
 ## Built for agent integrations
@@ -38,6 +38,7 @@ partial mapping; a complete ready-to-use Adapter remains a target.
 | Fleet | Embedded elected placement, per-workspace capacity, sticky/least-load assignment, revisioned desired state and fenced recovery |
 | Session safety | Exclusive ownership per account, generation checks, stale-callback rejection and shutdown cleanup |
 | HTTP | Authenticated commands/queries, scoped lazy media and generated OpenAPI with local interactive docs |
+| Redis Streams | Scoped durable command intake/ACK/reclaim, result/event publication after local AOF acknowledgement and generated AsyncAPI |
 | Events | Transactional account-scoped CloudEvents with stable identity and ordered SQL replay; signed webhook delivery with bounded retries |
 | Webhooks | SQL per-destination retry queues, HMAC signatures, expiry and separate retention; success work retention defaults to zero |
 | Durable commands | Versioned scoped requests, explicit grants, per-account SQL ingress ordering and generation-fenced recovery |
@@ -93,8 +94,8 @@ pnpm install --frozen-lockfile
 
 Migrations are explicit. Use `migrateGatewayStorage(configuration)` once with administrative access,
 then `openGatewayStorage(configuration)` for startup. PostgreSQL applies the
-[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql) plus [command ingress](runtime/migrations/003_command_ingress.sql) and [runtime placement](runtime/migrations/004_runtime_placement.sql) plus [public events](runtime/migrations/005_public_events.sql) and [webhooks](runtime/migrations/006_webhook_outbox.sql);
-SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql) and [command ingress](runtime/migrations/sqlite/002_command_ingress.sql) and [runtime placement](runtime/migrations/sqlite/003_runtime_placement.sql) plus [public events](runtime/migrations/sqlite/004_public_events.sql) and [webhooks](runtime/migrations/sqlite/005_webhook_outbox.sql). These do not convert
+[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql) plus [command ingress](runtime/migrations/003_command_ingress.sql) and [runtime placement](runtime/migrations/004_runtime_placement.sql) plus [public events](runtime/migrations/005_public_events.sql) and [webhooks](runtime/migrations/006_webhook_outbox.sql) plus [Redis cursors](runtime/migrations/007_redis_streams.sql);
+SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql) and [command ingress](runtime/migrations/sqlite/002_command_ingress.sql) and [runtime placement](runtime/migrations/sqlite/003_runtime_placement.sql) plus [public events](runtime/migrations/sqlite/004_public_events.sql) and [webhooks](runtime/migrations/sqlite/005_webhook_outbox.sql) plus [Redis cursors](runtime/migrations/sqlite/006_redis_streams.sql). These do not convert
 legacy deployments or copy data when switching backends. Unsupported engines, incompatible schema
 versions and invalid storage/topology combinations fail at startup.
 
@@ -136,7 +137,7 @@ intake; poll the account-scoped command endpoint for the outcome. A `GatewayFlee
 `GatewayCommandWorker.runOne(lease)` on the exclusive account owner. HTTP intake can run on a
 separate PostgreSQL instance of the gateway without a local socket. An accepted command can remain
 queued until an owner executes it. Selecting `{ enabled: false }` opens no HTTP listener.
-Redis remains a separate unfinished increment.
+Redis read-only query handling remains a separate unfinished increment.
 
 ### Deliver signed webhooks
 
@@ -165,6 +166,36 @@ Retries preserve the exact event bytes. The [owning use case](docs/use-cases/gat
 header/transcript details and timeout/backoff/attempt/expiry/retention defaults. Success work retention
 is zero by default; source event/message history and send-idempotency are preserved. A disabled
 dispatcher opens no request. Shutdown aborts active requests and leaves retryable work.
+
+### Use Redis Streams independently
+
+Redis mode requires Redis 8.2 with AOF and `noeviction`. HTTP can be disabled. The embedder supplies
+trusted account principals and drives consume/publication/retention separately from the session owner.
+
+```ts
+import { GatewayRedisTransport, SqlRedisStreamStore } from "@digows/whatsapp-gateway-runtime";
+
+const redis = new GatewayRedisTransport(
+  new SqlRedisStreamStore(store),
+  { enabled: true, url: redisUrl, prefix: "gateway:v1" },
+  [{ accountId: account.accountId, principal }],
+);
+await redis.start();
+await redis.consumeOnce();
+await redis.publishOnce();
+```
+
+`gatewayStreamNames(prefix, scope)` from contracts computes per-account command/result/event keys.
+XADD a single `payload` field containing the same versioned command used by HTTP. Use account-specific
+Redis ACL keys; never derive a producer identity from command fields. `/asyncapi.json` describes the
+actual bindings and the common payloads. Runtime ACL permissions include INFO, XGROUP CREATE,
+XAUTOCLAIM, XREADGROUP, XACK, XADD, WAITAOF, XTRIM and TIME (plus connection handshake).
+
+ACK follows durable SQL intake/receipt. Publications can duplicate stable CloudEvent IDs on recovery;
+consumers deduplicate. Results distinguish intake from terminal command evaluation and native delivery.
+Age-based `trimOnce()` uses `ACKED`, preserving pending/unread entries. A new binding starts with future
+SQL events; retained Redis history can be replayed with another group. Read-only Redis queries/media
+and the full remote consumer Adapter remain in progress.
 
 ### Run a fleet participant
 
@@ -271,19 +302,22 @@ direct incoming access does not provide an implicit outbound upload/archive serv
 pnpm format:check
 pnpm typecheck
 GATEWAY_TEST_DATABASE_URL="$DISPOSABLE_RUNTIME_DATABASE_URL" \
-GATEWAY_TEST_ADMIN_DATABASE_URL="$DISPOSABLE_ADMIN_DATABASE_URL" pnpm test
+GATEWAY_TEST_ADMIN_DATABASE_URL="$DISPOSABLE_ADMIN_DATABASE_URL" \
+GATEWAY_TEST_REDIS_URL="$DISPOSABLE_REDIS_URL" pnpm test
 ```
 
 `pnpm check` runs all three checks. Use an owned disposable PostgreSQL database with all migrations
 and the restricted runtime role described above. Storage compatibility tests additionally require
 an explicit disposable admin URL to create/drop isolated verification databases. Set `TMPDIR` to an
 owned disposable directory for SQLite files and child-process checks. Tests require explicit fixture URLs;
-they do not load `.env` or fall back to another database. Native socket I/O is controlled, so these
+they do not load `.env` or fall back to another database. Redis tests additionally require an explicit
+owned AOF-enabled Redis 8.2 fixture; their capability scenario temporarily changes and restores that
+fixture's AOF/eviction settings, so never point them at a shared/production service. Native socket I/O is controlled, so these
 tests do not require QR pairing or live WhatsApp sends. There is no separate lint script.
 
 ## Next, not implemented yet
 
-- Independently configurable Redis Streams messaging.
+- Redis read-only queries/media alongside implemented command/result/event messaging.
 - A complete, ready-to-use Chat SDK Adapter.
 
 These are approved design targets, not current setup options. No NATS transport is included.

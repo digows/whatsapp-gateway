@@ -20,6 +20,7 @@ import { GatewayAuthorizationError, type GatewayPrincipal } from "../../domain/a
 import { GatewayConflictError, GatewayResourceUnavailableError } from "../../domain/errors.ts";
 import type { GatewayFleetStore } from "../../domain/fleet-store.ts";
 import type { GatewayStore } from "../../domain/gateway-store.ts";
+import { createGatewayAsyncApi } from "../redis/asyncapi.ts";
 import { createGatewayOpenApi, gatewayDocumentationHtml, gatewayDocumentationInitialize } from "./openapi.ts";
 
 export const GatewayHttpConfigurationSchema = z.strictObject({
@@ -70,6 +71,7 @@ export class GatewayHttpTransport
     workspaces: readonly GatewayHttpWorkspace[],
     credentials: readonly GatewayHttpCredential[],
     private readonly logger: Logger = pino(),
+    private readonly redisDocumentationPrefix = "gateway:v1",
   )
   {
     this.configuration = GatewayHttpConfigurationSchema.parse(configuration);
@@ -362,9 +364,15 @@ export class GatewayHttpTransport
     path: string,
   ): Promise<boolean>
   {
-    if (path !== "/openapi.json" && path !== "/docs" && !path.startsWith("/docs/")) return false;
+    if (
+      path !== "/openapi.json" && path !== "/asyncapi.json" && path !== "/docs" && !path.startsWith("/docs/")
+    ) return false;
     if (request.method !== "GET") throw new HttpFailure(405, "METHOD_NOT_ALLOWED");
     if (path === "/openapi.json") sendJson(response, 200, createGatewayOpenApi());
+    else if (path === "/asyncapi.json")
+    {
+      sendJson(response, 200, createGatewayAsyncApi(this.redisDocumentationPrefix));
+    }
     else if (path === "/docs")
     {
       response.setHeader(
