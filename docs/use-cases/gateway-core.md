@@ -2,7 +2,7 @@
 
 This document owns the transport-independent gateway behavior reviewed on October 23, 2026.
 The runtime, portable contracts and application-side Chat SDK projection are implemented here.
-The versioned command contract, SQL ingress and HTTP transport are implemented. Embedded placement is implemented. Redis transport and webhook
+The versioned command contract, SQL ingress and HTTP transport are implemented. Embedded placement is implemented. Public CloudEvents are transactionally retained; Redis transport and webhook
 acknowledgement remain pending increments of the approved design.
 No legacy NATS subject is retained as a compatibility contract.
 
@@ -28,8 +28,8 @@ cluster mode and is currently qualified against PostgreSQL 18. Another Kysely di
 supported backend. Changing configuration does not transfer data between engines.
 
 `migrateGatewayStorage()` is an explicit administrative step. PostgreSQL uses the immutable
-`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` and `004_runtime_placement.sql`; SQLite uses
-`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` and `003_runtime_placement.sql`. Schema version metadata is intentionally system-level,
+`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` and `005_public_events.sql`; SQLite uses
+`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` and `004_public_events.sql`. Schema version metadata is intentionally system-level,
 not tenant-owned. Unknown versions fail instead of being reset. Migration does not convert legacy
 authentication directories or old deployments. PostgreSQL migration calls serialize on an advisory lock.
 
@@ -83,6 +83,33 @@ ACCEPTED into delivery. SQL failures while recording a completion leave recovery
 than rewriting the command as an execution failure. Command history is separate from later webhook
 retention. A fleet participant automatically schedules `runOne()` only for its actual owned/assigned accounts.
 An embedder may also drive the worker explicitly. The Redis transport remains a subsequent increment.
+
+## Transactional public events and replay
+
+`GatewayCloudEventSchema` owns structured CloudEvents 1.0 envelopes. Public event types are versioned
+under `com.digows.whatsapp.*.v1`: account updates/desired state, retained messages, normalization
+rejection observations, native delivery observations, send-operation changes and command changes.
+Each envelope has an immutable UUID, source `urn:digows:whatsapp-gateway`, observation time,
+account subject, authenticated-routing workspace/account extensions and a per-account sequence.
+The envelope identity must match the owning data's workspace/account. These technical events carry
+no Agent outcome or business-approval inference.
+
+The `public_event` table is separate from retained private native protocol data and send-idempotency
+records. Every public append happens inside the SQL transaction changing its owning state. Account
+row serialization assigns sequence before commit on both qualified engines. A publication persistence
+failure rolls back the state change; there is no independent network send inside these transactions.
+Private native envelopes, authentication keys and provider media URLs do not enter this public log.
+Pairing QR/account state is scoped integration data and must reach only authorized destinations.
+
+Duplicate native retention/receipt inserts do not create another public event. Repeated equivalent
+state/operation snapshots likewise do not create another transition. Actual command claim/recovery
+transitions remain visible. `SqlGatewayEventLog.after(accountId, sequence, limit)` replays scoped
+committed events in per-account sequence, with stable IDs across process/storage reopen. There is
+no global cross-account order. This trusted in-process reader does not replace transport authentication.
+The log is not automatically trimmed in this increment; future delivery-state retention must not delete
+this history/idempotency or rescan it to recreate successful webhook deliveries. Public SQL retention
+is implemented; actual Redis publication and webhook delivery remain pending, with no delivery guarantee
+inferred from the CloudEvents format itself.
 
 ## HTTP commands, queries and interactive documentation
 

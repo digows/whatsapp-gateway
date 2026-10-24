@@ -14,6 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ClaimedGatewayCommand, GatewayCommandInbox } from "../../domain/command-inbox.ts";
 import { GatewayConflictError, GatewayResourceUnavailableError } from "../../domain/errors.ts";
 import type { AccountLease } from "../../domain/gateway-store.ts";
+import { appendGatewayEvent } from "./event-log.ts";
 import { canonical, SqlGatewayStore } from "./gateway-store.ts";
 import { type CommandTable, jsonValue } from "./tables.ts";
 
@@ -71,6 +72,10 @@ export class SqlCommandInbox implements GatewayCommandInbox
         generation: null,
         created_at: new Date().toISOString(),
       }).returningAll().executeTakeFirstOrThrow();
+      await appendGatewayEvent(this.store, transaction, command.accountId, {
+        type: "com.digows.whatsapp.command.updated.v1",
+        data: commandResult(row),
+      });
       return commandResult(row);
     });
   }
@@ -105,13 +110,17 @@ export class SqlCommandInbox implements GatewayCommandInbox
       // Never reclaim based on wall-clock time while the exclusive account owner still lives.
       if (!row || (row.state === "EXECUTING" && row.generation === lease.generation)) return null;
       const token = randomUUID();
-      await transaction.updateTable("command").set({
+      const claimed = await transaction.updateTable("command").set({
         state: "EXECUTING",
         claim_token: token,
         generation: lease.generation,
       })
         .where("workspace_id", "=", this.workspaceId).where("account_id", "=", lease.accountId)
-        .where("request_id", "=", row.request_id).execute();
+        .where("request_id", "=", row.request_id).returningAll().executeTakeFirstOrThrow();
+      await appendGatewayEvent(this.store, transaction, lease.accountId, {
+        type: "com.digows.whatsapp.command.updated.v1",
+        data: commandResult(claimed),
+      });
       return {
         command: GatewayCommandSchema.parse(jsonValue(row.command)),
         token,
@@ -166,8 +175,13 @@ export class SqlCommandInbox implements GatewayCommandInbox
         generation: null,
       }).where("workspace_id", "=", this.workspaceId).where("account_id", "=", lease.accountId)
         .where("request_id", "=", claim.command.requestId).where("state", "=", "EXECUTING")
-        .where("claim_token", "=", claim.token).where("generation", "=", lease.generation).executeTakeFirst();
-      if (updated.numUpdatedRows !== 1n) throw new Error("Command claim or completion is no longer current");
+        .where("claim_token", "=", claim.token).where("generation", "=", lease.generation).returningAll()
+        .executeTakeFirst();
+      if (!updated) throw new Error("Command claim or completion is no longer current");
+      await appendGatewayEvent(this.store, transaction, lease.accountId, {
+        type: "com.digows.whatsapp.command.updated.v1",
+        data: commandResult(updated),
+      });
     });
   }
 }

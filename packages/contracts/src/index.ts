@@ -38,4 +38,5 @@ export * from "./gateway.ts";
 export * from "./commands.ts";
 export * from "./contact-registration.ts";
 export * from "./desired-account.ts";
+export * from "./events.ts";
 export * from "./queries.ts";

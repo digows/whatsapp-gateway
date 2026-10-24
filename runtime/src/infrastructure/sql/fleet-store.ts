@@ -16,6 +16,7 @@ import {
 import type { GatewayFleetStore } from "../../domain/fleet-store.ts";
 import type { AccountLease } from "../../domain/gateway-store.ts";
 import { SqlCommandInbox } from "./command-inbox.ts";
+import { appendGatewayEvent } from "./event-log.ts";
 import { type GatewayTransaction, SqlGatewayStore } from "./gateway-store.ts";
 import type { DesiredAccountTable } from "./tables.ts";
 const PairedIdentitySchema = z.object({ me: z.object({ id: z.string().min(1) }) });
@@ -78,6 +79,10 @@ export class SqlFleetStore implements GatewayFleetStore
           account_id: request.accountId,
           ...values,
         }).returningAll().executeTakeFirstOrThrow();
+      await appendGatewayEvent(this.store, transaction, request.accountId, {
+        type: "com.digows.whatsapp.account.desired.v1",
+        data: desiredAccount(row),
+      });
       return desiredAccount(row);
     });
   }
@@ -219,14 +224,26 @@ export class SqlFleetStore implements GatewayFleetStore
         const owner = placements.get(account.account_id) ?? null;
         const blockedRevision = blocked.has(account.account_id) ? account.revision : account.blocked_revision;
         if (owner === account.assigned_runtime_id && blockedRevision === account.blocked_revision) continue;
-        await transaction.updateTable("desired_account").set({
+        await transaction.updateTable("account").set({ generation: sql`generation` }).where(
+          "workspace_id",
+          "=",
+          this.workspaceId,
+        ).where("id", "=", account.account_id).execute();
+        const updated = await transaction.updateTable("desired_account").set({
           assigned_runtime_id: owner,
           blocked_revision: blockedRevision,
         }).where("workspace_id", "=", this.workspaceId).where("account_id", "=", account.account_id).where(
           "revision",
           "=",
           account.revision,
-        ).execute();
+        ).returningAll().executeTakeFirst();
+        if (updated)
+        {
+          await appendGatewayEvent(this.store, transaction, account.account_id, {
+            type: "com.digows.whatsapp.account.desired.v1",
+            data: desiredAccount(updated),
+          });
+        }
       }
       await transaction.deleteFrom("runtime").where("workspace_id", "=", this.workspaceId).where(
         "expires_at",
@@ -259,18 +276,31 @@ export class SqlFleetStore implements GatewayFleetStore
           throw new UnpairedAccountRecoveryError();
         }
       }
-      await transaction.updateTable("desired_account").set({ attempted_revision: revision }).where(
-        "workspace_id",
-        "=",
-        this.workspaceId,
-      ).where("account_id", "=", lease.accountId).execute();
+      const updated = await transaction.updateTable("desired_account").set({ attempted_revision: revision })
+        .where(
+          "workspace_id",
+          "=",
+          this.workspaceId,
+        ).where("account_id", "=", lease.accountId).returningAll().executeTakeFirstOrThrow();
+      if (desired.attempted_revision !== updated.attempted_revision)
+      {
+        await appendGatewayEvent(this.store, transaction, lease.accountId, {
+          type: "com.digows.whatsapp.account.desired.v1",
+          data: desiredAccount(updated),
+        });
+      }
     });
   }
   async block(accountId: string, runtimeId: string, revision: number): Promise<void>
   {
     await this.store.transaction(async transaction =>
     {
-      await transaction.updateTable("desired_account").set({
+      await transaction.updateTable("account").set({ generation: sql`generation` }).where(
+        "workspace_id",
+        "=",
+        this.workspaceId,
+      ).where("id", "=", GatewayIdentifierSchema.parse(accountId)).execute();
+      const updated = await transaction.updateTable("desired_account").set({
         blocked_revision: revision,
         assigned_runtime_id: null,
       }).where("workspace_id", "=", this.workspaceId).where(
@@ -281,7 +311,14 @@ export class SqlFleetStore implements GatewayFleetStore
         "revision",
         "=",
         revision,
-      ).where("attempted_revision", "=", revision).execute();
+      ).where("attempted_revision", "=", revision).returningAll().executeTakeFirst();
+      if (updated)
+      {
+        await appendGatewayEvent(this.store, transaction, accountId, {
+          type: "com.digows.whatsapp.account.desired.v1",
+          data: desiredAccount(updated),
+        });
+      }
     });
   }
   private async currentAssignment(

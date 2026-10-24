@@ -70,8 +70,9 @@ const tenantTables = [
   "command",
   "runtime",
   "desired_account",
+  "public_event",
 ];
-const schemaVersion = 4;
+const schemaVersion = 5;
 
 export class GatewayStorage
 {
@@ -282,6 +283,14 @@ export class GatewayStorage
         "attempted_revision",
         "blocked_revision",
       ]).limit(0).execute();
+      await this.database.selectFrom("public_event").select([
+        "workspace_id",
+        "account_id",
+        "id",
+        "sequence",
+        "envelope",
+        "created_at",
+      ]).limit(0).execute();
     }
     catch (error)
     {
@@ -447,6 +456,16 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
           ),
         );
       }
+      const eventsVersion: unknown = database.prepare("SELECT version FROM schema_version").get();
+      if (z.object({ version: z.literal(4) }).safeParse(eventsVersion).success)
+      {
+        database.exec(
+          await readFile(
+            new URL("../../../migrations/sqlite/004_public_events.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+      }
       const row: unknown = database.prepare("SELECT version FROM schema_version").get();
       if (z.object({ version: z.literal(schemaVersion) }).safeParse(row).success === false)
       {
@@ -490,6 +509,13 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
     {
       await connection.query(
         await readFile(new URL("../../../migrations/004_runtime_placement.sql", import.meta.url), "utf8"),
+      );
+    }
+    const eventsVersion = await connection.query("SELECT version FROM gateway.schema_version");
+    if (eventsVersion.rows.length === 1 && eventsVersion.rows[0]?.version === 4)
+    {
+      await connection.query(
+        await readFile(new URL("../../../migrations/005_public_events.sql", import.meta.url), "utf8"),
       );
     }
     const version = await connection.query("SELECT version FROM gateway.schema_version");

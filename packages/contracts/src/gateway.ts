@@ -52,9 +52,9 @@ export interface GatewayOperations
   presence(accountId: string, chatId: string, composing: boolean): Promise<void>;
   readMedia(accountId: string, sourceId: string): Promise<Uint8Array>;
 }
-export interface DeliveryObservation
-{
-  readonly channelMessageId: string;
-  readonly chatAddress: string | null;
-  readonly status: string;
-}
+export const DeliveryObservationSchema = z.strictObject({
+  channelMessageId: z.string().min(1),
+  chatAddress: z.string().nullable(),
+  status: z.string().min(1),
+});
+export type DeliveryObservation = Readonly<z.infer<typeof DeliveryObservationSchema>>;

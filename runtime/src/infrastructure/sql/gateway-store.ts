@@ -22,6 +22,7 @@ import {
 } from "../../domain/gateway-store.ts";
 import { AccountPacing, type PacingPolicy } from "../../domain/pacing.ts";
 import { SendOperation } from "../../domain/send-operation.ts";
+import { appendGatewayEvent } from "./event-log.ts";
 import type { GatewayStorage } from "./storage.ts";
 import { type AccountTable, type GatewayTables, jsonValue, type OperationTable } from "./tables.ts";
 export type GatewayTransaction = Transaction<GatewayTables>;
@@ -74,12 +75,19 @@ export class SqlGatewayStore implements GatewayStore
     AccountScopeSchema.parse({ workspaceId: this.workspaceId, accountId });
     await this.transaction(async transaction =>
     {
-      await transaction.insertInto("account").values({
+      const created = await transaction.insertInto("account").values({
         workspace_id: this.workspaceId,
         id: accountId,
         native_jid: null,
         qr: null,
-      }).onConflict(conflict => conflict.doNothing()).execute();
+      }).onConflict(conflict => conflict.doNothing()).returningAll().executeTakeFirst();
+      if (created)
+      {
+        await appendGatewayEvent(this, transaction, accountId, {
+          type: "com.digows.whatsapp.account.updated.v1",
+          data: this.scopedAccount(created),
+        });
+      }
       const now = new Date().toISOString();
       await transaction.insertInto("pacing").values({
         workspace_id: this.workspaceId,
@@ -141,13 +149,24 @@ export class SqlGatewayStore implements GatewayStore
         "workspace_id",
         "=",
         this.workspaceId,
-      ).where("id", "=", accountId).returning("generation").executeTakeFirst();
+      ).where("id", "=", accountId).returningAll().executeTakeFirst();
       if (!row) throw new GatewayResourceUnavailableError("Account unavailable");
-      await transaction.updateTable("operation").set({ state: "UNKNOWN" }).where(
+      await appendGatewayEvent(this, transaction, accountId, {
+        type: "com.digows.whatsapp.account.updated.v1",
+        data: this.scopedAccount(row),
+      });
+      const interrupted = await transaction.updateTable("operation").set({ state: "UNKNOWN" }).where(
         "workspace_id",
         "=",
         this.workspaceId,
-      ).where("account_id", "=", accountId).where("state", "=", "IN_FLIGHT").execute();
+      ).where("account_id", "=", accountId).where("state", "=", "IN_FLIGHT").returningAll().execute();
+      for (const operation of interrupted)
+      {
+        await appendGatewayEvent(this, transaction, accountId, {
+          type: "com.digows.whatsapp.operation.updated.v1",
+          data: operationResult(operation),
+        });
+      }
       return row.generation;
     });
   }
@@ -167,11 +186,27 @@ export class SqlGatewayStore implements GatewayStore
     await this.transaction(async transaction =>
     {
       await this.assertOwnership(transaction, lease);
-      await transaction.updateTable("account").set({
+      const previous = await transaction.selectFrom("account").selectAll().where(
+        "workspace_id",
+        "=",
+        this.workspaceId,
+      ).where("id", "=", lease.accountId).executeTakeFirstOrThrow();
+      const updated = await transaction.updateTable("account").set({
         state,
         native_jid: nativeJid ?? sql`native_jid`,
         qr: qr ?? null,
-      }).where("workspace_id", "=", this.workspaceId).where("id", "=", lease.accountId).execute();
+      }).where("workspace_id", "=", this.workspaceId).where("id", "=", lease.accountId).returningAll()
+        .executeTakeFirstOrThrow();
+      if (
+        previous.state !== updated.state || previous.native_jid !== updated.native_jid
+        || previous.qr !== updated.qr
+      )
+      {
+        await appendGatewayEvent(this, transaction, lease.accountId, {
+          type: "com.digows.whatsapp.account.updated.v1",
+          data: this.scopedAccount(updated),
+        });
+      }
     });
   }
   async reserve(lease: AccountLease, message: OutboundMessage, count: number): Promise<SendOperation>
@@ -181,13 +216,13 @@ export class SqlGatewayStore implements GatewayStore
     {
       await this.assertOwnership(transaction, lease);
       const ids = Array.from({ length: count }, () => randomUUID().replaceAll("-", "").toUpperCase());
-      await transaction.insertInto("operation").values({
+      const inserted = await transaction.insertInto("operation").values({
         workspace_id: this.workspaceId,
         account_id: lease.accountId,
         key: message.idempotencyKey,
         digest,
         native_ids: JSON.stringify(ids),
-      }).onConflict(conflict => conflict.doNothing()).execute();
+      }).onConflict(conflict => conflict.doNothing()).returning("key").executeTakeFirst();
       const row = await transaction.selectFrom("operation").selectAll().where(
         "workspace_id",
         "=",
@@ -196,7 +231,8 @@ export class SqlGatewayStore implements GatewayStore
         .executeTakeFirst();
       if (!row) throw new GatewayResourceUnavailableError("Operation unavailable");
       if (row.digest !== digest) throw new Error("Operation key has a different payload");
-      if (row.state === "IN_FLIGHT")
+      const interrupted = row.state === "IN_FLIGHT";
+      if (interrupted)
       {
         await transaction.updateTable("operation").set({ state: "UNKNOWN" }).where(
           "workspace_id",
@@ -204,6 +240,13 @@ export class SqlGatewayStore implements GatewayStore
           this.workspaceId,
         ).where("account_id", "=", lease.accountId).where("key", "=", message.idempotencyKey).execute();
         row.state = "UNKNOWN";
+      }
+      if (inserted || interrupted)
+      {
+        await appendGatewayEvent(this, transaction, lease.accountId, {
+          type: "com.digows.whatsapp.operation.updated.v1",
+          data: operationResult(row),
+        });
       }
       return SendOperation.restore(operationResult(row));
     });
@@ -217,6 +260,11 @@ export class SqlGatewayStore implements GatewayStore
     await this.transaction(async transaction =>
     {
       await this.assertOwnership(transaction, lease);
+      const previous = await transaction.selectFrom("operation").select(["state", "accepted_parts"]).where(
+        "workspace_id",
+        "=",
+        this.workspaceId,
+      ).where("account_id", "=", lease.accountId).where("key", "=", operation.key).executeTakeFirst();
       const updated = await transaction.updateTable("operation").set({
         state: operation.state,
         accepted_parts: operation.acceptedParts,
@@ -234,6 +282,13 @@ export class SqlGatewayStore implements GatewayStore
         ])
       ).executeTakeFirst();
       if (updated.numUpdatedRows !== 1n) throw new Error("Operation terminal state cannot be overwritten");
+      if (previous?.state !== operation.state || previous?.accepted_parts !== operation.acceptedParts)
+      {
+        await appendGatewayEvent(this, transaction, lease.accountId, {
+          type: "com.digows.whatsapp.operation.updated.v1",
+          data: operation.snapshot(),
+        });
+      }
     });
   }
   async operation(requestedAccountId: string, key: string): Promise<OperationResult>
@@ -315,14 +370,21 @@ export class SqlGatewayStore implements GatewayStore
     await this.transaction(async transaction =>
     {
       await this.assertOwnership(transaction, lease);
-      await transaction.insertInto("delivery").values({
+      const inserted = await transaction.insertInto("delivery").values({
         workspace_id: this.workspaceId,
         account_id: lease.accountId,
         message_id: observation.channelMessageId,
         status: observation.status,
         chat_address: observation.chatAddress,
         observed_at: new Date().toISOString(),
-      }).onConflict(conflict => conflict.doNothing()).execute();
+      }).onConflict(conflict => conflict.doNothing()).returning("message_id").executeTakeFirst();
+      if (inserted)
+      {
+        await appendGatewayEvent(this, transaction, lease.accountId, {
+          type: "com.digows.whatsapp.message.delivery.v1",
+          data: { workspaceId: this.workspaceId, accountId: lease.accountId, ...observation },
+        });
+      }
     });
   }
   async receipts(requestedAccountId: string, messageId: string): Promise<readonly DeliveryObservation[]>
@@ -344,7 +406,7 @@ export class SqlGatewayStore implements GatewayStore
     {
       await this.assertOwnership(transaction, lease);
       const id = createHash("sha256").update(canonical(message)).digest("hex");
-      await transaction.insertInto("event").values({
+      const inserted = await transaction.insertInto("event").values({
         workspace_id: this.workspaceId,
         account_id: lease.accountId,
         id,
@@ -352,7 +414,14 @@ export class SqlGatewayStore implements GatewayStore
         native,
         error_name: null,
         created_at: new Date().toISOString(),
-      }).onConflict(conflict => conflict.doNothing()).execute();
+      }).onConflict(conflict => conflict.doNothing()).returning("id").executeTakeFirst();
+      if (inserted)
+      {
+        await appendGatewayEvent(this, transaction, lease.accountId, {
+          type: "com.digows.whatsapp.message.received.v1",
+          data: { workspaceId: this.workspaceId, accountId: lease.accountId, message },
+        });
+      }
     });
   }
   async retainFailure(lease: AccountLease, native: string, errorName: string): Promise<void>
@@ -361,7 +430,7 @@ export class SqlGatewayStore implements GatewayStore
     {
       await this.assertOwnership(transaction, lease);
       const id = "normalization-failed:" + createHash("sha256").update(native).digest("hex");
-      await transaction.insertInto("event").values({
+      const inserted = await transaction.insertInto("event").values({
         workspace_id: this.workspaceId,
         account_id: lease.accountId,
         id,
@@ -370,7 +439,14 @@ export class SqlGatewayStore implements GatewayStore
         native,
         error_name: errorName,
         created_at: new Date().toISOString(),
-      }).onConflict(conflict => conflict.doNothing()).execute();
+      }).onConflict(conflict => conflict.doNothing()).returning("id").executeTakeFirst();
+      if (inserted)
+      {
+        await appendGatewayEvent(this, transaction, lease.accountId, {
+          type: "com.digows.whatsapp.message.rejected.v1",
+          data: { workspaceId: this.workspaceId, accountId: lease.accountId, errorName },
+        });
+      }
     });
   }
   async native(requestedAccountId: string, messageId: string): Promise<string>

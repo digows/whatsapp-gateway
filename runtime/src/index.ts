@@ -37,3 +37,5 @@ export {
 } from "./application/fleet-participant.ts";
 export { type GatewayFleetStore } from "./domain/fleet-store.ts";
 export { SqlFleetStore } from "./infrastructure/sql/fleet-store.ts";
+
+export { SqlGatewayEventLog } from "./infrastructure/sql/event-log.ts";

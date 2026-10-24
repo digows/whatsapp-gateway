@@ -105,6 +105,15 @@ export interface DesiredAccountTable
   attempted_revision: number;
   blocked_revision: number;
 }
+export interface PublicEventTable
+{
+  workspace_id: string;
+  account_id: string;
+  id: string;
+  sequence: number;
+  envelope: JsonColumn;
+  created_at: TimestampColumn;
+}
 export interface GatewayTables
 {
   account: AccountTable;
@@ -118,6 +127,7 @@ export interface GatewayTables
   command: CommandTable;
   runtime: RuntimeTable;
   desired_account: DesiredAccountTable;
+  public_event: PublicEventTable;
 }
 export function jsonValue(value: unknown): unknown
 {
