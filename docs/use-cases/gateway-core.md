@@ -452,21 +452,75 @@ query semantics during preparation; an indeterminate lookup fails preparation ex
 durable application job, resolve once and retain `resolvedAddress` in its send payload. The native
 query/decoder fixtures qualify the implemented profile, not current live WhatsApp registration.
 
-## Chat SDK integration boundary
+## Chat SDK and Mastra integration boundary
 
-`GatewayChatMapping` compiles against published `chat@4.43.0`. It constructs real SDK Message
-objects with typed originals and lazy Attachment fetching/rehydration. It encodes workspace,
-account and chat identity in thread IDs and validates their scope. A handset self-chat is a user
-input, not a bot echo. Text posting can use `postWithKey()` for a caller-owned stable identity;
-a new ordinary `postMessage()` call allocates a new key. UNKNOWN is surfaced with the original
-operation identity and must not become a fresh automatic post.
+`WhatsAppGatewayAdapter` implements the published `chat@4.43.0` Adapter. Its remote
+`GatewayRemoteClient` uses actual HTTP or Redis Streams requests, polling durable
+command results and preserving scoped operation outcomes. Timeout errors retain
+the original request identity; no fresh-key retry is performed. Redis result
+intake correlates request IDs in a stable consumer group configured for that
+application instance. Do not share that result group between independent clients:
+they have independent outstanding-request maps. Redis failure is explicit; reopen
+the client to reconnect and inspect/retry original operation keys.
 
-The public `gateway` operations boundary retains explicit rich-content sending and status access.
-Unsupported card/file projections fail explicitly rather than silently flattening content.
-This package is a tested SDK projection/send mapping, not a complete `Adapter` with remote event
-intake. Full Adapter initialization, history methods, standard action/card translation and dispatch
-bindings are incomplete and must be implemented against the selected transmission contract.
-No stub webhook or pretend connected broker exists. No full WhatsApp history service is provided.
+Thread IDs encode workspace, account and native chat. Raw SDK messages retain the
+owning `GatewayObservedMessage`, including direction, timestamp provenance and
+edited/deleted state. Handset self-chat input remains user-authored; a retained
+outbound observation is marked as the adapter's own message. History comes from
+observed snapshots, with scoped cursors and chronological pages. Incoming native
+and stored attachments stay lazy and can be rehydrated from scoped metadata.
+
+Standard text/Markdown/AST output translates to the qualified WhatsApp formatting.
+Single files upload through private storage; multiple image/video files become an
+album. SDK reply cards preserve reply action ID/value using an opaque native
+choice ID. Text/sections/dividers and one bounded HTTP(S) JPEG image are supported;
+image URL materialization is explicit outgoing work and requires private storage.
+Unsupported controls such as modals, disabled/access-restricted buttons and
+unsupported layouts fail explicitly. Gateway-native rich families remain
+available through `executeWithKey`, returning the actual operation outcome.
+`postGatewayWithKey` returns a message only for ordinary message content; lifecycle
+operations use their outcome contract. Edit/delete/reaction targets resolve from
+observed sender/chat identity. Native quotes can load their original retained
+protocol envelope after a socket restart, validating chat/sender correlation.
+
+Signed HTTP webhooks validate raw bytes, envelope ID and account scope before
+processing. `GatewayRedisEvents` checks the authenticated account stream and
+XACKs only after the supplied handler fulfills. It reclaims idle pending work on
+subsequent calls; the consumer application schedules calls and handles failures.
+Redis group retention remains operator/consumer-owned, not automatically deleted
+on disconnect. Both intake paths dispatch actual SDK message/action/reaction/
+update/delete methods. Ordinary messages pass `deduplicate:false` because SDK
+pre-handler deduplication would otherwise suppress a retry after handler failure.
+A conversation lock serializes adapter intake, with renewal while processing;
+completion is marked in the configured Chat StateAdapter only after the handler
+fulfills and the lock remains held. Completed-event retention defaults to seven
+days. Shared Redis StateAdapter reconstruction is exercised; in-memory state
+only protects one process lifetime. A crash after an application effect but before
+the marker can replay it; external application effects are not fenced by this
+lock. The qualified SDK dispatch profile is `concurrency:"concurrent"`, also the
+released Mastra default. Queued/debounced/burst dispatch is not qualified for this
+inline completion/ACK contract. `waitUntil` does not cause an early successful ACK.
+Disconnect stops intake and waits for active handlers before closing its client.
+
+The reproducible generic composition is
+`packages/chat-adapter/examples/mastra.ts`, exercised against released
+`@mastra/core@1.79.0`, actual `AgentChannels`, `Agent` and `chat@4.43.0` with a
+controlled outer model boundary, real transport and SQL. Mastra is a consumer/test
+dependency, not a gateway runtime dependency. The fixture uses native in-memory
+Mastra storage only for framework state; it does not claim durable agent runs.
+
+Native interoperability is not application exactly-once replay. Native
+`postMessage` has no caller operation key and creates a new one for each call.
+The measured case posts, receives ACCEPTED and then throws in the handler:
+replaying that native call creates a second effect. The explicit `postWithKey`
+case covers the same after-acceptance failure boundary: the same event/key/body
+can execute the handler twice with one native effect. Payload conflicts fail;
+UNKNOWN remains inspectable under the original key and never triggers a fresh
+send in this Adapter. Released `AgentChannels.handleChatMessage` catches run
+errors and delegates to its error handler, so webhook success is not proof of
+model/run success. Durable consumer send intent and run outcomes remain consumer
+composition responsibilities; no implicit output identities or framework-internal
+interception are introduced here. There is no full WhatsApp history service.
 
 ## Validation and limits
 

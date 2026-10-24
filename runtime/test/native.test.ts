@@ -506,3 +506,64 @@ test("an unsupported inbound message retains its failure and does not stop subse
     await isolated.close();
   }
 });
+
+test("native quote content is reconstructed from its scoped retained envelope after a socket restart", async () =>
+{
+  const id = randomUUID();
+  await store.createAccount(id);
+  const nativeSockets: NativeSocketFixture[] = [];
+  let connection: BaileysConnection | undefined;
+  const instance = new Gateway(store, (_account, lease) =>
+  {
+    connection = new BaileysConnection(store, lease, null, configuration =>
+    {
+      const socket = new NativeSocketFixture(configuration);
+      nativeSockets.push(socket);
+      return socket.socket;
+    });
+    return connection;
+  }, { minimumDelayMs: 0, maximumDelayMs: 0, typingDelayMs: 0 });
+  try
+  {
+    await instance.start(id);
+    const socket = nativeSockets[0];
+    assert.ok(socket && connection);
+    socket.pair();
+    socket.update("open");
+    await connection.drainEvents();
+    socket.events.emit("messages.upsert", {
+      messages: [{
+        key: { id: "retained-quote", remoteJid: "200@s.whatsapp.net", fromMe: false },
+        messageTimestamp: 1234,
+        message: { conversation: "retained original quote" },
+      }],
+    });
+    await connection.drainEvents();
+    await instance.stop(id);
+    await instance.start(id);
+    nativeSockets.at(-1)?.update("open");
+    await connection.drainEvents();
+    const result = await instance.send(id, {
+      channel: "WHATSAPP",
+      contentKind: "TEXT",
+      senderAddress: "100@s.whatsapp.net",
+      recipientAddress: "200@s.whatsapp.net",
+      idempotencyKey: "quote-after-restart",
+      text: "reply",
+      quotedMessage: {
+        channelMessageId: "retained-quote",
+        chatAddress: "200@s.whatsapp.net",
+        senderAddress: "200@s.whatsapp.net",
+      },
+    });
+    assert.equal(result.state, "ACCEPTED");
+    assert.equal(
+      nativeSockets.at(-1)?.sent.at(-1)?.options?.quoted?.message?.conversation,
+      "retained original quote",
+    );
+  }
+  finally
+  {
+    await instance.close();
+  }
+});

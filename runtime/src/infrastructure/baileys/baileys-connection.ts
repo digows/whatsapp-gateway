@@ -56,7 +56,7 @@ export class BaileysConnection implements WhatsAppConnection
   private retry = 0;
   private pairingDeadline = 0;
   constructor(
-    store: GatewayStore,
+    private readonly store: GatewayStore,
     private readonly lease: AccountLease,
     private readonly media: IMediaRepository | null = null,
     private readonly factory: SocketFactory = makeWASocket,
@@ -335,8 +335,19 @@ export class BaileysConnection implements WhatsAppConnection
       id: reference.channelMessageId,
       ...(reference.chatAddress ? { remoteJid: reference.chatAddress } : {}),
     };
-    const value = this.cache.readMessage(key);
-    if (!value) throw new Error("Quote content unavailable");
+    const cached = this.cache.readMessage(key);
+    const serialized = cached
+      ? null
+      : await this.store.native(this.lease.accountId, reference.channelMessageId, reference.chatAddress);
+    const value = cached ?? proto.WebMessageInfo.fromObject(JSON.parse(serialized!, BufferJSON.reviver));
+    if (!value.key || value.key.id !== reference.channelMessageId || !value.message)
+    {
+      throw new Error("Quote content unavailable");
+    }
+    if (
+      reference.chatAddress
+      && await this.address(value.key.remoteJid) !== await this.recipient(reference.chatAddress)
+    ) throw new Error("Quote chat correlation differs");
     if (reference.senderAddress)
     {
       const sender = value.key.fromMe
@@ -347,7 +358,7 @@ export class BaileysConnection implements WhatsAppConnection
         throw new Error("Quote sender correlation differs");
       }
     }
-    return value;
+    return { ...value, key: value.key };
   }
   private async recipient(address: string): Promise<string>
   {

@@ -7,7 +7,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@digows/whatsapp-gateway-contracts": "workspace:*"
+    "@digows/whatsapp-gateway-contracts": "workspace:*",
+    "zod": "4.6.5",
+    "redis": "6.3.0"
   },
   "peerDependencies": {
     "chat": "4.43.0"

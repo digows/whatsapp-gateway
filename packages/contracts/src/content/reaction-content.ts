@@ -4,7 +4,7 @@ import { MessageTargetSchema } from "./message-reference.ts";
 export const ReactionContentSchema = z.strictObject({
   contentKind: z.literal("REACTION"),
   target: MessageTargetSchema,
-  emoji: z.string().min(1),
+  emoji: z.string().describe("Empty removes the current sender reaction from the target."),
 });
 
 export type ReactionContent = z.infer<typeof ReactionContentSchema>;

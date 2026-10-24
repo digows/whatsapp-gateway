@@ -8,9 +8,9 @@ and media fetched on demand. SQLite local mode or PostgreSQL shared storage keep
 PostgreSQL enforces workspace isolation with Row Level Security; SQLite enforces workspace/account
 isolation in application queries and runs under one exclusive local runtime.
 
-**Current delivery:** an embeddable core with an authenticated HTTP server, portable contracts and
-embedded fleet coordination and a partial Chat SDK mapping. Redis query handling and the complete Chat SDK
-Adapter remain in progress; no standalone distribution is published.
+**Current delivery:** an embeddable gateway with authenticated HTTP, Redis Streams, signed webhooks,
+embedded fleet coordination and a real remote Chat SDK Adapter. Native Mastra channels are qualified
+against the released versions below. Standalone packaging/container delivery is still in progress.
 
 ## Built for agent integrations
 
@@ -27,8 +27,8 @@ supplies the agent, model and conversation policy.
 - **Media on demand:** fetch attachment bytes only when the agent application requests them.
 - **Account isolation:** keep workspace/account scope separate from the WhatsApp chat and sender.
 
-The core does not bundle a model runtime. The application-side Chat SDK package is currently a
-partial mapping; a complete ready-to-use Adapter remains a target.
+The gateway does not bundle a model runtime. Use the application-side Chat SDK Adapter with Mastra
+or another agent framework; the gateway runtime has no framework dependency.
 
 ## Implemented capabilities
 
@@ -194,8 +194,10 @@ XAUTOCLAIM, XREADGROUP, XACK, XADD, WAITAOF, XTRIM and TIME (plus connection han
 ACK follows durable SQL intake/receipt. Publications can duplicate stable CloudEvent IDs on recovery;
 consumers deduplicate. Results distinguish intake from terminal command evaluation and native delivery.
 Age-based `trimOnce()` uses `ACKED`, preserving pending/unread entries. A new binding starts with future
-SQL events; retained Redis history can be replayed with another group. Read-only Redis queries/media
-and the full remote consumer Adapter remain in progress.
+SQL events; retained Redis history can be replayed with another group. The same stream also accepts
+scoped queries and bounded private media uploads. Query/upload replies are confirmed in local AOF
+before ACK; they may be re-evaluated on replay and carry no SQL account sequence. Media bytes never
+enter SQL history or webhook outboxes.
 
 ### Run a fleet participant
 
@@ -275,9 +277,32 @@ negatives remain distinct from incomplete responses, timeout, unavailable sessio
 identities. Lookup does not send a message. Operation results carry workspace/account, and UUID
 case aliases normalize to the same account identity in the core, locks, SQL and SDK context.
 
-The [Chat SDK mapping](packages/chat-adapter/src/index.ts) exposes `postWithKey()` for durable caller
-identity. A new ordinary `postMessage()` call allocates a new key. Full Adapter initialization,
-event intake/dispatch, history and standard card/action/formatting translation remain incomplete.
+The [Chat SDK Adapter](packages/chat-adapter/src/index.ts) exposes `postWithKey()` and
+`executeWithKey()` for caller-owned identity. A new ordinary `postMessage()` call allocates a new key.
+
+### Chat SDK and Mastra interoperability
+
+Qualified versions: **Chat SDK 4.43.0** and **Mastra core 1.79.0**. The
+[generic Mastra composition](packages/chat-adapter/examples/mastra.ts) uses native Agent channels,
+with the gateway Adapter configured on the consumer side. Actual integration scenarios exercise
+inbound handling, model-generated replies over HTTP and Redis, history, callbacks, lazy media,
+restart/deduplication with shared Chat state, conflicts and UNKNOWN. Models and WhatsApp sockets
+are controlled at their outer boundaries; framework, transport and persistence are real.
+
+Use `GatewayHttpClient` or `GatewayRedisClient` with `GatewayRemoteClient`, then construct
+`WhatsAppGatewayAdapter` with the same workspace/account and the authoritative native account JID.
+Pass it to Chat or native Mastra channels. Select Chat `concurrency:"concurrent"` for the qualified
+handler-completion/ACK profile. Verify signed webhooks with the configured account secret, or pass
+`adapter.processGatewayEvent` to `GatewayRedisEvents.consumeOnce`. Use distinct application-owned
+Redis consumer groups, keep the worker running and retain shared Chat state for restart deduplication.
+Unsupported controls fail explicitly; gateway-native rich formats use `executeWithKey`.
+
+Native framework posting is not exactly-once application replay. A measured failure after an
+accepted `thread.post` can produce a second send on replay because the native method supplies no
+stable caller key. The explicit-key extension covers that same failure boundary with one native
+effect. Retain send intent and inspect UNKNOWN under its original key. Mastra's native channel
+error handler can catch a run failure, so a successful webhook also does not prove model/run success.
+These limits are documented in the [owning use case](docs/use-cases/gateway-core.md#chat-sdk-and-mastra-integration-boundary).
 
 ## Media delivery modes
 
@@ -315,11 +340,8 @@ owned AOF-enabled Redis 8.2 fixture; their capability scenario temporarily chang
 fixture's AOF/eviction settings, so never point them at a shared/production service. Native socket I/O is controlled, so these
 tests do not require QR pairing or live WhatsApp sends. There is no separate lint script.
 
-## Next, not implemented yet
+## Remaining delivery qualification
 
-- Redis read-only queries/media alongside implemented command/result/event messaging.
-- A complete, ready-to-use Chat SDK Adapter.
-
-These are approved design targets, not current setup options. No NATS transport is included.
-There is no full WhatsApp history service. Live client/R2 qualification, application replay qualification,
-release packaging and deployment remain separate validation work.
+Standalone bootstrap, container and installable package distribution remain in progress.
+No NATS transport or full WhatsApp history import is included. Live client/R2 qualification and
+production deployment remain separate work; integration tests do not pair or send to real numbers.

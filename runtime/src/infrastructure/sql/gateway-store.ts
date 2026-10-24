@@ -483,7 +483,9 @@ export class SqlGatewayStore implements GatewayStore
           : sql<
             boolean
           >`(case when json_valid(native) then json_extract(native,'$.key.remoteJid') end)=${nativeChatId}`;
-        query = query.where(predicate);
+        query = query.where(expression =>
+          expression.or([predicate, expression("chat_address", "=", nativeChatId)])
+        );
       }
       const rows = await query.limit(2).execute();
       if (rows.length > 1) throw new Error("Native media source identity is ambiguous");

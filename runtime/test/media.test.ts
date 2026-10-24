@@ -15,7 +15,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from "node:path";
 import { test } from "node:test";
 import { createClient } from "redis";
+import {
+  GatewayHttpClient,
+  GatewayRemoteClient,
+  WhatsAppGatewayAdapter,
+} from "../../packages/chat-adapter/src/index.ts";
 import { GatewayChatMapping } from "../../packages/chat-adapter/src/index.ts";
+import { GatewayCommandWorker } from "../src/application/command-ingress.ts";
 import { GatewayCommandIngress } from "../src/application/command-ingress.ts";
 import { Gateway } from "../src/application/gateway.ts";
 import { GatewayQueryService } from "../src/application/query-service.ts";
@@ -653,6 +659,50 @@ test("remote HTTP and Redis media use actual native decryption and private S3 up
     );
     assert.ok(!JSON.stringify(sourceBodies).includes(payload.toString("base64")));
     assert.equal((await client.xPending(streams.commands, "gateway")).pending, 0);
+    const remote = new GatewayRemoteClient(
+      scope,
+      new GatewayHttpClient({ url: http.origin!, token, pollIntervalMs: 5, timeoutMs: 10000 }),
+    );
+    const adapter = new WhatsAppGatewayAdapter({ ...scope, client: remote, nativeJid: "100@s.whatsapp.net" });
+    try
+    {
+      const observation = await new SqlGatewayHistory(store).message({
+        ...scope,
+        apiVersion: "1",
+        chatAddress: "200@s.whatsapp.net",
+        messageId: fixture.messageId,
+      });
+      assert.ok(observation);
+      const projected = adapter.parseMessage(observation);
+      const attachment = projected.attachments[0];
+      assert.ok(attachment?.fetchData);
+      assert.deepEqual(await attachment.fetchData(), fixture.payload);
+      assert.deepEqual(await adapter.rehydrateAttachment(attachment).fetchData?.(), fixture.payload);
+      const threadId = adapter.encodeThreadId({ ...scope, chatId: "200@s.whatsapp.net" });
+      const post = adapter.postWithKey(threadId, {
+        raw: "document",
+        files: [{ data: payload, filename: "sample.txt", mimeType: "text/plain" }],
+      }, "sdk-file-upload");
+      let finished = false;
+      void post.finally(() =>
+      {
+        finished = true;
+      }).catch(() => undefined);
+      const worker = new GatewayCommandWorker(new SqlCommandInbox(store), fixture.gateway);
+      const deadline = Date.now() + 10000;
+      while (!finished && Date.now() < deadline)
+      {
+        await worker.runOne(await fixture.gateway.ownership(fixture.accountId));
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      const accepted = await post;
+      assert.equal(accepted.raw.message.contentKind, "FILE");
+      assert.equal(adapter.parseMessage(accepted.raw).author.isMe, true);
+    }
+    finally
+    {
+      await adapter.disconnect();
+    }
   }
   finally
   {
