@@ -2,8 +2,9 @@
 
 This document owns the transport-independent gateway behavior reviewed on October 23, 2026.
 The runtime, portable contracts and application-side Chat SDK projection are implemented here.
-HTTP paths, authentication mapping, webhook acknowledgement and Redis Streams/NATS transmission
-remain undecided. No legacy NATS subject is retained as a compatibility contract.
+The versioned command contract and SQL ingress are implemented. HTTP/Redis transports, webhook
+acknowledgement and automatic placement remain pending increments of the approved design.
+No legacy NATS subject is retained as a compatibility contract.
 
 ## Actors and boundaries
 
@@ -26,8 +27,8 @@ cluster mode and is currently qualified against PostgreSQL 18. Another Kysely di
 supported backend. Changing configuration does not transfer data between engines.
 
 `migrateGatewayStorage()` is an explicit administrative step. PostgreSQL uses the immutable
-`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`; SQLite uses
-`runtime/migrations/sqlite/001_gateway_core.sql`. Schema version metadata is intentionally system-level,
+`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql` and `003_command_ingress.sql`; SQLite uses
+`runtime/migrations/sqlite/001_gateway_core.sql` and `002_command_ingress.sql`. Schema version metadata is intentionally system-level,
 not tenant-owned. Unknown versions fail instead of being reset. Migration does not convert legacy
 authentication directories or old deployments. PostgreSQL migration calls serialize on an advisory lock.
 
@@ -50,6 +51,37 @@ SELECT/INSERT/UPDATE/DELETE on its tables. The runtime does not silently migrate
 Close gateways before closing their shared storage. The PostgreSQL convenience store also verifies
 compatibility before its first transaction. Core and Baileys authentication use the owning store/lease
 ports, not PostgreSQL client types. Serialized Baileys credentials/Signal keys remain private SQL data.
+
+## Versioned durable command ingress
+
+`GatewayCommandSchema` owns version `1` send, presence and contact-lookup requests. Every command,
+receipt and response carries workspace/account/request identity. Unsupported versions and unknown
+fields fail validation. The authenticated transport constructs `GatewayPrincipal` from trusted
+credentials/configuration, never a caller-supplied principal. Explicit workspace/account grants
+(or an explicit account wildcard within a workspace) are checked before submit and result reads.
+The workspace-specific ingress also rejects routing to another workspace store.
+
+`requestId` identifies durable command delivery; a send's `idempotencyKey` identifies the native effect.
+A retried transport delivery retains its request ID. Separate requests can intentionally reference the
+same native operation key without another effect. Reusing a request ID within its workspace/account
+with a different canonical payload fails. Results retain the original sequence and identity.
+
+SQL serializes per-account intake, assigns a sequence and commits before returning PENDING.
+Intake does not require a locally owned WhatsApp socket. A `GatewayCommandWorker` claims only while
+holding the actual exclusive account lease and generation. Only the earliest unfinished command
+can execute; concurrent claims within a generation do not overtake it. Commands are PENDING,
+EXECUTING, COMPLETED or FAILED. Terminal results cannot be overwritten. Failures expose a bounded
+failure code instead of raw provider errors or private native content.
+
+A new ownership generation can reclaim interrupted EXECUTING commands; wall-clock age never steals
+work from a live owner. Stale claims cannot commit after ownership changes. A native send accepted
+before an ingress-completion failure is replayed through its original operation key. Interrupted
+IN_FLIGHT sends recover as UNKNOWN and remain UNKNOWN in the command response, with no automatic
+resend. COMPLETED means command evaluation finished; it does not turn UNKNOWN into success or
+ACCEPTED into delivery. SQL failures while recording a completion leave recovery possible rather
+than rewriting the command as an execution failure. Command history is separate from later webhook
+retention. Presently an embedder calls `runOne()`; coordinator scheduling and remote transports are
+subsequent increments, not claimed runtime capabilities.
 
 ## Session flow and ownership
 

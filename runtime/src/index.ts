@@ -15,3 +15,8 @@ export {
   type MediaStorageConfiguration,
   type MediaStorageResources,
 } from "./infrastructure/s3/configuration.ts";
+
+export { GatewayCommandIngress, GatewayCommandWorker } from "./application/command-ingress.ts";
+export { type AccountGrant, GatewayAuthorizationError, GatewayPrincipal } from "./domain/authorization.ts";
+export { type ClaimedGatewayCommand, type GatewayCommandInbox } from "./domain/command-inbox.ts";
+export { SqlCommandInbox } from "./infrastructure/sql/command-inbox.ts";

@@ -19,21 +19,30 @@ export const SessionStateSchema = z.enum([
 export type SessionState = z.infer<typeof SessionStateSchema>;
 export const OperationStateSchema = z.enum(["PENDING", "IN_FLIGHT", "ACCEPTED", "FAILED", "UNKNOWN"]);
 export type OperationState = z.infer<typeof OperationStateSchema>;
-export interface Account extends AccountScope
+export const AccountSchema = AccountScopeSchema.extend({
+  state: SessionStateSchema,
+  generation: z.number().int().nonnegative(),
+  nativeJid: z.string().min(1).nullable(),
+  qr: z.string().min(1).nullable(),
+});
+export type Account = Readonly<z.infer<typeof AccountSchema>>;
+export const OperationResultSchema = AccountScopeSchema.extend({
+  key: z.string().min(1),
+  digest: z.string().regex(/^[a-f0-9]{64}$/),
+  nativeIds: z.array(z.string().min(1)).min(1).readonly(),
+  acceptedParts: z.number().int().nonnegative(),
+  state: OperationStateSchema,
+}).superRefine((value, context) =>
 {
-  readonly state: SessionState;
-  readonly generation: number;
-  readonly nativeJid: string | null;
-  readonly qr: string | null;
-}
-export interface OperationResult extends AccountScope
-{
-  readonly key: string;
-  readonly digest: string;
-  readonly nativeIds: readonly string[];
-  readonly acceptedParts: number;
-  readonly state: OperationState;
-}
+  if (
+    value.acceptedParts > value.nativeIds.length
+    || (value.state === "ACCEPTED" && value.acceptedParts !== value.nativeIds.length)
+  )
+  {
+    context.addIssue({ code: "custom", message: "Invalid accepted native message count" });
+  }
+});
+export type OperationResult = Readonly<z.infer<typeof OperationResultSchema>>;
 /** A confirmed integration boundary; implementations must not translate UNKNOWN into retry. */
 export interface GatewayOperations
 {

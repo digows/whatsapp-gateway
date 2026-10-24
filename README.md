@@ -35,6 +35,7 @@ partial mapping; a complete ready-to-use Adapter remains a target.
 | --- | --- |
 | Accounts and sessions | Multiple accounts per workspace, QR pairing, saved-auth restoration, restart-required handling, logout cleanup and bounded reconnects |
 | Session safety | Exclusive ownership per account, generation checks, stale-callback rejection and shutdown cleanup |
+| Durable commands | Versioned scoped requests, explicit grants, per-account SQL ingress ordering and generation-fenced recovery |
 | Durable sends | Per-account ordering, stable caller keys, payload-conflict detection, reserved native IDs and explicit `UNKNOWN` outcomes |
 | Contact lookup | Account-scoped registered/unregistered/indeterminate results and authoritative native IDs; no country-specific number rewriting |
 | Pacing | Randomized spacing, a rolling rate limit, progressive daily limits, a daily ceiling and inactivity reset |
@@ -87,8 +88,8 @@ pnpm install --frozen-lockfile
 
 Migrations are explicit. Use `migrateGatewayStorage(configuration)` once with administrative access,
 then `openGatewayStorage(configuration)` for startup. PostgreSQL applies the
-[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql);
-SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql). These do not convert
+[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql) plus [command ingress](runtime/migrations/003_command_ingress.sql);
+SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql) and [command ingress](runtime/migrations/sqlite/002_command_ingress.sql). These do not convert
 legacy deployments or copy data when switching backends. Unsupported engines, incompatible schema
 versions and invalid storage/topology combinations fail at startup.
 

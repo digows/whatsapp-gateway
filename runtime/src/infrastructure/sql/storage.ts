@@ -59,8 +59,17 @@ interface SqliteForeignKeys
 {
   foreign_keys: number;
 }
-const tenantTables = ["account", "authentication", "operation", "event", "media", "pacing", "delivery"];
-const schemaVersion = 2;
+const tenantTables = [
+  "account",
+  "authentication",
+  "operation",
+  "event",
+  "media",
+  "pacing",
+  "delivery",
+  "command",
+];
+const schemaVersion = 3;
 
 export class GatewayStorage
 {
@@ -241,6 +250,20 @@ export class GatewayStorage
         "chat_address",
         "observed_at",
       ]).limit(0).execute();
+      await this.database.selectFrom("command").select([
+        "workspace_id",
+        "account_id",
+        "request_id",
+        "sequence",
+        "digest",
+        "command",
+        "state",
+        "response",
+        "failure",
+        "claim_token",
+        "generation",
+        "created_at",
+      ]).limit(0).execute();
     }
     catch (error)
     {
@@ -386,6 +409,16 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
           await readFile(new URL("../../../migrations/sqlite/001_gateway_core.sql", import.meta.url), "utf8"),
         );
       }
+      const current: unknown = database.prepare("SELECT version FROM schema_version").get();
+      if (z.object({ version: z.literal(2) }).safeParse(current).success)
+      {
+        database.exec(
+          await readFile(
+            new URL("../../../migrations/sqlite/002_command_ingress.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+      }
       const row: unknown = database.prepare("SELECT version FROM schema_version").get();
       if (z.object({ version: z.literal(schemaVersion) }).safeParse(row).success === false)
       {
@@ -415,6 +448,13 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
     {
       await connection.query(
         await readFile(new URL("../../../migrations/002_storage_version.sql", import.meta.url), "utf8"),
+      );
+    }
+    const current = await connection.query("SELECT version FROM gateway.schema_version");
+    if (current.rows.length === 1 && current.rows[0]?.version === 2)
+    {
+      await connection.query(
+        await readFile(new URL("../../../migrations/003_command_ingress.sql", import.meta.url), "utf8"),
       );
     }
     const version = await connection.query("SELECT version FROM gateway.schema_version");

@@ -1,4 +1,4 @@
-import type { OperationState, SessionState } from "@digows/whatsapp-gateway-contracts";
+import type { GatewayCommandState, OperationState, SessionState } from "@digows/whatsapp-gateway-contracts";
 import type { ColumnType, Generated } from "kysely";
 export type JsonColumn = ColumnType<unknown, string, string>;
 export type NullableJsonColumn = ColumnType<unknown, string | null, string | null>;
@@ -72,6 +72,21 @@ export interface SchemaVersionTable
 {
   version: number;
 }
+export interface CommandTable
+{
+  workspace_id: string;
+  account_id: string;
+  request_id: string;
+  sequence: number;
+  digest: string;
+  command: JsonColumn;
+  state: GatewayCommandState;
+  response: NullableJsonColumn;
+  failure: string | null;
+  claim_token: string | null;
+  generation: number | null;
+  created_at: TimestampColumn;
+}
 export interface GatewayTables
 {
   account: AccountTable;
@@ -82,6 +97,7 @@ export interface GatewayTables
   pacing: PacingTable;
   delivery: DeliveryTable;
   schema_version: SchemaVersionTable;
+  command: CommandTable;
 }
 export function jsonValue(value: unknown): unknown
 {

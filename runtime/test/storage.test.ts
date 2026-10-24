@@ -22,6 +22,10 @@ function runNode(arguments_: readonly string[], options: NodeExecutionOptions)
 {
   return executeNode(process.execPath, arguments_, options);
 }
+interface SQLiteSchemaVersion
+{
+  readonly version: number;
+}
 interface NodeExecutionOptions
 {
   readonly cwd: string;
@@ -201,11 +205,12 @@ test("SQLite schema incompatibility is rejected even when the file opens", async
   {
     await migrateGatewayStorage(configuration);
     const database = new Database(configuration.filename);
+    const original = database.prepare("SELECT version FROM schema_version").get() as SQLiteSchemaVersion;
     database.prepare("UPDATE schema_version SET version=999").run();
     database.close();
     await assert.rejects(openGatewayStorage(configuration), /schema.*incompatible/);
     const changed = new Database(configuration.filename);
-    changed.prepare("UPDATE schema_version SET version=2").run();
+    changed.prepare("UPDATE schema_version SET version=?").run(original.version);
     changed.exec("ALTER TABLE account DROP COLUMN qr");
     changed.close();
     await assert.rejects(openGatewayStorage(configuration), /schema.*incompatible/);
