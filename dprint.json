@@ -16,9 +16,7 @@
   ],
   "excludes": [
     "**/node_modules",
-    "**/dist",
-    "poc",
-    "sdks"
+    "**/dist"
   ],
   "plugins": [
     "https://plugins.dprint.dev/typescript-0.96.1.wasm",

@@ -86,8 +86,11 @@ Portable content uses an explicit contentKind discriminator; no legacy undisting
 compatibility is retained. Portable schemas own text, explicit link previews, image, video/GIF/video-note, audio/voice,
 file, static/animated sticker, vCards, location, polls, events, quoted messages, mentions/forwarding,
 buttons/cards, URL actions, lists, carousels, albums, selections, reactions, edits and deletions.
-Builders retain the exercised custom Baileys profiles. Missing inbound preview metadata remains
-absent rather than inventing a title/description. An incoming album parent and its individual
+Builders retain the exercised custom Baileys profiles. The pinned release implements
+`replyButtons` (including JPEG image cards), `urlButton`, `list` and `carousel`; the owning
+gateway builder maps those keys directly rather than maintaining separate raw-protobuf PoC recipes.
+Runtime source and captured response fixtures supersede the removed historical interactive PoC.
+Missing inbound preview metadata remains absent rather than inventing a title/description. An incoming album parent and its individual
 children remain separately identified. Selection callbacks retain actual IDs, source message IDs
 and only indices actually present. Empty native reaction text represents removal.
 
@@ -128,8 +131,15 @@ No stub webhook or pretend connected broker exists. No full WhatsApp history ser
 
 Integration tests use PostgreSQL with a non-owner RLS role and controlled Baileys sockets. They
 exercise ownership, stable-key sends/conflicts, UNKNOWN recovery, QR/515/restart/logout, media,
-rich native inputs, receipts and cleanup. Captured predecessor interactive responses preserve
-fixture provenance. Component tests cover finite typing and pacing invariants. The SDK tests
+rich native inputs, receipts and cleanup. Captured predecessor interactive responses in
+`runtime/test/fixtures/native-response-fixtures.json` preserve the library revision, observation dates,
+normalization disclosure and client-evidence limits. The custom release
+`digows-7.0.0-rc14-interactive.1` supplies the interactive builders in `lib/Utils/interactive-messages.js`
+and the content dispatch in `lib/Utils/messages.js`; the gateway maps them in
+`runtime/src/infrastructure/baileys/baileys-outbound-content.ts`. These source boundaries and fixtures
+retain the relevant verified capability evidence after removing the historical PoC, whose floating
+Baileys dependency, file authentication and independent raw relay scripts are not current setup.
+Component tests cover finite typing and pacing invariants. The SDK tests
 exercise its actual Message and Attachment types.
 
 These tests do not establish physical client rendering, live receipt, WhatsApp server availability,
