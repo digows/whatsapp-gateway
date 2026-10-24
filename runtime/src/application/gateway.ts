@@ -46,6 +46,7 @@ export const GatewayConfigurationSchema = z.object({
 );
 export type GatewayConfiguration = z.infer<typeof GatewayConfigurationSchema>;
 export type GatewayConfigurationInput = z.input<typeof GatewayConfigurationSchema>;
+export type GatewayAccountLeaseGuard = (lease: AccountLease) => Promise<void>;
 export type GatewayConnectionFactory = (account: Account, lease: AccountLease) => WhatsAppConnection;
 class HostedAccount
 {
@@ -289,11 +290,12 @@ export class Gateway implements GatewayOperations
   {
     this.configuration = GatewayConfigurationSchema.parse(configuration);
   }
-  async start(requestedAccountId: string): Promise<void>
+  async start(requestedAccountId: string, guard?: GatewayAccountLeaseGuard): Promise<void>
   {
     const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     if (this.closed) throw new Error("Gateway is closed");
     let pending = this.accounts.get(accountId);
+    if (pending && guard) throw new AccountOwnedError();
     if (!pending)
     {
       pending = (async () =>
@@ -302,6 +304,8 @@ export class Gateway implements GatewayOperations
         let hosted: HostedAccount | undefined;
         try
         {
+          await guard?.(lease);
+          if (!lease.alive) throw new Error("Account ownership lost during start");
           hosted = new HostedAccount(
             lease,
             this.factory(await this.store.account(accountId), lease),

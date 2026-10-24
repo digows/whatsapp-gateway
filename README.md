@@ -9,7 +9,7 @@ PostgreSQL enforces workspace isolation with Row Level Security; SQLite enforces
 isolation in application queries and runs under one exclusive local runtime.
 
 **Current delivery:** an embeddable core with an authenticated HTTP server, portable contracts and
-a partial Chat SDK mapping. Automatic fleet placement, Redis, webhooks and the complete Chat SDK
+embedded fleet coordination and a partial Chat SDK mapping. Redis, webhooks and the complete Chat SDK
 Adapter remain in progress; no standalone distribution is published.
 
 ## Built for agent integrations
@@ -35,6 +35,7 @@ partial mapping; a complete ready-to-use Adapter remains a target.
 | Area | Available now |
 | --- | --- |
 | Accounts and sessions | Multiple accounts per workspace, QR pairing, saved-auth restoration, restart-required handling, logout cleanup and bounded reconnects |
+| Fleet | Embedded elected placement, per-workspace capacity, sticky/least-load assignment, revisioned desired state and fenced recovery |
 | Session safety | Exclusive ownership per account, generation checks, stale-callback rejection and shutdown cleanup |
 | HTTP | Authenticated commands/queries, scoped lazy media and generated OpenAPI with local interactive docs |
 | Durable commands | Versioned scoped requests, explicit grants, per-account SQL ingress ordering and generation-fenced recovery |
@@ -90,8 +91,8 @@ pnpm install --frozen-lockfile
 
 Migrations are explicit. Use `migrateGatewayStorage(configuration)` once with administrative access,
 then `openGatewayStorage(configuration)` for startup. PostgreSQL applies the
-[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql) plus [command ingress](runtime/migrations/003_command_ingress.sql);
-SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql) and [command ingress](runtime/migrations/sqlite/002_command_ingress.sql). These do not convert
+[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql) plus [command ingress](runtime/migrations/003_command_ingress.sql) and [runtime placement](runtime/migrations/004_runtime_placement.sql);
+SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql) and [command ingress](runtime/migrations/sqlite/002_command_ingress.sql) and [runtime placement](runtime/migrations/sqlite/003_runtime_placement.sql). These do not convert
 legacy deployments or copy data when switching backends. Unsupported engines, incompatible schema
 versions and invalid storage/topology combinations fail at startup.
 
@@ -112,6 +113,7 @@ import {
   GatewayHttpTransport,
   GatewayPrincipal,
   SqlCommandInbox,
+  SqlFleetStore,
 } from "@digows/whatsapp-gateway-runtime";
 
 const commands = new GatewayCommandIngress(new SqlCommandInbox(store));
@@ -121,18 +123,45 @@ const principal = new GatewayPrincipal("agent-application", [{
 }]);
 const http = new GatewayHttpTransport(
   { enabled: true, host: "127.0.0.1", port: 8080 },
-  [{ store, commands, gateway }],
+  [{ store, commands, gateway, fleet: new SqlFleetStore(store) }],
   [{ token: process.env["GATEWAY_HTTP_TOKEN"]!, principal }],
 );
 await http.start();
 ```
 
 `/docs` provides local interactive OpenAPI. `POST /v1/commands` returns 202 after durable SQL
-intake; poll the account-scoped command endpoint for the outcome. The embedder currently drives
+intake; poll the account-scoped command endpoint for the outcome. A `GatewayFleetParticipant` automatically drives
 `GatewayCommandWorker.runOne(lease)` on the exclusive account owner. HTTP intake can run on a
 separate PostgreSQL instance of the gateway without a local socket. An accepted command can remain
 queued until an owner executes it. Selecting `{ enabled: false }` opens no HTTP listener.
-Automatic ownership scheduling, Redis and webhooks remain separate unfinished increments.
+Redis and webhooks remain separate unfinished increments.
+
+### Run a fleet participant
+
+Create accounts through the scoped store, record desired state and start one participant per configured
+workspace. Reuse the same gateway instance in the HTTP workspace above.
+
+```ts
+import { GatewayFleetParticipant, SqlFleetStore } from "@digows/whatsapp-gateway-runtime";
+
+const participant = new GatewayFleetParticipant(new SqlFleetStore(store), gateway, { capacity: 100 });
+await participant.setDesired(principal, {
+  apiVersion: "1",
+  workspaceId: store.workspaceId,
+  accountId: account.accountId,
+  expectedRevision: 0,
+  enabled: true,
+});
+await participant.start();
+// On shutdown: close HTTP, then participant, then shared storage.
+```
+
+Desired state is also available through the scoped HTTP `/desired` GET/PUT endpoint. Read its revision
+before a new decision; recording intent is asynchronous. A new enabled revision authorizes a restart
+or fresh pairing attempt. Interrupted unpaired attempts need a new revision; paired sessions can
+recover from saved credentials. PostgreSQL peers keep healthy assignments, place remaining accounts
+within per-workspace capacity and obey actual exclusive account locks during handoff. SQLite runs
+one local participant. See the [owning use case](docs/use-cases/gateway-core.md) for exact recovery limits.
 
 ### Compose the core
 
@@ -226,7 +255,6 @@ tests do not require QR pairing or live WhatsApp sends. There is no separate lin
 
 - Independently configurable webhook events and Redis Streams messaging.
 - A complete, ready-to-use Chat SDK Adapter.
-- Automatic account placement, balancing and failover across peer runtimes.
 - Durable webhook retries with explicit delivery and retention policies.
 
 These are approved design targets, not current setup options. No NATS transport is included.

@@ -87,6 +87,24 @@ export interface CommandTable
   generation: number | null;
   created_at: TimestampColumn;
 }
+export interface RuntimeTable
+{
+  workspace_id: string;
+  id: string;
+  capacity: number;
+  draining: number;
+  expires_at: TimestampColumn;
+}
+export interface DesiredAccountTable
+{
+  workspace_id: string;
+  account_id: string;
+  revision: number;
+  enabled: number;
+  assigned_runtime_id: string | null;
+  attempted_revision: number;
+  blocked_revision: number;
+}
 export interface GatewayTables
 {
   account: AccountTable;
@@ -98,6 +116,8 @@ export interface GatewayTables
   delivery: DeliveryTable;
   schema_version: SchemaVersionTable;
   command: CommandTable;
+  runtime: RuntimeTable;
+  desired_account: DesiredAccountTable;
 }
 export function jsonValue(value: unknown): unknown
 {

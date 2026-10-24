@@ -1,4 +1,6 @@
 import {
+  DesiredAccountRequestSchema,
+  DesiredAccountSchema,
   GatewayAccountResultSchema,
   GatewayCommandResultSchema,
   GatewayCommandSchema,
@@ -101,6 +103,37 @@ export function createGatewayOpenApi()
           },
         },
       },
+      "/v1/accounts/{workspaceId}/{accountId}/desired": {
+        get: {
+          operationId: "getDesiredAccount",
+          parameters: accountParameters,
+          responses: {
+            "200": jsonResponse(
+              "Durable desired state and assignment; requires configured fleet store",
+              "DesiredAccount",
+            ),
+            ...errors,
+          },
+        },
+        put: {
+          operationId: "setDesiredAccount",
+          parameters: accountParameters,
+          description:
+            "Compare-and-set desired state using expectedRevision. A new enabled revision explicitly authorizes a fresh pairing/restart attempt. Recording intent does not prove the session is connected. Same expectedRevision/payload can be replayed only against its immediate successor. Requires configured fleet store.",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: schemaReference("DesiredAccountRequest") } },
+          },
+          responses: {
+            "200": jsonResponse("Durable decision recorded", "DesiredAccount"),
+            ...errors,
+            "409": jsonResponse("Desired revision changed", "GatewayHttpError"),
+            "408": jsonResponse("Request body deadline expired", "GatewayHttpError"),
+            "413": jsonResponse("Request byte limit exceeded", "GatewayHttpError"),
+            "415": jsonResponse("Expected application/json", "GatewayHttpError"),
+          },
+        },
+      },
       "/v1/accounts/{workspaceId}/{accountId}/media": {
         get: {
           operationId: "readMedia",
@@ -123,6 +156,8 @@ export function createGatewayOpenApi()
     components: {
       securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
       schemas: {
+        DesiredAccount: z.toJSONSchema(DesiredAccountSchema, { io: "input" }),
+        DesiredAccountRequest: z.toJSONSchema(DesiredAccountRequestSchema, { io: "input" }),
         GatewayCommand: z.toJSONSchema(GatewayCommandSchema, { io: "input" }),
         GatewayCommandResult: z.toJSONSchema(GatewayCommandResultSchema, { io: "input" }),
         GatewayAccountResult: z.toJSONSchema(GatewayAccountResultSchema, { io: "input" }),

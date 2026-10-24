@@ -22,3 +22,12 @@ export class GatewayResourceUnavailableError extends Error
     this.name = "GatewayResourceUnavailableError";
   }
 }
+
+export class UnpairedAccountRecoveryError extends Error
+{
+  constructor()
+  {
+    super("Unpaired account attempt requires a new desired revision");
+    this.name = "UnpairedAccountRecoveryError";
+  }
+}

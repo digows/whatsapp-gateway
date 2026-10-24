@@ -29,3 +29,11 @@ export {
   GatewayHttpTransport,
   type GatewayHttpWorkspace,
 } from "./infrastructure/http/transport.ts";
+
+export {
+  type FleetConfiguration,
+  type FleetConfigurationInput,
+  GatewayFleetParticipant,
+} from "./application/fleet-participant.ts";
+export { type GatewayFleetStore } from "./domain/fleet-store.ts";
+export { SqlFleetStore } from "./infrastructure/sql/fleet-store.ts";

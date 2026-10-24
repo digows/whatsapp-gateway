@@ -1,6 +1,8 @@
 import {
   type AccountScope,
   AccountScopeSchema,
+  DesiredAccountRequestSchema,
+  DesiredAccountSchema,
   GatewayAccountResultSchema,
   GatewayCommandSchema,
   type GatewayHttpError,
@@ -16,6 +18,7 @@ import { z } from "zod";
 import type { GatewayCommandIngress } from "../../application/command-ingress.ts";
 import { GatewayAuthorizationError, type GatewayPrincipal } from "../../domain/authorization.ts";
 import { GatewayConflictError, GatewayResourceUnavailableError } from "../../domain/errors.ts";
+import type { GatewayFleetStore } from "../../domain/fleet-store.ts";
 import type { GatewayStore } from "../../domain/gateway-store.ts";
 import { createGatewayOpenApi, gatewayDocumentationHtml, gatewayDocumentationInitialize } from "./openapi.ts";
 
@@ -34,6 +37,7 @@ export interface GatewayHttpWorkspace
   readonly store: GatewayStore;
   readonly commands: GatewayCommandIngress;
   readonly gateway: GatewayOperations;
+  readonly fleet?: GatewayFleetStore;
 }
 export interface GatewayHttpCredential
 {
@@ -87,6 +91,10 @@ export class GatewayHttpTransport
       if (workspace.store.workspaceId !== workspace.commands.workspaceId)
       {
         throw new Error("HTTP workspace command routing mismatch");
+      }
+      if (workspace.fleet && workspace.fleet.workspaceId !== workspace.store.workspaceId)
+      {
+        throw new Error("HTTP fleet workspace routing mismatch");
       }
       if (this.workspaces.has(workspace.store.workspaceId)) throw new Error("Duplicate HTTP workspace");
       this.workspaces.set(workspace.store.workspaceId, workspace);
@@ -182,11 +190,16 @@ export class GatewayHttpTransport
         sendJson(response, 202, await workspace.commands.submit(principal, command));
         return;
       }
-      const match = /^\/v1\/accounts\/([^/]+)\/([^/]+)(?:\/(commands|operations|media)(?:\/([^/]+))?)?$/.exec(
-        url.pathname,
-      );
+      const match =
+        /^\/v1\/accounts\/([^/]+)\/([^/]+)(?:\/(commands|operations|media|desired)(?:\/([^/]+))?)?$/.exec(
+          url.pathname,
+        );
       if (!match) throw new HttpFailure(404, "NOT_FOUND");
-      if (request.method !== "GET") throw new HttpFailure(405, "METHOD_NOT_ALLOWED");
+      const action = match[3];
+      if (request.method !== "GET" && !(action === "desired" && request.method === "PUT"))
+      {
+        throw new HttpFailure(405, "METHOD_NOT_ALLOWED");
+      }
       const scope = parseInput(AccountScopeSchema, {
         workspaceId: decodePath(match[1]!),
         accountId: decodePath(match[2]!),
@@ -194,7 +207,6 @@ export class GatewayHttpTransport
       principal.authorize(scope);
       const workspace = this.workspaces.get(scope.workspaceId);
       if (!workspace) throw new HttpFailure(404, "NOT_FOUND");
-      const action = match[3];
       const key = match[4] === undefined ? undefined : decodePath(match[4]);
       route = `/v1/accounts/:workspaceId/:accountId/${action ?? ""}`;
       if (!action)
@@ -219,6 +231,23 @@ export class GatewayHttpTransport
         const operation = await workspace.gateway.operation(scope.accountId, key);
         assertResponseScope(operation, scope);
         sendJson(response, 200, GatewayOperationResultSchema.parse({ ...operation, apiVersion: "1" }));
+      }
+      else if (action === "desired" && !key)
+      {
+        if (!workspace.fleet) throw new HttpFailure(503, "UNAVAILABLE");
+        let recorded;
+        if (request.method === "PUT")
+        {
+          const desired = parseInput(DesiredAccountRequestSchema, await this.readJson(request));
+          if (desired.workspaceId !== scope.workspaceId || desired.accountId !== scope.accountId)
+          {
+            throw new HttpFailure(400, "INVALID_REQUEST");
+          }
+          recorded = await workspace.fleet.setDesired(desired);
+        }
+        else recorded = await workspace.fleet.desired(scope.accountId);
+        assertResponseScope(recorded, scope);
+        sendJson(response, 200, DesiredAccountSchema.parse(recorded));
       }
       else if (action === "media" && !key)
       {

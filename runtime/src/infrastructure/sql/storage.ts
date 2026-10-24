@@ -68,8 +68,10 @@ const tenantTables = [
   "pacing",
   "delivery",
   "command",
+  "runtime",
+  "desired_account",
 ];
-const schemaVersion = 3;
+const schemaVersion = 4;
 
 export class GatewayStorage
 {
@@ -264,6 +266,22 @@ export class GatewayStorage
         "generation",
         "created_at",
       ]).limit(0).execute();
+      await this.database.selectFrom("runtime").select([
+        "workspace_id",
+        "id",
+        "capacity",
+        "draining",
+        "expires_at",
+      ]).limit(0).execute();
+      await this.database.selectFrom("desired_account").select([
+        "workspace_id",
+        "account_id",
+        "revision",
+        "enabled",
+        "assigned_runtime_id",
+        "attempted_revision",
+        "blocked_revision",
+      ]).limit(0).execute();
     }
     catch (error)
     {
@@ -419,6 +437,16 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
           ),
         );
       }
+      const placementVersion: unknown = database.prepare("SELECT version FROM schema_version").get();
+      if (z.object({ version: z.literal(3) }).safeParse(placementVersion).success)
+      {
+        database.exec(
+          await readFile(
+            new URL("../../../migrations/sqlite/003_runtime_placement.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+      }
       const row: unknown = database.prepare("SELECT version FROM schema_version").get();
       if (z.object({ version: z.literal(schemaVersion) }).safeParse(row).success === false)
       {
@@ -455,6 +483,13 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
     {
       await connection.query(
         await readFile(new URL("../../../migrations/003_command_ingress.sql", import.meta.url), "utf8"),
+      );
+    }
+    const placementVersion = await connection.query("SELECT version FROM gateway.schema_version");
+    if (placementVersion.rows.length === 1 && placementVersion.rows[0]?.version === 3)
+    {
+      await connection.query(
+        await readFile(new URL("../../../migrations/004_runtime_placement.sql", import.meta.url), "utf8"),
       );
     }
     const version = await connection.query("SELECT version FROM gateway.schema_version");

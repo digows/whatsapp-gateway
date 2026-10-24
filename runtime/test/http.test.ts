@@ -11,6 +11,7 @@ import { Gateway } from "../src/application/gateway.ts";
 import { GatewayPrincipal } from "../src/domain/authorization.ts";
 import { GatewayHttpTransport } from "../src/infrastructure/http/transport.ts";
 import { SqlCommandInbox } from "../src/infrastructure/sql/command-inbox.ts";
+import { SqlFleetStore } from "../src/infrastructure/sql/fleet-store.ts";
 import {
   migrateGatewayStorage,
   openGatewayStorage,
@@ -128,7 +129,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
       assert.equal(conflict.status, 409);
       await http.close();
       // HTTP restart and caller retry preserve SQL intake before any owner executes it.
-      http = new GatewayHttpTransport({ enabled: true, port: 0 }, [{ store, commands, gateway }], [{
+      http = new GatewayHttpTransport({ enabled: true, port: 0 }, [{
+        store,
+        commands,
+        gateway,
+        fleet: new SqlFleetStore(store),
+      }], [{
         token,
         principal,
       }]);
@@ -156,6 +162,28 @@ for (const engine of ["sqlite", "postgresql"] as const)
         (await fetch(base + `/v1/accounts/${workspaceId}/${denied.accountId}`, { headers })).status,
         403,
       );
+      const desiredRequest = { apiVersion: "1", workspaceId, accountId, expectedRevision: 0, enabled: true };
+      const desired = await fetch(base + path + "/desired", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(desiredRequest),
+      });
+      assert.equal(desired.status, 200);
+      const recordedDesired = await desired.json();
+      assert.equal(recordedDesired.revision, 1);
+      assert.equal((await fetch(base + path + "/desired", { headers })).status, 200);
+      const staleDesired = await fetch(base + path + "/desired", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ ...desiredRequest, enabled: false }),
+      });
+      assert.equal(staleDesired.status, 409);
+      const mismatchedDesired = await fetch(base + path + "/desired", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ ...desiredRequest, accountId: denied.accountId }),
+      });
+      assert.equal(mismatchedDesired.status, 400);
       const observedAccount = await fetch(base + path, { headers });
       assert.equal(observedAccount.status, 200);
       const operation = await fetch(base + path + "/operations/http-one-effect", { headers });

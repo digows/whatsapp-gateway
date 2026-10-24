@@ -25,6 +25,14 @@ import { SendOperation } from "../../domain/send-operation.ts";
 import type { GatewayStorage } from "./storage.ts";
 import { type AccountTable, type GatewayTables, jsonValue, type OperationTable } from "./tables.ts";
 export type GatewayTransaction = Transaction<GatewayTables>;
+interface DatabaseClock
+{
+  now: Date | string;
+}
+interface ElectionResult
+{
+  elected: boolean;
+}
 export class SqlGatewayStore implements GatewayStore
 {
   readonly workspaceId: string;
@@ -42,6 +50,23 @@ export class SqlGatewayStore implements GatewayStore
       }
       return work(transaction);
     });
+  }
+  async databaseTime(transaction: GatewayTransaction): Promise<Date>
+  {
+    const clock = this.storage.engine === "postgresql"
+      ? await sql<DatabaseClock>`SELECT clock_timestamp() AS now`.execute(transaction)
+      : await sql<DatabaseClock>`SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS now`.execute(transaction);
+    const value = clock.rows[0]?.now;
+    if (!value) throw new Error("Database clock unavailable");
+    return new Date(value);
+  }
+  async tryCoordinate(transaction: GatewayTransaction): Promise<boolean>
+  {
+    if (this.storage.engine === "sqlite") return true;
+    const result = await sql<ElectionResult>`SELECT pg_try_advisory_xact_lock(hashtextextended(${
+      "gateway:coordinator:" + this.workspaceId
+    },0)) AS elected`.execute(transaction);
+    return result.rows[0]?.elected === true;
   }
   async createAccount(requestedAccountId = randomUUID()): Promise<Account>
   {

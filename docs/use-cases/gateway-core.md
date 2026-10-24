@@ -2,8 +2,8 @@
 
 This document owns the transport-independent gateway behavior reviewed on October 23, 2026.
 The runtime, portable contracts and application-side Chat SDK projection are implemented here.
-The versioned command contract, SQL ingress and HTTP transport are implemented. Redis transport, webhook
-acknowledgement and automatic placement remain pending increments of the approved design.
+The versioned command contract, SQL ingress and HTTP transport are implemented. Embedded placement is implemented. Redis transport and webhook
+acknowledgement remain pending increments of the approved design.
 No legacy NATS subject is retained as a compatibility contract.
 
 ## Actors and boundaries
@@ -28,8 +28,8 @@ cluster mode and is currently qualified against PostgreSQL 18. Another Kysely di
 supported backend. Changing configuration does not transfer data between engines.
 
 `migrateGatewayStorage()` is an explicit administrative step. PostgreSQL uses the immutable
-`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql` and `003_command_ingress.sql`; SQLite uses
-`runtime/migrations/sqlite/001_gateway_core.sql` and `002_command_ingress.sql`. Schema version metadata is intentionally system-level,
+`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` and `004_runtime_placement.sql`; SQLite uses
+`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` and `003_runtime_placement.sql`. Schema version metadata is intentionally system-level,
 not tenant-owned. Unknown versions fail instead of being reset. Migration does not convert legacy
 authentication directories or old deployments. PostgreSQL migration calls serialize on an advisory lock.
 
@@ -44,8 +44,8 @@ access. It retains an OS-backed exclusive lock for the runtime's database connec
 runtime/process cannot open that file concurrently; process death releases the OS lock. Multiple
 workspaces/accounts share the one storage instance through `storage.workspace(workspaceId)`. SQLite
 WAL files are local, never a cross-host/shared-filesystem ownership mechanism. PostgreSQL preserves
-its dedicated account advisory locks and generation fences. The configured cluster mode currently
-qualifies shared storage/ownership; automatic placement/transport routing is a separate pending increment.
+its dedicated account advisory locks and generation fences. Cluster participants coordinate over shared PostgreSQL; the local SQLite participant remains under
+the exclusive file owner. Runtime membership and desired state also retain explicit workspace keys.
 
 Apply migrations with an administrative role; grant the PostgreSQL runtime role schema usage and
 SELECT/INSERT/UPDATE/DELETE on its tables. The runtime does not silently migrate on startup.
@@ -81,8 +81,8 @@ IN_FLIGHT sends recover as UNKNOWN and remain UNKNOWN in the command response, w
 resend. COMPLETED means command evaluation finished; it does not turn UNKNOWN into success or
 ACCEPTED into delivery. SQL failures while recording a completion leave recovery possible rather
 than rewriting the command as an execution failure. Command history is separate from later webhook
-retention. Presently an embedder calls `runOne()`; coordinator scheduling and the Redis transport are
-subsequent increments, not claimed runtime capabilities.
+retention. A fleet participant automatically schedules `runOne()` only for its actual owned/assigned accounts.
+An embedder may also drive the worker explicitly. The Redis transport remains a subsequent increment.
 
 ## HTTP commands, queries and interactive documentation
 
@@ -99,6 +99,8 @@ in the request logs. Remote account/operation results must match the route's aut
 - `GET /v1/accounts/{workspaceId}/{accountId}`: scoped account state and available pairing QR.
 - `GET /v1/accounts/{workspaceId}/{accountId}/commands/{requestId}`: durable command outcome.
 - `GET /v1/accounts/{workspaceId}/{accountId}/operations/{key}`: native send-operation observation.
+- `GET`/`PUT /v1/accounts/{workspaceId}/{accountId}/desired`: scoped durable revisioned intent,
+  when a fleet store is configured; otherwise explicitly unavailable.
 - `GET /v1/accounts/{workspaceId}/{accountId}/media?sourceId=...`: bounded, lazy decrypted bytes,
   without an object store or through configured S3 materialization. Source expiry/unavailability
   is explicit; no media-key/provider-URL response. Responses use private/no-store caching.
@@ -122,6 +124,62 @@ or caller disconnection; stopping the server does not cancel an accepted native 
 HTTP before its gateway and storage. Gateway media and SQL operations retain their own bounded
 execution timeouts. This increment is an embeddable HTTP server, not a separately published runtime,
 Redis qualification, webhook implementation or production deployment.
+
+## Embedded fleet coordination and durable desired state
+
+`SqlFleetStore` owns per-workspace runtime membership and desired account state. Both tables are
+workspace-scoped, with forced PostgreSQL RLS. No new global tenant data or separate coordinator
+service is introduced. Each `GatewayFleetParticipant` has a fresh boot UUID and a configured capacity
+for that workspace. An application hosting several workspaces allocates its desired quota to each
+participant; capacity is not a claimed shared host-resource or cross-workspace global quota.
+
+A reconciliation pass elects one coordinator using a workspace-specific PostgreSQL transaction
+advisory lock. Leadership lasts only for that transaction and is released on commit/rollback or
+connection loss. Followers skip placement for the occupied pass. SQLite's one exclusive runtime
+performs its local placement without a distributed-election claim. The coordinator retains healthy,
+non-draining assignments first, then selects least-loaded eligible peers within capacity. New peers
+do not cause unnecessary migration of existing sessions. Excess accounts remain unassigned.
+
+Membership expires against the database clock, avoiding application host-clock disagreement. Defaults
+are one-second reconciliation and 15-second membership lifetime; an independent heartbeat runs every
+third of that lifetime. Reconciliation intervals must fit at least three times inside membership.
+Native sends run in separate per-account workers, so a slow send does not block membership renewal.
+Workspace assignments are desired placement, not authority to use a WhatsApp session. An expired
+heartbeat never steals a held account advisory lock; only actual lease acquisition and generation
+advance permit connection initialization or command claims.
+
+`DesiredAccountRequestSchema` carries version, workspace/account, `expectedRevision` and `enabled`.
+The authenticated caller compares against the observed revision (initially zero). Recording a new
+revision is durable and asynchronous: enabled authorizes a fresh pairing/restart attempt, disabled
+requests stop. The immediate same expected revision/payload replay is idempotent; a delayed stale
+revision after another decision conflicts. A new enabled revision restarts an already active account;
+this also supplies the explicit retry after a failed/unpaired attempt. HTTP GET/PUT at the scoped
+`/desired` path uses this same contract when the workspace has a fleet store. HTTP intake can record
+a decision without locally running a participant; it is not proof that the account is connected.
+
+A participant verifies the current assignment and marks its attempted revision while holding the
+actual account lease, before creating the connection. A guarded start does not adopt a pre-existing
+manually started session; that session must release its owner first. Known lease loss during the
+initialization guard prevents socket creation. Interrupted attempts without paired credentials
+are blocked until an explicit new revision; they do not open endless QR sockets. Paired recovery
+checks saved native identity after acquiring the lease, allowing the old owner to flush its final
+credentials first. A stale coordinator snapshot of credentials never makes that decision. Terminal
+FAILED/LOGGED_OUT sessions block their revision instead of automatic login retries. An enabled newer
+revision supplies new intent. UNKNOWN send-operation state itself is never reset by session recovery.
+
+Desired changes, worker loss and drain stop the old owner's scheduling, close/drain native work and
+release its actual lease before a successor opens a socket. Already-dispatched effects can remain
+UNKNOWN; stop is not instantaneous remote cancellation. Stale initialization/claim completion is
+rejected by the owning assignment/revision/generation checks. An ingress completion failure while
+otherwise healthy schedules local ownership recovery; replay of an already accepted operation
+finishes the inbox result without another native effect. Known shutdown/lost-lease worker exits are
+logged as stops, while unexpected live-owner failures remain errors.
+
+Closing a participant cancels its timers, waits for reconciliation/heartbeat, advertises draining,
+closes the gateway and command workers, then removes its membership. It preserves durable desired
+state and send history. Expiry recovers membership after ungraceful process loss; live account locks
+still govern handoff. Close the participant before its shared storage. Automatic SQL scheduling is
+implemented; Redis/CloudEvents publication and webhook delivery are separate pending increments.
 
 ## Session flow and ownership
 
