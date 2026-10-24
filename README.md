@@ -8,9 +8,10 @@ and media fetched on demand. SQLite local mode or PostgreSQL shared storage keep
 PostgreSQL enforces workspace isolation with Row Level Security; SQLite enforces workspace/account
 isolation in application queries and runs under one exclusive local runtime.
 
-**Current delivery:** an embeddable gateway with authenticated HTTP, Redis Streams, signed webhooks,
-embedded fleet coordination and a real remote Chat SDK Adapter. Native Mastra channels are qualified
-against the released versions below. Standalone packaging/container delivery is still in progress.
+**Delivery:** a standalone or embedded gateway with authenticated HTTP, Redis Streams, signed webhooks,
+embedded fleet coordination and a remote Chat SDK Adapter. Native Mastra channels and freshly
+installed consumer packages are qualified against the released versions below. The container uses
+Node.js 24 and runs independently of the consumer agent framework.
 
 ## Built for agent integrations
 
@@ -50,7 +51,8 @@ or another agent framework; the gateway runtime has no framework dependency.
 | Interactions | Reply buttons, image cards, URL buttons, lists, carousels, selection callbacks, reactions, text edits and deletions |
 | Message context | Native WhatsApp IDs, quote correlation, mentions and forwarding where supported by the selected format |
 | Media | Lazy bounded download/decryption without an object store, plus optional S3-compatible materialization |
-| Chat SDK mapping | Real `chat@4.43.0` Message/Attachment projection, lazy attachments and an explicit stable-key text-send helper |
+| Chat SDK / Mastra | Remote Adapter, native Mastra channels, history, lazy attachments, interaction callbacks and explicit stable-key operations |
+| Operations | Explicit configuration/migrations, CLI, readiness, structured component log levels and a non-root container |
 
 The [gateway use case](docs/use-cases/gateway-core.md) owns the precise behavior, failure modes and
 format restrictions. Submission, delivery and read receipts are separate observations. An
@@ -92,18 +94,99 @@ cd whatsapp-gateway
 pnpm install --frozen-lockfile
 ```
 
-Migrations are explicit. Use `migrateGatewayStorage(configuration)` once with administrative access,
-then `openGatewayStorage(configuration)` for startup. PostgreSQL applies the
-[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql) plus [command ingress](runtime/migrations/003_command_ingress.sql) and [runtime placement](runtime/migrations/004_runtime_placement.sql) plus [public events](runtime/migrations/005_public_events.sql) and [webhooks](runtime/migrations/006_webhook_outbox.sql) plus [Redis cursors](runtime/migrations/007_redis_streams.sql);
-SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql) and [command ingress](runtime/migrations/sqlite/002_command_ingress.sql) and [runtime placement](runtime/migrations/sqlite/003_runtime_placement.sql) plus [public events](runtime/migrations/sqlite/004_public_events.sql) and [webhooks](runtime/migrations/sqlite/005_webhook_outbox.sql) plus [Redis cursors](runtime/migrations/sqlite/006_redis_streams.sql). These do not convert
-legacy deployments or copy data when switching backends. Unsupported engines, incompatible schema
-versions and invalid storage/topology combinations fail at startup.
+Build the compiled CLI and packages, then prepare a private configuration based on
+[config/operator.example.json](config/operator.example.json). Replace the example IDs/token and choose
+a writable local SQLite path. The template uses `/data/gateway.sqlite` for the container; change it
+for a source checkout. Its account starts disabled, so setup does not initiate pairing.
+
+```sh
+pnpm build
+node runtime/dist/cli.js --help
+node runtime/dist/cli.js migrate --config /absolute/path/gateway.json
+node runtime/dist/cli.js verify-storage --config /absolute/path/gateway.json
+node runtime/dist/cli.js serve --config /absolute/path/gateway.json
+```
+
+`GATEWAY_CONFIG` can supply the explicit JSON path. `pnpm start --config ...` and
+`pnpm migrate --config ...` invoke the same compiled CLI. Configuration is strict; unknown fields,
+invalid grants and unsupported backends fail. The CLI does not load `.env` or old authentication
+directories. Keep configuration private: it may contain tokens, database URLs and object-store keys.
+
+Migrations are explicit and versioned under [runtime/migrations](runtime/migrations), including
+[gateway-observed history](runtime/migrations/008_message_history.sql) and its
+[SQLite counterpart](runtime/migrations/sqlite/007_message_history.sql). Apply them once with an
+administrative configuration, then serve with a restricted runtime configuration. Startup verifies
+the schema without migrating. Backend selection does not convert legacy data or copy it between engines.
 
 For PostgreSQL, give a separate runtime role `USAGE` on schema `gateway` and `SELECT`, `INSERT`,
 `UPDATE`, `DELETE` on its tables. It must have neither superuser privileges nor `BYPASSRLS`.
 All tenant tables have forced RLS. SQLite provides local application isolation, not RLS equivalence.
 The HTTP transport authenticates configured bearer credentials and checks workspace/account grants.
 In-process embedders establish their own trusted workspace context.
+
+### Standalone operation and logs
+
+The CLI provisions configured accounts, preserves durable desired state and runs fleet, command,
+Redis and webhook loops. An omitted account `enabled` leaves its recorded intent unchanged; an
+explicit value updates it only when different. To authorize a fresh pairing attempt, use a new CAS
+revision through `/desired`; restarting the process does not manufacture new pairing intent.
+Read QR/account state through the authenticated scoped API. The default direct media mode needs no
+object store. Optional S3-compatible configuration uses the same limits as the core.
+
+`GET /health/live` reports that HTTP is listening. `GET /health/ready` reports running state plus the
+latest SQL/Redis probes, and becomes unavailable during startup/drain. It does not assert that every
+WhatsApp account is connected. An embedded HTTP transport without readiness hooks returns 503.
+Redis-only mode (`http.enabled:false`) opens no HTTP port and reports startup through JSON logs.
+The example binds the container interface; for a source process, use `127.0.0.1` unless a controlled
+listener is intended. Provide TLS at your deployment boundary when exposing authenticated HTTP.
+Interactive documentation is at `/docs`; schemas are at `/openapi.json` and `/asyncapi.json`.
+
+Logs are JSON with `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` thresholds. For example:
+
+```json
+{"logging":{"level":"info","components":{"baileys":"trace","sessions":"debug","http":"debug"}}}
+```
+
+Available component overrides are `runtime`, `sessions`, `baileys`, `http`, `redis`, `webhooks` and
+`fleet`. Session logs include scope/generation and state changes; HTTP logs include request identity,
+route, status and duration. Protocol logs keep classified signals or hashes and safe error codes,
+without raw protocol objects, message bodies, QR/authentication material or credentials. Intentional
+socket shutdown is logged at debug level without an error stack.
+
+### Run the container
+
+Build from the reviewed source; the Dockerfile pins Node.js 24.18.0 and runs as UID 1000. The current
+qualified publication platform is **linux/arm64**. No amd64 image or multi-platform qualification is
+claimed. The image contains the runtime and contracts, without Chat SDK or Mastra dependencies.
+
+```sh
+docker buildx build --platform linux/arm64 --load -t whatsapp-gateway:local .
+docker volume create whatsapp-gateway-data
+# gateway.json must be readable by container UID 1000 and use /data/gateway.sqlite.
+docker run --rm --mount type=volume,src=whatsapp-gateway-data,dst=/data \
+  --mount type=bind,src=/absolute/path/gateway.json,dst=/run/secrets/gateway.json,readonly \
+  whatsapp-gateway:local migrate
+docker run --name whatsapp-gateway --stop-timeout 90 -p 127.0.0.1:8080:8080 \
+  --mount type=volume,src=whatsapp-gateway-data,dst=/data \
+  --mount type=bind,src=/absolute/path/gateway.json,dst=/run/secrets/gateway.json,readonly \
+  whatsapp-gateway:local serve
+docker stop whatsapp-gateway
+```
+
+Bind paths belong to the Docker daemon host when using a remote context. Keep configuration outside
+the build context; the build allowlist excludes `.env`, saved auth, tests and private operator files.
+For PostgreSQL, replace the SQLite storage configuration with the qualified PostgreSQL URL/mode;
+use separate administrative migration and restricted runtime configuration files. HTTP/media/native
+work has bounded waits, so allow drain time rather than relying on Docker's default ten seconds.
+SIGINT/SIGTERM stop admission and new account starts, drain work, release leases and close storage.
+
+The [qualification script](scripts/qualify-container.py) creates isolated labeled containers and a
+volume, checks migration/startup/readiness, durable intake, SIGTERM and restart, then removes only
+its resources. Set `TMPDIR` to an owned disposable directory and pass a locally available image.
+It uses no external network or real WhatsApp session. The
+[workflow](.github/workflows/qualify-and-publish.yml) runs configured checks and archives consumer
+tarballs; manual publication requires the exact reviewed main SHA, qualifies the built arm64 image
+and pushes that image to GHCR. A workflow definition alone is not a published release.
 
 ### Compose HTTP
 
@@ -137,7 +220,7 @@ intake; poll the account-scoped command endpoint for the outcome. A `GatewayFlee
 `GatewayCommandWorker.runOne(lease)` on the exclusive account owner. HTTP intake can run on a
 separate PostgreSQL instance of the gateway without a local socket. An accepted command can remain
 queued until an owner executes it. Selecting `{ enabled: false }` opens no HTTP listener.
-Redis read-only query handling remains a separate unfinished increment.
+HTTP and Redis expose the same scoped query and private media-upload contracts.
 
 ### Deliver signed webhooks
 
@@ -216,7 +299,7 @@ await participant.setDesired(principal, {
   enabled: true,
 });
 await participant.start();
-// On shutdown: close HTTP, then participant, then shared storage.
+// On shutdown: begin participant.close() before awaiting HTTP drain; close storage last.
 ```
 
 Desired state is also available through the scoped HTTP `/desired` GET/PUT endpoint. Read its revision
@@ -228,13 +311,13 @@ one local participant. See the [owning use case](docs/use-cases/gateway-core.md)
 
 ### Compose the core
 
-Packages currently export TypeScript source and are private workspace packages. Run TypeScript
-through your host tooling, such as `tsx`; there is no `start` script or packaged service binary.
-This example provisions an account without opening a WhatsApp connection:
+Packages export compiled JavaScript and declarations after `pnpm build`; workspace tests select the
+explicit `development` source condition. This example provisions an account without opening a
+WhatsApp connection:
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { BaileysConnection, Gateway, migrateGatewayStorage, openGatewayStorage } from "./runtime/src/index.ts";
+import { BaileysConnection, Gateway, migrateGatewayStorage, openGatewayStorage } from "@digows/whatsapp-gateway-runtime";
 
 const configuration = { engine: "sqlite", filename: "./gateway.sqlite", mode: "local" } as const;
 // Explicit setup step; PostgreSQL migrations require an administrative connection.
@@ -304,6 +387,36 @@ effect. Retain send intent and inspect UNKNOWN under its original key. Mastra's 
 error handler can catch a run failure, so a successful webhook also does not prove model/run success.
 These limits are documented in the [owning use case](docs/use-cases/gateway-core.md#chat-sdk-and-mastra-integration-boundary).
 
+### Install the consumer packages
+
+The source package versions are currently `0.0.0`; no npm registry release is claimed. Run
+`pnpm build`, then pack the contracts and Adapter into an owned artifact directory, or obtain the
+matching `gateway-consumer-packages-<commit>` CI artifact:
+
+```sh
+pnpm --dir packages/contracts pack --pack-destination /absolute/path/artifacts
+pnpm --dir packages/chat-adapter pack --pack-destination /absolute/path/artifacts
+```
+
+Copy both tarballs into the consumer project and pin pnpm 12.9.1. Install both files plus
+`chat@4.43.0`; for Mastra add `@mastra/core@1.79.0`. With pnpm, supply these local resolutions in the
+consumer's `pnpm-workspace.yaml` so the Adapter's contracts dependency resolves to the same artifact:
+
+```yaml
+overrides:
+  '@digows/whatsapp-gateway-contracts': file:./digows-whatsapp-gateway-contracts-0.0.0.tgz
+  chat: 4.43.0
+```
+
+Import the compiled Adapter from `@digows/chat-adapter-whatsapp-gateway`. The optional
+`@digows/chat-adapter-whatsapp-gateway/examples/mastra` export provides
+`createMastraGatewayExample({ adapter, model, state, storage })`, using released native channels.
+The consumer supplies actual model credentials, Chat state and Mastra storage; the gateway owns none
+of them. The installed-package test uses a controlled model and in-memory fixtures only for isolation.
+Use shared durable Chat state for restart deduplication; this does not turn native fresh-key replies
+or caught model failures into durable application outcomes. The integration example preserves the
+replay/acknowledgement limits described above.
+
 ## Media delivery modes
 
 The default core path reads incoming source media directly, without S3. Normalization exposes an
@@ -326,22 +439,28 @@ direct incoming access does not provide an implicit outbound upload/archive serv
 ```sh
 pnpm format:check
 pnpm typecheck
+pnpm build
+GATEWAY_TEST_PNPM_STORE="$OWNED_POPULATED_PNPM_STORE" \
 GATEWAY_TEST_DATABASE_URL="$DISPOSABLE_RUNTIME_DATABASE_URL" \
 GATEWAY_TEST_ADMIN_DATABASE_URL="$DISPOSABLE_ADMIN_DATABASE_URL" \
 GATEWAY_TEST_REDIS_URL="$DISPOSABLE_REDIS_URL" pnpm test
 ```
 
-`pnpm check` runs all three checks. Use an owned disposable PostgreSQL database with all migrations
+`pnpm check` runs formatting, strict type checking, compilation and tests. Use an owned disposable PostgreSQL database with all migrations
 and the restricted runtime role described above. Storage compatibility tests additionally require
 an explicit disposable admin URL to create/drop isolated verification databases. Set `TMPDIR` to an
 owned disposable directory for SQLite files and child-process checks. Tests require explicit fixture URLs;
 they do not load `.env` or fall back to another database. Redis tests additionally require an explicit
 owned AOF-enabled Redis 8.2 fixture; their capability scenario temporarily changes and restores that
-fixture's AOF/eviction settings, so never point them at a shared/production service. Native socket I/O is controlled, so these
+fixture's AOF/eviction settings, so never point them at a shared/production service. Test files run
+serially because that scenario mutates fixture-wide settings; explicit concurrency scenarios within
+files still exercise overlapping operations. Installed-package tests need an owned populated pnpm
+store and may read registries for missing consumer dependencies. Native socket I/O is controlled, so these
 tests do not require QR pairing or live WhatsApp sends. There is no separate lint script.
 
-## Remaining delivery qualification
+## Qualification boundaries
 
-Standalone bootstrap, container and installable package distribution remain in progress.
 No NATS transport or full WhatsApp history import is included. Live client/R2 qualification and
 production deployment remain separate work; integration tests do not pair or send to real numbers.
+Container and installed-consumer checks validate their stated platform and pinned package versions,
+not every WhatsApp client or future framework release.

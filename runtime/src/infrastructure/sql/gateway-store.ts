@@ -71,7 +71,7 @@ export class SqlGatewayStore implements GatewayStore
     },0)) AS elected`.execute(transaction);
     return result.rows[0]?.elected === true;
   }
-  async createAccount(requestedAccountId = randomUUID()): Promise<Account>
+  async createAccount(requestedAccountId: string = randomUUID()): Promise<Account>
   {
     const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     AccountScopeSchema.parse({ workspaceId: this.workspaceId, accountId });

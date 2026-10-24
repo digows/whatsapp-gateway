@@ -13,7 +13,7 @@ import {
 } from "@digows/whatsapp-gateway-contracts";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import pino from "pino";
+import pino, { type Logger } from "pino";
 import { z } from "zod";
 import type { WhatsAppConnection } from "../domain/connection.ts";
 import { AccountOwnedError } from "../domain/errors.ts";
@@ -62,25 +62,35 @@ class HostedAccount
     readonly connection: WhatsAppConnection,
     private readonly store: GatewayStore,
     private readonly configuration: GatewayConfiguration,
+    private readonly logger: Logger,
   )
   {}
   async start(): Promise<void>
   {
     this.lease.onLost = () =>
     {
-      pino().warn({ event: "gateway_account_ownership_lost", accountId: this.lease.accountId });
+      this.logger.warn({ event: "gateway_account_ownership_lost", accountId: this.lease.accountId });
       void this.close().catch(() =>
       {
-        pino().error({ event: "gateway_account_cleanup_failed", accountId: this.lease.accountId });
+        this.logger.error({ event: "gateway_account_cleanup_failed", accountId: this.lease.accountId });
       });
     };
     await this.connection.start(await this.store.account(this.lease.accountId), {
-      state: (state, jid, qr) => this.store.setState(this.lease, state, jid, qr),
+      state: async (state, jid, qr) =>
+      {
+        await this.store.setState(this.lease, state, jid, qr);
+        this.logger.info({
+          event: "gateway_session_state",
+          state,
+          identityAvailable: Boolean(jid),
+          qrAvailable: Boolean(qr),
+        });
+      },
       receipt: observation => this.store.recordReceipt(this.lease, observation),
       rejected: async (native, errorName) =>
       {
         await this.store.retainFailure(this.lease, native, errorName);
-        pino().warn({
+        this.logger.warn({
           event: "gateway_message_normalization_failed",
           accountId: this.lease.accountId,
           errorName,
@@ -137,7 +147,7 @@ class HostedAccount
         minimumDelayMs: this.configuration.typingDelayMs,
         maximumDelayMs: this.configuration.typingDelayMs,
       },
-      pino({ level: "silent" }),
+      this.logger,
       () =>
       {
         if (this.activities.get(chat) === activity) this.activities.delete(chat);
@@ -236,7 +246,7 @@ class HostedAccount
             {
               operation.unknown();
               this.quarantined = true;
-              pino().warn({
+              this.logger.warn({
                 event: "gateway_send_unknown",
                 accountId: this.lease.accountId,
                 operationKeyDigest: createHash("sha256").update(operation.key).digest("hex"),
@@ -297,6 +307,7 @@ export class Gateway implements GatewayOperations
     private readonly factory: GatewayConnectionFactory,
     configuration: GatewayConfigurationInput = {},
     private readonly media?: IMediaRepository,
+    private readonly logger: Logger = pino(),
   )
   {
     this.configuration = GatewayConfigurationSchema.parse(configuration);
@@ -322,6 +333,11 @@ export class Gateway implements GatewayOperations
             this.factory(await this.store.account(accountId), lease),
             this.store,
             this.configuration,
+            this.logger.child({
+              workspaceId: this.store.workspaceId,
+              accountId,
+              generation: lease.generation,
+            }),
           );
           await hosted.start();
           return hosted;

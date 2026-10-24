@@ -12,7 +12,10 @@
     "packages/**/*.ts",
     "**/package.json",
     "tsconfig.json",
-    "dprint.json"
+    "dprint.json",
+    "**/tsconfig.build.json",
+    "scripts/**/*.mjs",
+    "config/*.json"
   ],
   "excludes": [
     "**/node_modules",

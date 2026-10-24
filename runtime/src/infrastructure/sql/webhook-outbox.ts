@@ -16,7 +16,7 @@ import {
   type WebhookOutbox,
 } from "../../domain/webhook-outbox.ts";
 import { type GatewayTransaction, SqlGatewayStore } from "./gateway-store.ts";
-const DestinationSchema = AccountScopeSchema.extend({
+export const WebhookDestinationSchema = AccountScopeSchema.extend({
   id: GatewayIdentifierSchema,
   url: z.url().refine(value =>
   {
@@ -35,7 +35,7 @@ export class SqlWebhookOutbox implements WebhookOutbox
   }
   async configure(input: WebhookDestination): Promise<void>
   {
-    const destination = DestinationSchema.parse(input);
+    const destination = WebhookDestinationSchema.parse(input);
     if (destination.workspaceId !== this.store.workspaceId)
     {
       throw new Error("Webhook destination workspace mismatch");
@@ -71,7 +71,7 @@ export class SqlWebhookOutbox implements WebhookOutbox
         "=",
         this.store.workspaceId,
       ).where("enabled", "=", 1).orderBy("account_id").orderBy("id").execute()).map(row =>
-        DestinationSchema.parse({
+        WebhookDestinationSchema.parse({
           workspaceId: row.workspace_id,
           accountId: row.account_id,
           id: row.id,
@@ -92,7 +92,7 @@ export class SqlWebhookOutbox implements WebhookOutbox
   }
   async claim(input: WebhookDestination): Promise<ClaimedWebhookDelivery | null>
   {
-    const destination = DestinationSchema.parse(input);
+    const destination = WebhookDestinationSchema.parse(input);
     if (destination.workspaceId !== this.store.workspaceId) throw new Error("Webhook claim scope mismatch");
     return this.store.transaction(async transaction =>
     {

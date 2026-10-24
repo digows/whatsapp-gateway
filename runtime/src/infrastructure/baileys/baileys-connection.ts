@@ -18,7 +18,7 @@ import makeWASocket, {
   type WAMessageKey,
   type WASocket,
 } from "baileys";
-import pino from "pino";
+import pino, { type Logger } from "pino";
 import QRCode from "qrcode";
 import type { WhatsAppSendReceipt } from "../../domain/accepted-outbound-part.ts";
 import type { ConnectionEvents, PreparedWhatsAppSend, WhatsAppConnection } from "../../domain/connection.ts";
@@ -35,6 +35,7 @@ import {
 import { BaileysMessageCache } from "./baileys-message-cache.ts";
 import { prepareOutboundContent } from "./baileys-outbound-content.ts";
 import { closeBaileysSocket, withBaileysTimeout } from "./baileys-socket-lifecycle.ts";
+import { BaileysProtocolLogger } from "./protocol-logger.ts";
 export type SocketConfiguration = Parameters<typeof makeWASocket>[0];
 export type SocketFactory = (configuration: SocketConfiguration) => WASocket;
 export class BaileysConnection implements WhatsAppConnection
@@ -62,6 +63,7 @@ export class BaileysConnection implements WhatsAppConnection
     private readonly factory: SocketFactory = makeWASocket,
     private readonly pairingTimeoutMs = 30000,
     private readonly registrationTimeoutMs = 10000,
+    private readonly logger: Logger = pino(),
   )
   {
     if (
@@ -92,6 +94,7 @@ export class BaileysConnection implements WhatsAppConnection
     this.failure = undefined;
     this.stopping = undefined;
     this.authentication = await this.authenticationStore.load();
+    this.logger.info({ event: "socket_starting", paired: Boolean(this.authentication.creds.me) });
     this.pairingDeadline = Date.now() + this.pairingTimeoutMs;
     await events.state("CONNECTING");
     this.createSocket();
@@ -101,7 +104,7 @@ export class BaileysConnection implements WhatsAppConnection
     if (this.stopped || !this.lease.alive || !this.authentication) return;
     const socket = this.factory({
       auth: this.authentication,
-      logger: pino({ level: "silent" }),
+      logger: new BaileysProtocolLogger(this.logger, () => this.stopped),
       syncFullHistory: false,
       shouldSyncHistoryMessage: () => false,
       connectTimeoutMs: 60000,
@@ -125,6 +128,7 @@ export class BaileysConnection implements WhatsAppConnection
         await work();
       }).catch(async error =>
       {
+        this.logger.error({ event: "socket_event_failed", failure: describeWhatsAppError(error) });
         this.failure = error;
         this.stopped = true;
         clearTimeout(this.timer);
@@ -135,10 +139,21 @@ export class BaileysConnection implements WhatsAppConnection
         if (current) await closeBaileysSocket(current, 15000).catch(() => undefined);
       });
     };
-    socket.ev.on("creds.update", () => enqueue(() => this.authenticationStore.saveCredentials()));
+    socket.ev.on("creds.update", () =>
+      enqueue(async () =>
+      {
+        await this.authenticationStore.saveCredentials();
+        this.logger.debug({ event: "credentials_persisted", paired: Boolean(this.authentication?.creds.me) });
+      }));
     socket.ev.on("connection.update", update =>
       enqueue(async () =>
       {
+        this.logger.debug({
+          event: "socket_connection_update",
+          connection: update.connection,
+          qrAvailable: Boolean(update.qr),
+          paired: Boolean(this.authentication?.creds.me),
+        });
         if (update.qr)
         {
           await this.events?.state("AWAITING_PAIRING", undefined, await QRCode.toDataURL(update.qr));
@@ -160,6 +175,12 @@ export class BaileysConnection implements WhatsAppConnection
           const error = update.lastDisconnect?.error;
           const code = disconnectCode(error);
           const paired = Boolean(this.authentication?.creds.me);
+          this.logger[code === DisconnectReason.restartRequired ? "info" : "warn"]({
+            event: "socket_disconnected",
+            paired,
+            disconnectCode: code,
+            failure: describeWhatsAppError(error),
+          });
           this.socket = null;
           await closeBaileysSocket(socket, 15000);
           if (code === DisconnectReason.loggedOut)
@@ -446,6 +467,7 @@ export class BaileysConnection implements WhatsAppConnection
   }
   async stop(): Promise<void>
   {
+    this.logger.debug({ event: "socket_stopping" });
     this.stopping ??= (async () =>
     {
       this.stopped = true;

@@ -1,0 +1,133 @@
+name: Qualify and publish gateway
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      reviewed_sha:
+        description: Exact main commit accepted by Architect for publication
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04-arm
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fixture_admin
+          POSTGRES_PASSWORD: gateway-fixture-only
+          POSTGRES_DB: gateway_fixture
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U fixture_admin -d gateway_fixture"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:8.2
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TMPDIR: ${{ runner.temp }}
+      XDG_CACHE_HOME: ${{ runner.temp }}/gateway-cache
+      GATEWAY_TEST_DATABASE_URL: postgresql://fixture_runtime:gateway-runtime-only@127.0.0.1:5432/gateway_fixture
+      GATEWAY_TEST_ADMIN_DATABASE_URL: postgresql://fixture_admin:gateway-fixture-only@127.0.0.1:5432/gateway_fixture
+      GATEWAY_TEST_REDIS_URL: redis://127.0.0.1:6379
+      GATEWAY_TEST_PNPM_STORE: ${{ runner.temp }}/pnpm-store
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.18.0
+      - name: Select the pinned package manager
+        run: npm install --global pnpm@12.9.1
+      - name: Install and compile
+        run: |
+          pnpm --store-dir "$GATEWAY_TEST_PNPM_STORE" install --frozen-lockfile
+          pnpm build
+      - name: Install the PostgreSQL fixture client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+      - name: Prepare isolated PostgreSQL and Redis fixtures
+        env:
+          REDIS_CONTAINER: ${{ job.services.redis.id }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const configuration = {
+            storage: {engine:'postgresql',mode:'cluster',url:process.env.GATEWAY_TEST_ADMIN_DATABASE_URL},
+            workspaces:[{workspaceId:'00000000-0000-4000-8000-000000000001'}],
+            http:{enabled:false}
+          };
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/gateway-admin.json',JSON.stringify(configuration),{mode:0o600});
+          JS
+          node runtime/dist/cli.js migrate --config "$RUNNER_TEMP/gateway-admin.json"
+          psql "$GATEWAY_TEST_ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE fixture_runtime LOGIN PASSWORD 'gateway-runtime-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE gateway_fixture TO fixture_runtime;
+          GRANT USAGE ON SCHEMA gateway TO fixture_runtime;
+          GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA gateway TO fixture_runtime;
+          GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA gateway TO fixture_runtime;
+          SQL
+          docker exec "$REDIS_CONTAINER" redis-cli CONFIG SET appendonly yes
+          docker exec "$REDIS_CONTAINER" redis-cli CONFIG SET appendfsync always
+          docker exec "$REDIS_CONTAINER" redis-cli CONFIG SET maxmemory-policy noeviction
+      - name: Run all configured checks
+        run: pnpm check
+      - name: Package the consumer artifacts
+        run: |
+          mkdir -p "$RUNNER_TEMP/gateway-packages"
+          pnpm --store-dir "$GATEWAY_TEST_PNPM_STORE" --dir packages/contracts pack --pack-destination "$RUNNER_TEMP/gateway-packages"
+          pnpm --store-dir "$GATEWAY_TEST_PNPM_STORE" --dir packages/chat-adapter pack --pack-destination "$RUNNER_TEMP/gateway-packages"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gateway-consumer-packages-${{ github.sha }}
+          path: ${{ runner.temp }}/gateway-packages/*.tgz
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: qualify
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Match the reviewed snapshot
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: test "$REVIEWED_SHA" = "$GITHUB_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Publish the qualified architecture
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+          docker buildx create --name gateway-publication --driver docker-container --use
+          docker buildx build --platform linux/arm64 --load --tag "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA" --build-arg "GATEWAY_REVISION=$GITHUB_SHA" --metadata-file "$RUNNER_TEMP/gateway-image.json" .
+          python3 scripts/qualify-container.py "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA" > "$RUNNER_TEMP/gateway-container.json"
+          docker push "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA"
+          docker image inspect "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA" > "$RUNNER_TEMP/gateway-published.json"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const result=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/gateway-published.json'))[0];
+          const reference=result.RepoDigests.find(value=>/^ghcr\.io\/digows\/whatsapp-gateway@sha256:[a-f0-9]{64}$/.test(value));
+          if(!reference)throw new Error('Published digest unavailable');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`Published ${reference}\nCommit ${process.env.GITHUB_SHA}\nPlatform linux/arm64\n`);
+          JS
+      - name: Clear registry credentials and the owned builder
+        if: always()
+        run: |
+          docker logout ghcr.io
+          if docker buildx inspect gateway-publication > /dev/null 2>&1; then
+            docker buildx rm gateway-publication
+          fi

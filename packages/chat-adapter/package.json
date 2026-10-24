@@ -4,7 +4,16 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./examples/mastra": {
+      "development": "./examples/mastra.ts",
+      "types": "./dist/examples/mastra.d.ts",
+      "default": "./dist/examples/mastra.js"
+    }
   },
   "dependencies": {
     "@digows/whatsapp-gateway-contracts": "workspace:*",
@@ -12,9 +21,18 @@
     "redis": "6.3.0"
   },
   "peerDependencies": {
-    "chat": "4.43.0"
+    "chat": "4.43.0",
+    "@mastra/core": "1.79.0"
   },
   "devDependencies": {
     "chat": "4.43.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "peerDependenciesMeta": {
+    "@mastra/core": {
+      "optional": true
+    }
   }
 }

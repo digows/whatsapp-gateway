@@ -8,10 +8,13 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test runtime/test/*.test.ts packages/chat-adapter/test/*.test.ts",
+    "test": "node --conditions=development --import tsx --test --test-concurrency=1 runtime/test/*.test.ts packages/chat-adapter/test/*.test.ts",
     "format": "dprint fmt --config dprint.json",
     "format:check": "dprint check --config dprint.json",
-    "check": "pnpm format:check && pnpm typecheck && pnpm test"
+    "check": "pnpm format:check && pnpm typecheck && pnpm build && pnpm test",
+    "build": "node scripts/build.mjs",
+    "start": "node runtime/dist/cli.js",
+    "migrate": "node runtime/dist/cli.js migrate"
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "13.1.0",

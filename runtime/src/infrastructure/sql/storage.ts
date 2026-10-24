@@ -3,7 +3,7 @@ import { Kysely, PostgresDialect, sql, SqliteDialect } from "kysely";
 import { closeSync, constants, fstatSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import pg from "pg";
-import pino from "pino";
+import pino, { type Logger } from "pino";
 import { z } from "zod";
 import { AccountOwnedError } from "../../domain/errors.ts";
 import { AccountLease } from "../../domain/gateway-store.ts";
@@ -86,7 +86,7 @@ export class GatewayStorage
   private readonly leases = new Map<string, AccountLease | null>();
   private closing: Promise<void> | undefined;
   private readonly acquisitions = new Set<Promise<AccountLease>>();
-  constructor(readonly configuration: StorageConfiguration)
+  constructor(readonly configuration: StorageConfiguration, private readonly logger: Logger = pino())
   {
     this.engine = configuration.engine;
     if (configuration.engine === "postgresql")
@@ -100,7 +100,7 @@ export class GatewayStorage
       });
       pool.on("error", () =>
       {
-        pino().error({ event: "gateway_database_idle_connection_failed" });
+        this.logger.error({ event: "gateway_database_idle_connection_failed" });
       });
       this.database = new Kysely<GatewayTables>({ dialect: new PostgresDialect({ pool }) }).withSchema(
         "gateway",
@@ -463,9 +463,9 @@ export class GatewayStorage
     await this.closing;
   }
 }
-export async function openGatewayStorage(input: unknown): Promise<GatewayStorage>
+export async function openGatewayStorage(input: unknown, logger: Logger = pino()): Promise<GatewayStorage>
 {
-  const storage = new GatewayStorage(StorageConfigurationSchema.parse(input));
+  const storage = new GatewayStorage(StorageConfigurationSchema.parse(input), logger);
   try
   {
     await storage.verify();

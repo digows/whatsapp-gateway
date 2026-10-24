@@ -208,6 +208,9 @@ importers:
       '@digows/whatsapp-gateway-contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@mastra/core':
+        specifier: 1.79.0
+        version: 1.79.0(zod@4.6.5)
       redis:
         specifier: 6.3.0
         version: 6.3.0

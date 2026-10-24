@@ -61,6 +61,11 @@ class HttpFailure extends Error
     super(code);
   }
 }
+export interface GatewayHttpLifecycle
+{
+  isReady(): boolean;
+  isAccepting(): boolean;
+}
 export class GatewayHttpTransport
 {
   private readonly configuration: GatewayHttpConfiguration;
@@ -76,6 +81,7 @@ export class GatewayHttpTransport
     credentials: readonly GatewayHttpCredential[],
     private readonly logger: Logger = pino(),
     private readonly redisDocumentationPrefix = "gateway:v1",
+    private readonly lifecycle?: GatewayHttpLifecycle,
   )
   {
     this.configuration = GatewayHttpConfigurationSchema.parse(configuration);
@@ -183,7 +189,16 @@ export class GatewayHttpTransport
     {
       if (this.closing) throw new HttpFailure(503, "UNAVAILABLE");
       const url = new URL(request.url ?? "/", "http://gateway.invalid");
+      if (url.pathname === "/health/live" || url.pathname === "/health/ready")
+      {
+        route = url.pathname;
+        if (request.method !== "GET") throw new HttpFailure(405, "METHOD_NOT_ALLOWED");
+        const ready = url.pathname === "/health/live" || (this.lifecycle?.isReady() ?? false);
+        sendJson(response, ready ? 200 : 503, { status: ready ? "ok" : "unavailable" });
+        return;
+      }
       if (await this.documentation(request, response, url.pathname)) return;
+      if (this.lifecycle && !this.lifecycle.isAccepting()) throw new HttpFailure(503, "UNAVAILABLE");
       const principal = this.authenticate(request);
       if (url.pathname === "/v1/media")
       {

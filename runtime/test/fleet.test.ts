@@ -630,3 +630,159 @@ test("a guarded fleet start cannot adopt an unverified manual session or create 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+type ConnectionStartParameters = Parameters<ControlledConnection["start"]>;
+class AccountStartBarrierConnection extends ControlledConnection
+{
+  constructor(private readonly released: Promise<void>, private readonly entered: () => void)
+  {
+    super();
+  }
+  override async start(...parameters: ConnectionStartParameters): Promise<void>
+  {
+    this.entered();
+    await this.released;
+    await super.start(...parameters);
+  }
+}
+for (const engine of ["sqlite", "postgresql"] as const)
+{
+  test(`${engine} participant close prevents starting another account after a blocked startup resumes`, async () =>
+  {
+    const directory = await mkdtemp(join(temporaryRoot, "gateway-start-drain-"));
+    const configuration: StorageConfiguration = engine === "sqlite"
+      ? { engine, mode: "local", filename: join(directory, "start.sqlite") }
+      : { engine, mode: "cluster", url: postgresUrl };
+    await migrateGatewayStorage(configuration);
+    const storage = await openGatewayStorage(configuration);
+    const workspaceId = randomUUID();
+    const store = storage.workspace(workspaceId);
+    const fleetStore = new SqlFleetStore(store);
+    let release!: () => void;
+    let entered!: () => void;
+    const released = new Promise<void>(resolve =>
+    {
+      release = resolve;
+    });
+    const started = new Promise<void>(resolve =>
+    {
+      entered = resolve;
+    });
+    let connections = 0;
+    const gateway = new Gateway(store, () =>
+    {
+      connections++;
+      return connections === 1
+        ? new AccountStartBarrierConnection(released, entered)
+        : new ControlledConnection();
+    });
+    const participant = new GatewayFleetParticipant(fleetStore, gateway, { capacity: 2 });
+    try
+    {
+      for (let index = 0; index < 2; index++)
+      {
+        const account = await store.createAccount();
+        await fleetStore.setDesired({
+          apiVersion: "1",
+          workspaceId,
+          accountId: account.accountId,
+          expectedRevision: 0,
+          enabled: true,
+        });
+      }
+      const starting = participant.start();
+      await started;
+      const closing = participant.close();
+      release();
+      await starting;
+      await closing;
+      assert.equal(
+        connections,
+        1,
+        "An in-progress reconciliation must observe shutdown before the next account start",
+      );
+    }
+    finally
+    {
+      release();
+      await participant.close();
+      await storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+class AssignmentBarrierStore extends SqlFleetStore
+{
+  constructor(
+    store: SqlGatewayStore,
+    private readonly released: Promise<void>,
+    private readonly entered: () => void,
+  )
+  {
+    super(store);
+  }
+  override async claimAssignment(...parameters: Parameters<SqlFleetStore["claimAssignment"]>): Promise<void>
+  {
+    this.entered();
+    await this.released;
+    await super.claimAssignment(...parameters);
+  }
+}
+test("shutdown during a real SQL assignment claim does not construct a new socket afterward", async () =>
+{
+  const directory = await mkdtemp(join(temporaryRoot, "gateway-assignment-drain-"));
+  const configuration: StorageConfiguration = {
+    engine: "sqlite",
+    mode: "local",
+    filename: join(directory, "claim.sqlite"),
+  };
+  await migrateGatewayStorage(configuration);
+  const storage = await openGatewayStorage(configuration);
+  const workspaceId = randomUUID();
+  const store = storage.workspace(workspaceId);
+  const account = await store.createAccount();
+  let release!: () => void;
+  let entered!: () => void;
+  const released = new Promise<void>(resolve =>
+  {
+    release = resolve;
+  });
+  const enteredClaim = new Promise<void>(resolve =>
+  {
+    entered = resolve;
+  });
+  const fleetStore = new AssignmentBarrierStore(store, released, entered);
+  await fleetStore.setDesired({
+    apiVersion: "1",
+    workspaceId,
+    accountId: account.accountId,
+    expectedRevision: 0,
+    enabled: true,
+  });
+  let connections = 0;
+  const gateway = new Gateway(store, () =>
+  {
+    connections++;
+    return new ControlledConnection();
+  });
+  const participant = new GatewayFleetParticipant(fleetStore, gateway);
+  try
+  {
+    const starting = participant.start();
+    await enteredClaim;
+    const closing = participant.close();
+    release();
+    await starting;
+    await closing;
+    assert.equal(connections, 0);
+    assert.equal((await store.account(account.accountId)).generation, 1);
+  }
+  finally
+  {
+    release();
+    await participant.close();
+    await storage.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

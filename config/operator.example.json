@@ -1,0 +1,43 @@
+{
+  "storage": {
+    "engine": "sqlite",
+    "mode": "local",
+    "filename": "/data/gateway.sqlite"
+  },
+  "workspaces": [
+    {
+      "workspaceId": "00000000-0000-4000-8000-000000000001",
+      "accounts": [
+        {
+          "accountId": "00000000-0000-4000-8000-000000000002",
+          "enabled": false
+        }
+      ]
+    }
+  ],
+  "principals": [
+    {
+      "id": "agent-application",
+      "httpToken": "replace-with-a-random-token-of-at-least-32-characters",
+      "grants": [
+        {
+          "workspaceId": "00000000-0000-4000-8000-000000000001",
+          "accountIds": ["00000000-0000-4000-8000-000000000002"]
+        }
+      ]
+    }
+  ],
+  "http": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "redis": {
+    "transport": { "enabled": false },
+    "bindings": [],
+    "retentionMs": 0
+  },
+  "webhooks": { "enabled": false, "destinations": [] },
+  "media": { "mode": "direct" },
+  "logging": { "level": "info" }
+}

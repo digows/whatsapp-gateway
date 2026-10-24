@@ -1,9 +1,9 @@
 # Use case: Gateway accounts, sends and observed messages
 
-This document owns the transport-independent gateway behavior reviewed on October 23, 2026.
-The runtime, portable contracts and application-side Chat SDK projection are implemented here.
-The versioned command contract, SQL ingress and HTTP transport are implemented. Embedded placement is implemented. Public CloudEvents and signed SQL webhook delivery are implemented; Redis Streams command/result/event delivery and AsyncAPI are implemented. Redis read-only query handling,
-the full remote Adapter and standalone delivery remain pending increments of the approved design.
+This document owns the transport-independent gateway behavior. The standalone runtime, portable
+contracts, remote Chat SDK Adapter and generic native Mastra integration are implemented here.
+Versioned SQL ingress, embedded placement, HTTP/Redis commands and queries, public CloudEvents,
+signed SQL webhook delivery, AsyncAPI and container/package distribution share the contracts below.
 No legacy NATS subject is retained as a compatibility contract.
 
 ## Actors and boundaries
@@ -28,8 +28,8 @@ cluster mode and is currently qualified against PostgreSQL 18. Another Kysely di
 supported backend. Changing configuration does not transfer data between engines.
 
 `migrateGatewayStorage()` is an explicit administrative step. PostgreSQL uses the immutable
-`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` `005_public_events.sql` `006_webhook_outbox.sql` and `007_redis_streams.sql`; SQLite uses
-`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` `004_public_events.sql` `005_webhook_outbox.sql` and `006_redis_streams.sql`. Schema version metadata is intentionally system-level,
+`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` `005_public_events.sql` `006_webhook_outbox.sql`, `007_redis_streams.sql` and `008_message_history.sql`; SQLite uses
+`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` `004_public_events.sql` `005_webhook_outbox.sql`, `006_redis_streams.sql` and `007_message_history.sql`. Schema version metadata is intentionally system-level,
 not tenant-owned. Unknown versions fail instead of being reset. Migration does not convert legacy
 authentication directories or old deployments. PostgreSQL migration calls serialize on an advisory lock.
 
@@ -117,7 +117,9 @@ UUID, HTTP(S) URL without embedded credentials, signing secret and enabled flag.
 set its own delivery URL/principal through a command. Configuration serializes on the account row.
 Multiple enabled destinations receive independent delivery work. Disabled destinations receive no
 new work. A disabled dispatcher makes no requests; an embedder can pause dispatch independently of
-spooling. Standalone bootstrap/loop wiring is still pending this delivery increment.
+spooling. The standalone runtime wires independent delivery loops and reconciles trusted configured
+destinations before dispatch; destinations omitted from current configuration are disabled, retaining
+their history.
 
 When a public event commits, the same transaction inserts one `webhook_delivery` row per currently
 enabled scoped destination. It stores the exact serialized body for byte-identical retries, including
@@ -193,7 +195,8 @@ A newly registered stream destination starts at the current SQL tail in one acco
 restarts resume its existing cursor. Enabling Redis does not automatically dispatch old historical
 messages into an Agent. Retained Redis entries can be replayed with a separate consumer group, using
 stable public IDs for deduplication. This is distinct from reading gateway-observed message history
-and never requests full WhatsApp history download. Queries/media over Redis remain a pending increment.
+and never requests full WhatsApp history download. Scoped queries/private media uploads use the
+same command stream and their separate result envelope as defined below.
 
 `trimOnce(retentionMs)` uses Redis server time and exact
 [XTRIM MINID ACKED](https://redis.io/docs/latest/commands/xtrim/), supported by the qualified server.
@@ -209,7 +212,7 @@ The generated AsyncAPI 3.0.0 document at `/asyncapi.json` (or `createGatewayAsyn
 those same command/CloudEvent schemas, with a stream-field extension describing the actual Redis
 mapping. It does not invent a standard Pub/Sub binding for Streams. Actual parser validation and
 restricted producer/runtime ACL fixtures qualify these bindings. HTTP documentation accepts an
-optional matching Redis namespace when embedded; the standalone bootstrap will supply configured
+optional matching Redis namespace when embedded; the standalone bootstrap supplies configured
 values. Independent HTTP queries/webhooks do not require a Redis process.
 
 ## HTTP commands, queries and interactive documentation
@@ -540,8 +543,11 @@ Component tests cover finite typing and pacing invariants. The SDK tests
 exercise its actual Message and Attachment types.
 
 These tests do not establish physical client rendering, live receipt, WhatsApp server availability,
-broker/webhook delivery semantics or full browser UI qualification or application/business approval. No live pairing, external
-message, deployment, public package/image publication or production DML is part of this increment.
+unmeasured broker/webhook failure boundaries or application/business approval. Browser qualification
+uses a synthetic disabled account and verifies rendered Swagger authorization, an authenticated
+scoped request and the actual server response; it does not establish every browser interaction.
+No live pairing, external message, production deployment or production DML is part of qualification.
+Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
 
 ## Gateway-observed history and remote queries
@@ -590,3 +596,71 @@ retrying a read is a new observation. Media bytes can reside in the selected Red
 stream/AOF until its configured retention and consumer groups permit trimming;
 SQL and webhook outboxes never store those bytes. Retention is not a permanent
 consumer archive. OpenAPI and AsyncAPI describe the common owning schemas.
+
+
+## Standalone runtime and distribution
+
+`GatewayRuntimeConfigurationSchema` owns the strict JSON operator contract. `GatewayRuntime` opens
+and verifies the selected storage, creates per-workspace gateways, ingress/query services, embedded
+fleet participants and optional Redis/webhook loops. Configuration is external and explicit through
+`--config` or `GATEWAY_CONFIG`; there is no implicit `.env`, old auth-directory or database fallback.
+The CLI has `serve`, `migrate`, `verify-storage` and `--help`; migration is a separate administrative
+operation and ordinary startup never upgrades a schema. Config failures expose safe categories,
+not raw configuration or secret-bearing validation messages.
+
+Configured accounts are provisioned idempotently. An omitted `enabled` preserves durable intent;
+an explicit value updates it only if different. Restart does not issue a fresh enabled revision to
+bypass a blocked pairing attempt. Desired-state CAS remains the operator boundary for new intent.
+HTTP credentials use configured principals/grants; Redis bindings must reference an authorized
+principal and configured workspace. Disabled HTTP opens no listener. Direct media creates no S3
+client; the optional object-store client uses the same core media limits and closes with runtime.
+
+Startup advertises readiness only after storage/Redis checks, HTTP startup and participant startup.
+HTTP `/health/live` reports listener liveness. `/health/ready` returns 200 only while running and the
+latest periodic SQL/Redis probes are healthy, otherwise 503; it does not assert paired/connected
+accounts or model health. An embedded transport without explicit readiness hooks returns 503.
+Account command intake remains authenticated; health routes expose no credentials or account data.
+Redis-only operation exposes no health port and emits structured `runtime_ready`/failure logs.
+
+SIGINT/SIGTERM and repeated `close()` calls share one cleanup operation. Cancellation during startup
+prevents later readiness. Shutdown stops new admission and begins participant drain before waiting
+for HTTP requests; pending reconciliation checks closing state between account starts and after SQL
+claim. An in-flight claim that finishes during drain releases ownership without opening a native
+socket or blocking the desired revision. No second account starts after closing because a prior
+account's asynchronous startup completed. Existing commands retain their durable result/UNKNOWN
+semantics. HTTP, webhook and Redis work are drained/aborted, background loops joined, participants
+closed, then shared storage and object-store clients closed. Cleanup attempts continue after a
+resource failure and aggregate the failures. Tests reproduce shutdown during HTTP body intake,
+native startup and SQL placement on both backends; bind failure also releases the storage owner.
+
+Pino JSON logging has a global threshold and optional runtime/sessions/baileys/http/redis/webhooks/
+fleet thresholds. Valid levels are trace/debug/info/warn/error/fatal/silent. Connection/session
+records carry scope/generation, state and pairing flags without QR or credentials. Protocol adapter
+logs discard arbitrary objects/bindings and raw XML, exposing classified literals or signal hashes
+and safe error codes. Intentional socket close is a debug event, not an error stack. HTTP logs record
+request identity/route/status/duration, not credentials or bodies. Tests capture secret-bearing
+protocol objects and intentional close, verifying their exclusion.
+
+The build emits JavaScript and declarations for contracts, runtime and Adapter, with production
+exports pointing to `dist`. The explicit development condition selects sources for workspace tests.
+The CLI bin is compiled; consumer tarballs include compiled exports and the generic Mastra example.
+An actual packed/freshly installed consumer runs released native Mastra channels through remote
+HTTP intake/send/history and stable-key/conflict checks, without source aliases. Mastra is an
+optional consumer peer, never a runtime dependency. Package versions remain 0.0.0 until a separate
+registry release; CI artifacts do not imply npm publication.
+
+The container pins the Node 24.18.0 base digest, deploys pruned runtime dependencies and runs as UID
+1000. Operator configuration is mounted externally and data remains on the selected durable backend.
+The context allowlist excludes local authentication and private configuration. The offline container
+qualifier uses owned labeled resources and a synthetic disabled account to measure explicit migration,
+startup/readiness, durable queued intake, SIGTERM, restart and retained work. It verifies Node/platform,
+SQLite and absence of Chat/Mastra from runtime. It removes only its own containers/volume. The
+qualified architecture is linux/arm64; another architecture is not inferred. Allow deployment stop
+time for bounded in-flight work rather than relying on Docker's default ten-second kill window.
+
+CI runs formatting, strict types, compilation and all tests using isolated PostgreSQL/Redis fixtures,
+then archives contracts/Adapter tarballs. Test files are serialized because Redis capability tests
+mutate the isolated server's global AOF/eviction settings; explicit within-file concurrency remains
+covered. Manual image publication matches the reviewed main SHA, builds and qualifies the actual
+arm64 image before pushing it, then records its registry digest. Publication is distinct from any
+production rollout or real-number qualification.

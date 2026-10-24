@@ -151,6 +151,7 @@ export class GatewayFleetParticipant
     if (this.closing) return;
     for (const desired of assignments.values())
     {
+      if (this.closing) return;
       if (
         !desired.enabled || desired.assignedRuntimeId !== this.runtimeId
         || desired.blockedRevision === desired.revision
@@ -160,13 +161,18 @@ export class GatewayFleetParticipant
       {
         try
         {
-          await this.gateway.start(desired.accountId, lease =>
-            this.store.claimAssignment(lease, this.runtimeId, desired.revision));
+          await this.gateway.start(desired.accountId, async lease =>
+          {
+            if (this.closing) throw new Error("Fleet participant is draining");
+            await this.store.claimAssignment(lease, this.runtimeId, desired.revision);
+            if (this.closing) throw new Error("Fleet participant is draining");
+          });
           hosted = { lease: await this.gateway.ownership(desired.accountId), revision: desired.revision };
           this.hosted.set(desired.accountId, hosted);
         }
         catch (error)
         {
+          if (this.closing) return;
           if (error instanceof AccountOwnedError)
           {
             continue;
