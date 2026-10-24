@@ -672,3 +672,134 @@ mutate the isolated server's global AOF/eviction settings; explicit within-file 
 covered. Manual image publication matches the reviewed main SHA, builds and qualifies the actual
 arm64 image before pushing it, then records its registry digest. Publication is distinct from any
 production rollout or real-number qualification.
+
+## Proposed consumer reply recovery and run outcomes
+
+**Proposal, not implemented or part of the published guarantee.** The published
+`9e2e771` behavior and the native replay/run-acknowledgement limits above remain
+unchanged. This follow-up concerns explicit consumer reply intent and observable
+execution outcomes, not a new gateway service, model runtime or transport.
+
+### Verified released extension points
+
+Mastra core **1.79.0** publicly exports `ChannelHandler`, `ChannelHandlerContext`
+and `ChannelHandlers` from `@mastra/core/channels`. `ChannelConfig.handlers`
+accepts overrides for direct messages, mentions and subscribed messages. Each
+receives `(thread, message, defaultHandler, context)`; the context contains
+`mastra`, `requestContext`, `signalMetadata` and `skipped`. Replacing the handler
+is supported; wrapping the default does not undo its caught errors.
+
+In that installed release, the default `handleChatMessage` catches errors and
+calls `handleRunError`, which logs and attempts an ordinary error post. The inner
+`dispatchInboundMessage` also catches errors from the awakened run's
+`consumeStream`. `processChatMessage`, attachment preparation and default dispatch
+are private. There is no verified public default reply-sink or durable reply-key
+hook in these contracts. `Agent.generate` is public and throws its full output's
+error; a custom channel handler can await it and propagate failure. Chat **4.43.0**
+then propagates that custom-handler error through the Adapter's existing awaited
+intake, which returns HTTP 503 and leaves completion unmarked.
+
+### Recommended bounded composition
+
+Use a consumer-owned durable handler through the existing public Mastra override.
+The smallest SDK-facing change would be an optional **proposed** `handlers`
+parameter on the existing generic
+[Mastra example](../../packages/chat-adapter/examples/mastra.ts), passed directly
+to `channels.handlers`. Consumers can already construct the Agent with those
+public overrides themselves. No framework patch is needed for this composition.
+A production handler requires the following consumer responsibilities to be
+agreed before implementation:
+
+1. Resolve an existing, explicit consumer intent/run identity and the gateway
+   operation key for each intended reply. Bind them to workspace, account, input
+   and destination. Do not infer hidden reply keys inside `postMessage`, assign
+   them from generated text or use a delivery attempt as a new send identity.
+2. Claim and inspect a durable consumer record before generation. It separates
+   run outcome from send outcome and stores the complete frozen `OutboundMessage`
+   plus its operation key before sending. Its storage must provide atomic claims
+   and conditional commits; a process-local map or Chat event-completion cache
+   does not establish that guarantee.
+3. If a prepared reply exists, reuse it without rerunning the model. Otherwise
+   execute the consumer's chosen public Mastra call with the full incoming
+   `Message` and request context. Record model failure without inventing an error
+   reply. Failed, interrupted, aborted or suspended execution is not successful
+   completion; its recovery policy belongs to the caller.
+4. Commit successful generation and the frozen complete reply before calling
+   `executeWithKey`/`postWithKey`. Preserve rich payloads, choice/quote identities
+   and scoped media references. Keep incoming attachments lazy and pass their
+   bytes and MIME types when the consumer's model-input policy requests them;
+   do not reduce every input or output to text.
+5. Record `ACCEPTED` with the original native IDs. A crash after acceptance but
+   before this checkpoint reuses the frozen payload and original key. A caller
+   trying to change that payload receives a conflict. `UNKNOWN` remains an
+   unresolved send outcome and must not start another automatic send or model run.
+6. Expose the persisted run and send outcomes to the consumer independently of
+   receiver ACK. Propagate execution errors through the existing handler boundary
+   when using synchronous intake. If the consumer acknowledges durable intake
+   before execution, its ACK still denotes intake, with outcome observed through
+   its own durable execution record rather than a new gateway business API.
+
+The consumer record belongs to the agent application or its existing durable
+work mechanism. This proposal does not select another database/backend or add
+consumer run state to the gateway SQL schema. A storage contract and its actual
+consumer binding still need approval and qualification; requiring a port alone
+would not constitute an implemented durable recovery solution.
+
+This is an explicit final-reply composition, not an invisible replacement for
+Mastra's entire native channel pipeline. It does not reuse the default private
+signal wake/deliver, media-policy and rendering pipeline or establish durable
+recovery for native approval continuations or arbitrary tool effects. Existing
+Adapter rich/media/action capabilities remain available. Extending their
+run/send guarantees requires routing response-producing entry points through the
+same approved consumer policy, rather than quietly falling back to fresh-key
+native posts.
+
+If retaining the unchanged default channel pipeline is required, a **framework
+extension requires a separate decision**: public awaited prepared-output/delivery
+and run-outcome boundaries, covering inner stream failures and the relevant
+render drivers. They must permit caller-owned identity and durable commit before
+effects. Those are proposed new capabilities, not existing 1.79.0 APIs. Neither
+calling private methods nor wrapping `defaultHandler` is an acceptable substitute.
+
+### Measured temporary proof and limits
+
+A temporary proof used the real released Agent/AgentChannels/Chat/Adapter and
+actual gateway SQLite operation/history storage, a separate disposable SQLite
+consumer record, and controlled model/native/media boundaries. It used public
+handler overrides and `Agent.generate`, with no PostgreSQL, Redis, paid model,
+WhatsApp connection or new service. A caller assigned reply/run keys before
+execution; the proof did not derive implicit reply identity.
+
+The scenarios cover process exit immediately after gateway acceptance and before
+consumer send checkpoint, a fresh-process replay with a different model output,
+failed model execution with no send, and UNKNOWN replay. An incoming image is
+read lazily into the actual model boundary; the prepared reply is a button
+message whose original payload/choice identity survives replay. On Node 24.18.0,
+six fresh process invocations completed in 4541.023 ms, including expected exit 73
+after ACCEPTED. The crash snapshot had gateway ACCEPTED and consumer PLANNED;
+replay produced one total native effect, no second model call and rejected a
+changed payload. Model failure persisted FAILED/NONE, sent nothing and returned
+503; its replay did not rerun the model. UNKNOWN persisted separately from a
+successful model run and its replay produced no second effect. These observations
+are controlled proof results, not production latency targets. This establishes
+that the public composition is feasible, not that the temporary single-writer
+journal is a production implementation or that all native Mastra channel behavior
+is preserved. Concurrent ownership/recovery and the selected production storage
+binding remain unqualified. Published source behavior has not changed.
+
+### Optional Chat SDK surface
+
+No optional API is added by this proposal. `markAsRead` has a real native
+`readMessages` counterpart, and group/profile information can support some
+`fetchChannelInfo`/`getUser` data, but the current public gateway lacks the owning
+commands/queries for those additions. Observed-history channel reads or group
+posting may reuse existing capabilities only with their actual coverage and
+identity semantics. A complete chat/thread directory is not implied by observed
+message history. Modal forms, ephemeral platform messages and arbitrary object
+edits must not be emulated as successful WhatsApp operations. Evaluate individual
+applicable capabilities separately; implementing every SDK optional is outside
+this correction.
+
+SQLite per-workspace files remain a separate unapproved storage/configuration
+proposal. The published local storage selection and PostgreSQL isolation model
+are unchanged.
