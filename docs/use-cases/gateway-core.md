@@ -700,10 +700,17 @@ production rollout or real-number qualification.
 
 ## Proposed consumer reply recovery and run outcomes
 
-**Proposal, not implemented or part of the published guarantee.** The published
+**Selected public-API direction; implementation incomplete.** The published
 `9b872f4` behavior and the native replay/run-acknowledgement limits above remain
 unchanged. This follow-up concerns explicit consumer reply intent and observable
 execution outcomes, not a new gateway service, model runtime or transport.
+
+**Decision update, October 24:** the user selected the explicit public-API
+composition with native Mastra durable workflows/storage and PostgreSQL consumer
+persistence. The native-framework extension below was not selected. This
+authorizes implementing the reusable consumer profile after its actual persistent
+binding qualifies; it does not make the earlier custom SQLite proof a production
+binding or change the existing native Adapter profile implicitly.
 
 ### Verified released extension points
 
@@ -726,7 +733,7 @@ intake, which returns HTTP 503 and leaves completion unmarked.
 
 ### Consumer-handler alternative
 
-Use a consumer-owned durable handler through the existing public Mastra override.
+The selected direction uses a consumer-owned durable handler through the existing public Mastra override.
 The smallest SDK-facing change would be an optional **proposed** `handlers`
 parameter on the existing generic
 [Mastra example](../../packages/chat-adapter/examples/mastra.ts), passed directly
@@ -764,11 +771,11 @@ agreed before implementation:
    before execution, its ACK still denotes intake, with outcome observed through
    its own durable execution record rather than a new gateway business API.
 
-The consumer record belongs to the agent application or its existing durable
-work mechanism. This proposal does not select another database/backend or add
-consumer run state to the gateway SQL schema. A storage contract and its actual
-consumer binding still need approval and qualification; requiring a port alone
-would not constitute an implemented durable recovery solution.
+The consumer record belongs to the agent application's native Mastra durable
+workflow work and its approved PostgreSQL storage. No custom journal, additional
+workflow engine/service or consumer run state in the gateway SQL schema is
+selected. The actual persistent binding must qualify before this profile can
+claim durable recovery; requiring a port alone is insufficient.
 
 This is an explicit final-reply composition, not an invisible replacement for
 Mastra's entire native channel pipeline. It does not reuse the default private
@@ -788,10 +795,10 @@ calling private methods nor wrapping `defaultHandler` is an acceptable substitut
 
 ### Native-framework alternative preserving channel dispatch
 
-**Proposed design, not an existing API, approved implementation or qualified
-durability guarantee.** Prefer this alternative if preserving the native pipeline
-is the decision. Keep the handler override above as an explicit alternative;
-its controlled proof does not select it for consumers.
+**Unselected proposed design, not an existing API, approved implementation or
+qualified durability guarantee.** The user selected the public-API composition
+above instead. This alternative is retained as the evaluated framework-extension
+option; no core patch or fork-version change is authorized by that decision.
 
 #### Released source and existing mechanisms
 
@@ -954,7 +961,7 @@ Mastra-to-Adapter binding; that remains to be verified by its integration tests.
 
 | Alternative | Native behavior | Durability and outcome work |
 | --- | --- | --- |
-| Existing public custom handler | Replaces signal dispatch and automatic media/render/approval continuation policy. Feasibility measured by the temporary proof below. | Consumer must provide a production durable execution binding, claims and recovery. No core patch; not approved as a transparent replacement. |
+| Existing public custom handler | Selected explicit profile; replaces signal dispatch and automatic media/render/approval continuation policy. Earlier feasibility proof below does not qualify its native persistent binding. | Consumer must provide a production durable execution binding, claims and recovery. No core patch; not a transparent replacement. |
 | Proposed native binding | Preserves default signal wake/deliver, thread/media policy, rendering and approval continuation. No behavior-preservation test has run yet. | Requires core channel/workflow extensions, concrete Adapter conversion/delivery binding and configured consumer native durable storage/recovery. Prefer existing Mastra execution state over a parallel journal. |
 
 Required controlled qualification for the selected implementation:
@@ -988,7 +995,67 @@ These are acceptance criteria for the requested correction, not results of this
 source-only analysis. No native hook, storage binding or framework patch has
 been implemented, and the 126-test published baseline does not validate them.
 
-### Measured temporary proof and limits
+### Native PostgreSQL binding qualification and measured gap
+
+The initial qualification used released `@mastra/core` **1.79.0**,
+`@mastra/pg` **1.32.0**, Node **24.18.0** and an isolated PostgreSQL **18**
+container, using public `PostgresStore`, `createWorkflow`, `createStep`,
+`createRun`, `Run.start`, `Run.restart` and workflow-store reads. The native
+PostgreSQL package declares core compatibility `>=1.76.0-0 <2.0.0-0` and itself
+declares core 1.79.0 in its development dependencies; 1.32.0 is pinned for
+qualification in this repository. No gateway runtime dependency was introduced.
+
+A prepare-then-dispatch native workflow used `shouldPersistSnapshot: () => true`
+with the default execution engine. Mastra automatic recovery was explicitly off
+so the probe could control recovery through public `Run.restart`. The dispatch
+boundary was a controlled effect log, not WhatsApp or the gateway send operation.
+The probe tests native checkpoint/ownership behavior; it does not claim complete
+consumer/model/media/transport qualification.
+
+**Committed preparation survived process exit:** the first process exited 73
+on dispatch entry, after the native store had committed preparation A. A fresh
+process configured to generate B restarted the same run after its lease expired.
+It reused A, completed successfully and did not execute preparation again;
+the recorded generation count remained one. The inspected snapshot before
+recovery was running with prepare success and dispatch running.
+
+**An obsolete executor overwrote committed replacement preparation:** process A
+was paused with SIGSTOP while its preparation step was in progress. Its native
+15-second ownership lease expired. Process B restarted the run, prepared B,
+reached the controlled dispatch and committed success. After A resumed, it
+committed A over B's preparation, reached controlled dispatch again and completed
+successfully. The final native snapshot held A instead of B. Both used the same
+explicit operation key. This demonstrates a native-state invariant failure;
+it is not evidence of two accepted gateway sends. The gateway's existing payload
+conflict would refuse a changed payload under that key, but cannot prevent or
+repair this workflow snapshot overwrite.
+
+The installed released source explains this result:
+`packages/core/src/workflows/run-ownership.ts` states that generic workflow
+writes stay unfenced and the lease only informs the boot-time recovery sweep
+(lines 14–22). Renewal loss logs a warning. `Run._restart` claims ownership but
+does not install the durable-agent execution fence around generic workflow
+writes. PostgreSQL's `supportsRunFencing() === true` alone does not supply the
+missing fence. Native durable agents have additional execution-fence machinery;
+the probe does not establish that the same failure exists in their execution
+path or that every possible public composition is infeasible.
+
+This failed the selected profile's required stale-owner acceptance before
+production consumer implementation. No custom ownership/store wrapper, internal
+API call, second journal/engine or core patch was substituted. The framework/
+architecture owner must resolve this measured primitive gap before changing the
+binding mechanism. The consumer profile remains incomplete; its frozen-payload,
+UNKNOWN, outcome-reconciliation and concurrent recovery guarantees are not
+advertised as implemented.
+
+Reproduction scripts and sanitized snapshots/results are retained under
+`/Volumes/Files/.tmp/codex-gateway-native-xz2i2g`: `binding-probe.mjs`,
+`ownership-probe.py`, `prepared-snapshot.json`, `prepared-recovery.json`,
+`ownership-summary.json` and `ownership-results.json`. They use actual separate
+processes and native PostgreSQL storage. The temporary effect log only observes
+the controlled dispatch boundary and is not a consumer execution journal.
+
+### Earlier custom SQLite proof and limits
 
 A temporary proof used the real released Agent/AgentChannels/Chat/Adapter and
 actual gateway SQLite operation/history storage, a separate disposable SQLite
@@ -1028,4 +1095,4 @@ applicable capabilities separately; implementing every SDK optional is outside
 this correction.
 
 SQLite per-workspace files were separately approved and are defined in the storage section above.
-That approval does not select this proposed consumer integration or a framework patch.
+The later public-API consumer decision does not select a framework patch or change that gateway layout.
