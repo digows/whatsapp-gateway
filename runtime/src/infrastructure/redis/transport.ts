@@ -1,9 +1,16 @@
-import { GatewayIdentifierSchema, gatewayStreamNames } from "@digows/whatsapp-gateway-contracts";
+import {
+  GatewayIdentifierSchema,
+  GatewayMediaUploadSchema,
+  GatewayQueryCloudEventSchema,
+  GatewayQuerySchema,
+  gatewayStreamNames,
+} from "@digows/whatsapp-gateway-contracts";
 import { randomUUID } from "node:crypto";
 import pino, { type Logger } from "pino";
 import { createClient } from "redis";
 import { z } from "zod";
-import type { GatewayPrincipal } from "../../domain/authorization.ts";
+import type { GatewayQueryService } from "../../application/query-service.ts";
+import { GatewayAuthorizationError, type GatewayPrincipal } from "../../domain/authorization.ts";
 import type { GatewayStreamKind } from "../../domain/redis-stream-store.ts";
 import type { RedisStreamStore } from "../../domain/redis-stream-store.ts";
 const EnabledRedisSchema = z.strictObject({
@@ -55,6 +62,7 @@ export class GatewayRedisTransport
     configuration: GatewayRedisConfigurationInput,
     bindings: readonly GatewayRedisAccountBinding[],
     private readonly logger: Logger = pino(),
+    private readonly queries?: GatewayQueryService,
   )
   {
     this.configuration = GatewayRedisConfigurationSchema.parse(configuration);
@@ -224,6 +232,59 @@ export class GatewayRedisTransport
       for (const record of records)
       {
         const message = RedisMessageSchema.parse(record);
+        let payload: unknown;
+        try
+        {
+          payload = JSON.parse(message.message["payload"] ?? "");
+        }
+        catch
+        {
+          payload = null;
+        }
+        const query = z.union([GatewayQuerySchema, GatewayMediaUploadSchema]).safeParse(payload);
+        if (
+          query.success && query.data.workspaceId === this.store.workspaceId
+          && query.data.accountId === binding.accountId
+        )
+        {
+          const request = query.data;
+          let response = null;
+          let failure: "UNAVAILABLE" | "UNAUTHORIZED_SCOPE" | null = null;
+          try
+          {
+            if (!this.queries) throw new Error("Redis queries are not configured");
+            response = request.type === "media.upload"
+              ? await this.queries.upload(binding.principal, request)
+              : await this.queries.execute(binding.principal, request);
+          }
+          catch (error)
+          {
+            failure = error instanceof GatewayAuthorizationError ? "UNAUTHORIZED_SCOPE" : "UNAVAILABLE";
+          }
+          const event = GatewayQueryCloudEventSchema.parse({
+            specversion: "1.0",
+            id: randomUUID(),
+            source: "urn:digows:whatsapp-gateway",
+            type: "com.digows.whatsapp.query.result.v1",
+            subject: `accounts/${binding.accountId}`,
+            time: new Date().toISOString(),
+            datacontenttype: "application/json",
+            workspaceid: request.workspaceId,
+            accountid: request.accountId,
+            data: {
+              apiVersion: "1",
+              workspaceId: request.workspaceId,
+              accountId: request.accountId,
+              requestId: request.requestId,
+              response,
+              failure,
+            },
+          });
+          await this.publishDurably(streams.results, event);
+          await this.commands().xAck(streams.commands, configuration.group, message.id);
+          consumed++;
+          continue;
+        }
         const receipt = await this.store.intake(
           binding.principal,
           binding.accountId,
@@ -296,11 +357,7 @@ export class GatewayRedisTransport
       if (!claim) continue;
       try
       {
-        await this.commands().xAdd(claim.stream, "*", { payload: JSON.stringify(claim.event) });
-        const persisted = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]).parse(
-          await this.commands().sendCommand(["WAITAOF", "1", "0", String(configuration.commandTimeoutMs)]),
-        );
-        if (persisted[0] !== 1) throw new Error("Redis publication was not confirmed in local AOF");
+        await this.publishDurably(claim.stream, claim.event);
         await this.store.published(claim);
         this.publishIndex = (index + 1) % targets.length;
         return true;
@@ -312,6 +369,15 @@ export class GatewayRedisTransport
       }
     }
     return false;
+  }
+  private async publishDurably(stream: string, event: unknown): Promise<void>
+  {
+    if (!this.configuration.enabled) throw new Error("Redis transport is disabled");
+    await this.commands().xAdd(stream, "*", { payload: JSON.stringify(event) });
+    const persisted = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]).parse(
+      await this.commands().sendCommand(["WAITAOF", "1", "0", String(this.configuration.commandTimeoutMs)]),
+    );
+    if (persisted[0] !== 1) throw new Error("Redis publication was not confirmed in local AOF");
   }
   async trimOnce(retentionMs: number): Promise<void>
   {

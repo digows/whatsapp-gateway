@@ -488,3 +488,51 @@ exercise its actual Message and Attachment types.
 These tests do not establish physical client rendering, live receipt, WhatsApp server availability,
 broker/webhook delivery semantics or full browser UI qualification or application/business approval. No live pairing, external
 message, deployment, public package/image publication or production DML is part of this increment.
+
+
+## Gateway-observed history and remote queries
+
+Schema version 8 adds scoped message snapshots, keyed by workspace, account, chat,
+message and sender. It backfills retained ordinary inbound observations; it does
+not reconstruct missing old outbound bodies or import WhatsApp history. Newly
+accepted outbound parts record their actual reserved native ID and prepared
+recipient in the same transaction as operation acceptance and `message.sent.v1`.
+An unavailable native timestamp is explicitly `GATEWAY_OBSERVATION`, not a
+fabricated provider time. `PROVIDER` identifies the native timestamp field, not a
+claim that the server independently certified its clock. Edits update known text
+snapshots and deletion marks known targets; history pages exclude deleted items.
+Reactions and selections remain lifecycle observations. Pagination uses provider
+or observation time plus a stable account position, returning each page oldest
+first. Cursors bind account, chat and direction; ambiguous sender identity fails.
+
+Native media source version 2 also binds the native chat JID. Lookup and private
+object keys distinguish equal message IDs across chats. Legacy version 1 remains
+readable only when its message identity is unambiguous, including cached objects.
+No geographic rewriting or extra contact lookup changes the native correlation.
+
+`POST /v1/queries` uses `GatewayQuerySchema` for account/operation observations,
+retained history pages/messages, lazy native media and stored references. Queries
+are authorized before execution and do not need a locally connected account.
+HTTP retains the optimized binary native-media GET route. JSON and Redis media
+responses use bounded base64, with its encoding overhead. HTTP's configured
+request-byte limit also bounds upload sizes; it defaults to 1 MiB and allows up
+to 16 MiB JSON, independently of the native media limit.
+
+`POST /v1/media` accepts `GatewayMediaUploadSchema` when private object storage is
+configured. Bytes and metadata determine the scoped object key; repeated uploads
+return the same reference, although the PUT itself may repeat. Account existence,
+configured media bounds and reference scope are checked. This does not add a
+filesystem store or put downloaded/uploaded bytes in SQL.
+
+Redis accepts the same queries and uploads on the account commands stream.
+Commands keep their durable SQL intake/receipt rule. Read queries and uploads
+reply directly on the results stream, using `GatewayQueryCloudEventSchema`, and
+XACK only after local Redis AOF confirmation of the reply. They never wait for a
+session owner. A crash before ACK may re-evaluate a query or repeat the identical
+object PUT and publish another reply with a new event ID; correlate `requestId`.
+These replies have no SQL event sequence and are observations, not durable SQL
+query snapshots. An unavailable dependency produces an explicit failed reply;
+retrying a read is a new observation. Media bytes can reside in the selected Redis
+stream/AOF until its configured retention and consumer groups permit trimming;
+SQL and webhook outboxes never store those bytes. Retention is not a permanent
+consumer archive. OpenAPI and AsyncAPI describe the common owning schemas.

@@ -75,8 +75,9 @@ const tenantTables = [
   "webhook_delivery",
   "stream_receipt",
   "stream_cursor",
+  "message_snapshot",
 ];
-const schemaVersion = 7;
+const schemaVersion = 8;
 
 export class GatewayStorage
 {
@@ -339,6 +340,22 @@ export class GatewayStorage
         "claimed_sequence",
         "lease_until",
       ]).limit(0).execute();
+      await this.database.selectFrom("message_snapshot").select([
+        "workspace_id",
+        "account_id",
+        "chat_address",
+        "message_id",
+        "sender_address",
+        "position",
+        "direction",
+        "message",
+        "native",
+        "occurred_at",
+        "observed_at",
+        "timestamp_source",
+        "edited",
+        "deleted",
+      ]).limit(0).execute();
     }
     catch (error)
     {
@@ -534,6 +551,16 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
           ),
         );
       }
+      const historyVersion: unknown = database.prepare("SELECT version FROM schema_version").get();
+      if (z.object({ version: z.literal(7) }).safeParse(historyVersion).success)
+      {
+        database.exec(
+          await readFile(
+            new URL("../../../migrations/sqlite/007_message_history.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+      }
       const row: unknown = database.prepare("SELECT version FROM schema_version").get();
       if (z.object({ version: z.literal(schemaVersion) }).safeParse(row).success === false)
       {
@@ -598,6 +625,13 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
     {
       await connection.query(
         await readFile(new URL("../../../migrations/007_redis_streams.sql", import.meta.url), "utf8"),
+      );
+    }
+    const historyVersion = await connection.query("SELECT version FROM gateway.schema_version");
+    if (historyVersion.rows.length === 1 && historyVersion.rows[0]?.version === 7)
+    {
+      await connection.query(
+        await readFile(new URL("../../../migrations/008_message_history.sql", import.meta.url), "utf8"),
       );
     }
     const version = await connection.query("SELECT version FROM gateway.schema_version");

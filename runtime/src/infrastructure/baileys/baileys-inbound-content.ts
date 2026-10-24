@@ -149,10 +149,13 @@ export class BaileysInboundContent
   {
     const messageId = this.context.message.key.id;
     if (!messageId) throw new Error("Native media message ID is missing");
+    const chatId = this.context.message.key.remoteJid;
+    if (!chatId) throw new Error("Native media chat ID is missing");
     return nativeMediaSource({
       workspaceId: this.context.workspaceId,
       accountId: this.context.accountId,
       messageId,
+      chatId,
       partId,
     }, source);
   }

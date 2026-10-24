@@ -5,6 +5,8 @@ import {
   GatewayIdentifierSchema,
   type GatewayOperations,
   materializedMessageMediaParts,
+  type MediaReference,
+  MediaReferenceSchema,
   type OperationResult,
   type OutboundMessage,
   OutboundMessageSchema,
@@ -87,7 +89,10 @@ class HostedAccount
       received: async (message, native) =>
       {
         if (!this.lease.alive || this.controller.signal.aborted) throw new Error("Account ownership lost");
-        if (await this.store.hasSent(this.lease.accountId, message.channelMessageId)) return;
+        if (
+          message.senderAddress === message.receivingAddress
+          && await this.store.hasSent(this.lease.accountId, message.channelMessageId)
+        ) return;
         await this.store.retain(this.lease, message, native);
         if (message.senderAddress === message.receivingAddress)
         {
@@ -210,13 +215,19 @@ class HostedAccount
           await this.store.save(this.lease, operation);
           try
           {
-            await bounded(
+            const receipt = await bounded(
               this.connection.send(prepared),
               this.configuration.sendTimeoutMs,
             );
             const accepted = SendOperation.restore(operation.snapshot());
             accepted.accept(index);
-            await this.store.save(this.lease, accepted);
+            await this.store.save(this.lease, accepted, {
+              message: input,
+              chatAddress: prepared.recipientAddress,
+              index,
+              native: receipt?.native ?? null,
+              ...(receipt?.occurredAt === undefined ? {} : { occurredAt: receipt.occurredAt }),
+            });
             operation.accept(index);
           }
           catch (error)
@@ -405,6 +416,47 @@ export class Gateway implements GatewayOperations
     if (!hosted.lease.alive) throw new Error("Account ownership lost");
     await hosted.presence(chat, composing);
   }
+  async uploadMedia(
+    requestedAccountId: string,
+    bytes: Uint8Array,
+    contentType: string,
+    fileName?: string,
+  ): Promise<MediaReference>
+  {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
+    await this.store.account(accountId);
+    if (!this.media) throw new Error("Media storage is not configured");
+    if (bytes.byteLength > this.configuration.maximumMediaBytes)
+    {
+      throw new Error("Media exceeds configured byte limit");
+    }
+    const metadata = z.object({
+      contentType: z.string().min(1).max(256),
+      fileName: z.string().min(1).max(512).optional(),
+    }).parse({ contentType, fileName });
+    const digest = createHash("sha256").update(JSON.stringify(metadata)).update(bytes).digest("hex");
+    return this.media.write(
+      `media/whatsapp/${this.store.workspaceId}/${accountId}/uploads/${digest}`,
+      bytes,
+      metadata.contentType,
+      metadata.fileName,
+    );
+  }
+  async readStoredMedia(requestedAccountId: string, input: MediaReference): Promise<Uint8Array>
+  {
+    const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
+    const reference = MediaReferenceSchema.parse(input);
+    if (!this.media) throw new Error("Media storage is not configured");
+    if (!reference.storageKey.startsWith(`media/whatsapp/${this.store.workspaceId}/${accountId}/`))
+    {
+      throw new Error("Media scope mismatch");
+    }
+    if (reference.byteSize > this.configuration.maximumMediaBytes)
+    {
+      throw new Error("Media exceeds configured byte limit");
+    }
+    return this.media.read(reference, this.configuration.maximumMediaBytes);
+  }
   async readMedia(requestedAccountId: string, sourceId: string): Promise<Uint8Array>
   {
     const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
@@ -418,7 +470,16 @@ export class Gateway implements GatewayOperations
       this.configuration.maximumMediaBytes,
       this.configuration.mediaTimeoutMs,
     );
-    if (!this.media) return repository.read(identity, await this.store.native(accountId, identity.messageId));
+    if (!this.media)
+    {
+      return repository.read(
+        identity,
+        await this.store.native(accountId, identity.messageId, identity.chatId),
+      );
+    }
+    const legacyNative = identity.chatId === undefined
+      ? await this.store.native(accountId, identity.messageId)
+      : undefined;
     const media = this.media;
     const cached = await this.store.materialized(accountId, sourceId);
     if (cached)
@@ -429,7 +490,7 @@ export class Gateway implements GatewayOperations
       }
       return media.read(cached, this.configuration.maximumMediaBytes);
     }
-    const native = await this.store.native(accountId, identity.messageId);
+    const native = legacyNative ?? await this.store.native(accountId, identity.messageId, identity.chatId);
     const reference = await this.store.materialize(
       accountId,
       sourceId,

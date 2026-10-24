@@ -20,6 +20,7 @@ import makeWASocket, {
 } from "baileys";
 import pino from "pino";
 import QRCode from "qrcode";
+import type { WhatsAppSendReceipt } from "../../domain/accepted-outbound-part.ts";
 import type { ConnectionEvents, PreparedWhatsAppSend, WhatsAppConnection } from "../../domain/connection.ts";
 import { describeWhatsAppError } from "../../domain/error-details.ts";
 import { type AccountLease, type GatewayStore } from "../../domain/gateway-store.ts";
@@ -386,7 +387,7 @@ export class BaileysConnection implements WhatsAppConnection
     );
   }
 
-  async send(prepared: PreparedWhatsAppSend): Promise<void>
+  async send(prepared: PreparedWhatsAppSend): Promise<WhatsAppSendReceipt>
   {
     const socket = this.socket;
     if (!socket || !this.lease.alive || this.stopped) throw new Error("WhatsApp socket unavailable");
@@ -408,6 +409,14 @@ export class BaileysConnection implements WhatsAppConnection
         "send",
       );
       if (sent) this.cache.rememberMessage(sent);
+      const timestamp = sent?.messageTimestamp;
+      const seconds = typeof timestamp === "number" ? timestamp : timestamp?.toNumber();
+      return {
+        native: sent ? JSON.stringify(sent, BufferJSON.replacer) : null,
+        ...(seconds !== undefined && Number.isSafeInteger(seconds)
+          ? { occurredAt: new Date(seconds * 1000).toISOString() }
+          : {}),
+      };
     }
     finally
     {

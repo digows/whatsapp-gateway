@@ -7,8 +7,10 @@ import {
   GatewayCommandSchema,
   type GatewayHttpError,
   GatewayIdentifierSchema,
+  GatewayMediaUploadSchema,
   GatewayOperationResultSchema,
   type GatewayOperations,
+  GatewayQuerySchema,
 } from "@digows/whatsapp-gateway-contracts";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -16,6 +18,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import pino, { type Logger } from "pino";
 import { z } from "zod";
 import type { GatewayCommandIngress } from "../../application/command-ingress.ts";
+import type { GatewayQueryService } from "../../application/query-service.ts";
 import { GatewayAuthorizationError, type GatewayPrincipal } from "../../domain/authorization.ts";
 import { GatewayConflictError, GatewayResourceUnavailableError } from "../../domain/errors.ts";
 import type { GatewayFleetStore } from "../../domain/fleet-store.ts";
@@ -39,6 +42,7 @@ export interface GatewayHttpWorkspace
   readonly commands: GatewayCommandIngress;
   readonly gateway: GatewayOperations;
   readonly fleet?: GatewayFleetStore;
+  readonly queries?: GatewayQueryService;
 }
 export interface GatewayHttpCredential
 {
@@ -181,6 +185,30 @@ export class GatewayHttpTransport
       const url = new URL(request.url ?? "/", "http://gateway.invalid");
       if (await this.documentation(request, response, url.pathname)) return;
       const principal = this.authenticate(request);
+      if (url.pathname === "/v1/media")
+      {
+        route = "/v1/media";
+        if (request.method !== "POST") throw new HttpFailure(405, "METHOD_NOT_ALLOWED");
+        const upload = parseInput(GatewayMediaUploadSchema, await this.readJson(request));
+        principal.authorize(upload);
+        const workspace = this.workspaces.get(upload.workspaceId);
+        if (!workspace) throw new HttpFailure(404, "NOT_FOUND");
+        if (!workspace.queries) throw new HttpFailure(503, "UNAVAILABLE");
+        sendJson(response, 200, await workspace.queries.upload(principal, upload));
+        return;
+      }
+      if (url.pathname === "/v1/queries")
+      {
+        route = "/v1/queries";
+        if (request.method !== "POST") throw new HttpFailure(405, "METHOD_NOT_ALLOWED");
+        const query = parseInput(GatewayQuerySchema, await this.readJson(request));
+        principal.authorize(query);
+        const workspace = this.workspaces.get(query.workspaceId);
+        if (!workspace) throw new HttpFailure(404, "NOT_FOUND");
+        if (!workspace.queries) throw new HttpFailure(503, "UNAVAILABLE");
+        sendJson(response, 200, await workspace.queries.execute(principal, query));
+        return;
+      }
       if (url.pathname === "/v1/commands")
       {
         route = "/v1/commands";

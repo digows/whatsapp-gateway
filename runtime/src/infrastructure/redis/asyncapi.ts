@@ -1,4 +1,10 @@
-import { GatewayCloudEventSchema, GatewayCommandSchema } from "@digows/whatsapp-gateway-contracts";
+import {
+  GatewayCloudEventSchema,
+  GatewayCommandSchema,
+  GatewayMediaUploadSchema,
+  GatewayQueryCloudEventSchema,
+  GatewayQuerySchema,
+} from "@digows/whatsapp-gateway-contracts";
 import { z } from "zod";
 function messageReference(name: string)
 {
@@ -52,7 +58,7 @@ export function createGatewayAsyncApi(prefix = "gateway:v1")
         channel: { $ref: "#/channels/commands" },
         messages: [{ $ref: "#/channels/commands/messages/command" }],
         description:
-          "XREADGROUP gateway with per-boot consumer identity. XAUTOCLAIM recovers idle pending entries. XACK only after SQL intake and a durable receipt. Publisher identity comes from configured account stream binding, never message fields.",
+          "XREADGROUP gateway with per-boot consumer identity. XAUTOCLAIM recovers idle pending entries. Commands XACK only after SQL intake and a durable receipt. Read-only queries execute without a session owner and XACK after their result is fsynced in local Redis AOF; replay can re-evaluate newer state. Query replies have no SQL account sequence and media bytes never enter SQL. Publisher identity comes from configured account stream binding, never message fields.",
       },
       sendResult: {
         action: "send",
@@ -84,7 +90,13 @@ export function createGatewayAsyncApi(prefix = "gateway:v1")
           correlationId: { location: "$message.payload#/requestId" },
           payload: {
             schemaFormat: "application/schema+json;version=draft-07",
-            schema: z.toJSONSchema(GatewayCommandSchema, { io: "input", target: "draft-7" }),
+            schema: z.toJSONSchema(
+              z.union([GatewayCommandSchema, GatewayQuerySchema, GatewayMediaUploadSchema]),
+              {
+                io: "input",
+                target: "draft-7",
+              },
+            ),
           },
         },
         GatewayCloudEvent: {
@@ -93,7 +105,10 @@ export function createGatewayAsyncApi(prefix = "gateway:v1")
           correlationId: { location: "$message.payload#/id" },
           payload: {
             schemaFormat: "application/schema+json;version=draft-07",
-            schema: z.toJSONSchema(GatewayCloudEventSchema, { io: "input", target: "draft-7" }),
+            schema: z.toJSONSchema(z.union([GatewayCloudEventSchema, GatewayQueryCloudEventSchema]), {
+              io: "input",
+              target: "draft-7",
+            }),
           },
         },
       },

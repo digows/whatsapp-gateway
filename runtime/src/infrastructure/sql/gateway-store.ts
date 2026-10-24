@@ -14,6 +14,7 @@ import {
 import { type Selectable, sql, type Transaction } from "kysely";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { AcceptedOutboundPart } from "../../domain/accepted-outbound-part.ts";
 import { GatewayResourceUnavailableError } from "../../domain/errors.ts";
 import {
   type AccountLease,
@@ -23,6 +24,7 @@ import {
 import { AccountPacing, type PacingPolicy } from "../../domain/pacing.ts";
 import { SendOperation } from "../../domain/send-operation.ts";
 import { appendGatewayEvent } from "./event-log.ts";
+import { retainAcceptedOutbound, retainSnapshot } from "./history.ts";
 import type { GatewayStorage } from "./storage.ts";
 import { type AccountTable, type GatewayTables, jsonValue, type OperationTable } from "./tables.ts";
 export type GatewayTransaction = Transaction<GatewayTables>;
@@ -251,7 +253,11 @@ export class SqlGatewayStore implements GatewayStore
       return SendOperation.restore(operationResult(row));
     });
   }
-  async save(lease: AccountLease, operation: SendOperation): Promise<void>
+  async save(
+    lease: AccountLease,
+    operation: SendOperation,
+    acceptedPart?: AcceptedOutboundPart,
+  ): Promise<void>
   {
     if (operation.workspaceId !== this.workspaceId || operation.accountId !== lease.accountId)
     {
@@ -284,6 +290,7 @@ export class SqlGatewayStore implements GatewayStore
       if (updated.numUpdatedRows !== 1n) throw new Error("Operation terminal state cannot be overwritten");
       if (previous?.state !== operation.state || previous?.accepted_parts !== operation.acceptedParts)
       {
+        if (acceptedPart) await retainAcceptedOutbound(this, transaction, operation, acceptedPart);
         await appendGatewayEvent(this, transaction, lease.accountId, {
           type: "com.digows.whatsapp.operation.updated.v1",
           data: operation.snapshot(),
@@ -417,6 +424,16 @@ export class SqlGatewayStore implements GatewayStore
       }).onConflict(conflict => conflict.doNothing()).returning("id").executeTakeFirst();
       if (inserted)
       {
+        await retainSnapshot(this, transaction, {
+          workspaceId: this.workspaceId,
+          accountId: lease.accountId,
+          direction: "INBOUND",
+          message,
+          observedAt: (await this.databaseTime(transaction)).toISOString(),
+          timestampSource: "PROVIDER",
+          edited: false,
+          deleted: false,
+        }, native);
         await appendGatewayEvent(this, transaction, lease.accountId, {
           type: "com.digows.whatsapp.message.received.v1",
           data: { workspaceId: this.workspaceId, accountId: lease.accountId, message },
@@ -449,21 +466,30 @@ export class SqlGatewayStore implements GatewayStore
       }
     });
   }
-  async native(requestedAccountId: string, messageId: string): Promise<string>
+  async native(requestedAccountId: string, messageId: string, nativeChatId?: string): Promise<string>
   {
     const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     return this.transaction(async transaction =>
     {
-      const predicate = this.storage.engine === "postgresql"
-        ? sql<boolean>`message->>'channelMessageId'=${messageId}`
-        : sql<boolean>`json_extract(message,'$.channelMessageId')=${messageId}`;
-      const row = await transaction.selectFrom("event").select("native").where(
-        "workspace_id",
-        "=",
-        this.workspaceId,
-      ).where("account_id", "=", accountId).where(predicate).orderBy("created_at", "desc").executeTakeFirst();
-      if (!row) throw new Error("Native media source unavailable");
-      return row.native;
+      let query = transaction.selectFrom("message_snapshot").select("native")
+        .where("workspace_id", "=", this.workspaceId).where("account_id", "=", accountId)
+        .where("message_id", "=", messageId).where("native", "is not", null);
+      if (nativeChatId !== undefined)
+      {
+        const predicate = this.storage.engine === "postgresql"
+          ? sql<
+            boolean
+          >`(case when native is json then native::jsonb #>> '{key,remoteJid}' end)=${nativeChatId}`
+          : sql<
+            boolean
+          >`(case when json_valid(native) then json_extract(native,'$.key.remoteJid') end)=${nativeChatId}`;
+        query = query.where(predicate);
+      }
+      const rows = await query.limit(2).execute();
+      if (rows.length > 1) throw new Error("Native media source identity is ambiguous");
+      const native = rows[0]?.native;
+      if (!native) throw new Error("Native media source unavailable");
+      return native;
     });
   }
   async hasSent(requestedAccountId: string, messageId: string): Promise<boolean>

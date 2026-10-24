@@ -1,4 +1,10 @@
 import { type S3Client } from "@aws-sdk/client-s3";
+import {
+  GatewayMediaUploadResultSchema,
+  GatewayQueryCloudEventSchema,
+  GatewayQueryResponseSchema,
+  gatewayStreamNames,
+} from "@digows/whatsapp-gateway-contracts";
 import { InboundMessageSchema } from "@digows/whatsapp-gateway-contracts";
 import { BufferJSON, getMediaKeys, type WAMessage } from "baileys";
 import assert from "node:assert/strict";
@@ -8,15 +14,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
+import { createClient } from "redis";
 import { GatewayChatMapping } from "../../packages/chat-adapter/src/index.ts";
 import { GatewayCommandIngress } from "../src/application/command-ingress.ts";
 import { Gateway } from "../src/application/gateway.ts";
+import { GatewayQueryService } from "../src/application/query-service.ts";
 import { GatewayPrincipal } from "../src/domain/authorization.ts";
 import { encodeWhatsAppMediaSource } from "../src/domain/media-source.ts";
 import { BaileysConnection } from "../src/infrastructure/baileys/baileys-connection.ts";
 import { GatewayHttpTransport } from "../src/infrastructure/http/transport.ts";
+import { GatewayRedisTransport } from "../src/infrastructure/redis/transport.ts";
 import { createMediaStorage } from "../src/infrastructure/s3/configuration.ts";
 import { SqlCommandInbox } from "../src/infrastructure/sql/command-inbox.ts";
+import { SqlGatewayHistory } from "../src/infrastructure/sql/history.ts";
+import { SqlRedisStreamStore } from "../src/infrastructure/sql/redis-stream-store.ts";
 import {
   type GatewayStorage,
   migrateGatewayStorage,
@@ -40,6 +51,9 @@ interface StoredObject
 class MediaFixture
 {
   readonly objects = new Map<string, StoredObject>();
+  readonly sourceObjects = new Map<string, Buffer>();
+  socket: NativeSocketFixture | undefined;
+  connection: BaileysConnection | undefined;
   readonly payload = Buffer.from("controlled encrypted WhatsApp media");
   readonly accountId = randomUUID();
   readonly workspaceId = randomUUID();
@@ -49,6 +63,7 @@ class MediaFixture
     workspaceId: this.workspaceId,
     accountId: this.accountId,
     messageId: this.messageId,
+    chatId: "200@s.whatsapp.net",
     partId: "0",
   });
   mediaRequests = 0;
@@ -73,7 +88,7 @@ class MediaFixture
   }
   private async respond(request: IncomingMessage, response: ServerResponse): Promise<void>
   {
-    if (request.url === "/source")
+    if (request.url === "/source" || this.sourceObjects.has(request.url ?? ""))
     {
       this.mediaRequests++;
       response.writeHead(this.expired ? 404 : 200);
@@ -82,7 +97,9 @@ class MediaFixture
         response.flushHeaders();
         return;
       }
-      response.end(this.expired ? "Unavailable" : this.encrypted);
+      response.end(
+        this.expired ? "Unavailable" : this.sourceObjects.get(request.url ?? "") ?? this.encrypted,
+      );
       return;
     }
     assert.match(String(request.headers.authorization), /^AWS4-HMAC-SHA256 /);
@@ -165,6 +182,8 @@ class MediaFixture
     await this.gateway.start(this.accountId);
     assert.ok(socket);
     assert.ok(connection);
+    this.socket = socket;
+    this.connection = connection;
     socket.pair();
     socket.update("open");
     await connection.drainEvents();
@@ -433,3 +452,213 @@ for (const materialize of [false, true])
     }
   });
 }
+
+for (const materialize of [false, true])
+{
+  test(`native media identifiers distinguish the same message ID across chats with S3 mode ${materialize}`, async () =>
+  {
+    const fixture = new MediaFixture();
+    try
+    {
+      await fixture.start(materialize);
+      const store = fixture.storage.workspace(fixture.workspaceId);
+      const oldSourceId = encodeWhatsAppMediaSource({
+        workspaceId: fixture.workspaceId,
+        accountId: fixture.accountId,
+        messageId: fixture.messageId,
+        partId: "0",
+      });
+      if (materialize) await fixture.gateway.readMedia(fixture.accountId, oldSourceId);
+      const secondPayload = Buffer.from("second chat private media payload");
+      const mediaKey = randomBytes(32);
+      const keys = await getMediaKeys(mediaKey, "image");
+      const cipher = createCipheriv("aes-256-cbc", keys.cipherKey, keys.iv);
+      const ciphertext = Buffer.concat([cipher.update(secondPayload), cipher.final()]);
+      const mac = createHmac("sha256", keys.macKey!).update(keys.iv).update(ciphertext).digest().subarray(
+        0,
+        10,
+      );
+      const encrypted = Buffer.concat([ciphertext, mac]);
+      fixture.sourceObjects.set("/source-b", encrypted);
+      const address = fixture.server.address();
+      assert.ok(address && typeof address !== "string");
+      const native: WAMessage = {
+        key: { id: fixture.messageId, remoteJid: "300@s.whatsapp.net", fromMe: false },
+        messageTimestamp: 1235,
+        message: {
+          imageMessage: {
+            url: `http://127.0.0.1:${address.port}/source-b`,
+            mediaKey,
+            mimetype: "image/jpeg",
+            fileLength: secondPayload.byteLength,
+            fileEncSha256: createHash("sha256").update(encrypted).digest(),
+            fileSha256: createHash("sha256").update(secondPayload).digest(),
+          },
+        },
+      };
+      fixture.socket?.events.emit("messages.upsert", { messages: [native] });
+      await fixture.connection?.drainEvents();
+      const second = await new SqlGatewayHistory(store).message({
+        apiVersion: "1",
+        workspaceId: fixture.workspaceId,
+        accountId: fixture.accountId,
+        chatAddress: "300@s.whatsapp.net",
+        messageId: fixture.messageId,
+      });
+      assert.ok(second && "media" in second.message && "sourceId" in second.message.media);
+      assert.notEqual(second.message.media.sourceId, fixture.sourceId);
+      const legacy = encodeWhatsAppMediaSource({
+        workspaceId: fixture.workspaceId,
+        accountId: fixture.accountId,
+        messageId: fixture.messageId,
+        partId: "0",
+      });
+      await assert.rejects(fixture.gateway.readMedia(fixture.accountId, legacy), /ambiguous/);
+
+      assert.deepEqual(
+        Buffer.from(await fixture.gateway.readMedia(fixture.accountId, fixture.sourceId)),
+        fixture.payload,
+      );
+      assert.deepEqual(
+        Buffer.from(await fixture.gateway.readMedia(fixture.accountId, second.message.media.sourceId)),
+        secondPayload,
+      );
+    }
+    finally
+    {
+      await fixture.close();
+    }
+  });
+}
+
+test("remote HTTP and Redis media use actual native decryption and private S3 upload without SQL blobs", async () =>
+{
+  const fixture = new MediaFixture();
+  let http: GatewayHttpTransport | undefined;
+  let redis: GatewayRedisTransport | undefined;
+  const redisUrl = process.env["GATEWAY_TEST_REDIS_URL"];
+  assert.ok(redisUrl);
+  const client = createClient({ url: redisUrl });
+  client.on("error", () => undefined);
+  try
+  {
+    await fixture.start(true);
+    const store = fixture.storage.workspace(fixture.workspaceId);
+    const queries = new GatewayQueryService(
+      store,
+      fixture.gateway,
+      new SqlGatewayHistory(store),
+      fixture.gateway,
+    );
+    const scope = { workspaceId: fixture.workspaceId, accountId: fixture.accountId };
+    const principal = new GatewayPrincipal("media-consumer", [{
+      workspaceId: fixture.workspaceId,
+      accountIds: [fixture.accountId],
+    }]);
+    const token = randomUUID();
+    http = new GatewayHttpTransport({ enabled: true, port: 0 }, [{
+      store,
+      gateway: fixture.gateway,
+      queries,
+      commands: new GatewayCommandIngress(new SqlCommandInbox(store)),
+    }], [{ token, principal }]);
+    await http.start();
+    const payload = Buffer.from("remote outbound bytes");
+    const upload = {
+      ...scope,
+      apiVersion: "1",
+      requestId: randomUUID(),
+      type: "media.upload",
+      contentType: "image/jpeg",
+      fileName: "sample.jpg",
+      media: { encoding: "base64", bytes: payload.toString("base64"), byteSize: payload.byteLength },
+    };
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+    const response = await fetch(http.origin + "/v1/media", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(upload),
+    });
+    assert.equal(response.status, 200);
+    const result = GatewayMediaUploadResultSchema.parse(await response.json());
+    const duplicate = await fetch(http.origin + "/v1/media", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(upload),
+    });
+    assert.deepEqual(await duplicate.json(), result);
+    assert.equal(fixture.objects.size, 1);
+    const read = {
+      ...scope,
+      apiVersion: "1",
+      requestId: randomUUID(),
+      type: "media.readStored",
+      reference: result.result,
+    };
+    const stored = await fetch(http.origin + "/v1/queries", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(read),
+    });
+    const storedResponse = GatewayQueryResponseSchema.parse(await stored.json());
+    assert.equal(storedResponse.type, "media.readStored");
+    if (storedResponse.type !== "media.readStored") throw new Error("Incorrect media response");
+    assert.deepEqual(Buffer.from(storedResponse.result.bytes, "base64"), payload);
+    const prefix = `test:${randomUUID()}`;
+    redis = new GatewayRedisTransport(
+      new SqlRedisStreamStore(store),
+      { enabled: true, url: redisUrl, prefix },
+      [{ accountId: fixture.accountId, principal }],
+      undefined,
+      queries,
+    );
+    await redis.start();
+    await client.connect();
+    const streams = gatewayStreamNames(prefix, scope);
+    await client.xAdd(streams.commands, "*", {
+      payload: JSON.stringify({
+        ...scope,
+        apiVersion: "1",
+        requestId: randomUUID(),
+        type: "media.read",
+        sourceId: fixture.sourceId,
+      }),
+    });
+    await redis.consumeOnce();
+    const events = await client.xRange(streams.results, "-", "+");
+    assert.ok(events && events.length === 1);
+    const event = GatewayQueryCloudEventSchema.parse(JSON.parse(events[0]!.message["payload"]!));
+    assert.equal(event.data.response?.type, "media.read");
+    if (event.data.response?.type !== "media.read") throw new Error("Native media reply unavailable");
+    assert.deepEqual(Buffer.from(event.data.response.result.bytes, "base64"), fixture.payload);
+    const wrong = {
+      ...read,
+      reference: {
+        ...result.result,
+        storageKey: result.result.storageKey.replace(fixture.accountId, randomUUID()),
+      },
+    };
+    const forbidden = await fetch(http.origin + "/v1/queries", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(wrong),
+    });
+    assert.equal(forbidden.status, 503);
+    await assert.rejects(
+      queries.execute(principal, { ...read, reference: { ...result.result, byteSize: 999999999 } }),
+    );
+    const sourceBodies = await store.transaction(transaction =>
+      transaction.selectFrom("public_event").selectAll().where("workspace_id", "=", fixture.workspaceId)
+        .where("account_id", "=", fixture.accountId).execute()
+    );
+    assert.ok(!JSON.stringify(sourceBodies).includes(payload.toString("base64")));
+    assert.equal((await client.xPending(streams.commands, "gateway")).pending, 0);
+  }
+  finally
+  {
+    await http?.close();
+    await redis?.close();
+    if (client.isOpen) await client.close();
+    await fixture.close();
+  }
+});

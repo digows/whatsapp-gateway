@@ -109,7 +109,10 @@ export class BaileysMediaRepository
       throw new Error("WhatsApp media source input is invalid");
     }
     const message = proto.WebMessageInfo.fromObject(value);
-    if (message.key?.id !== identity.messageId)
+    if (
+      message.key?.id !== identity.messageId
+      || (identity.chatId !== undefined && message.key.remoteJid !== identity.chatId)
+    )
     {
       throw new Error("WhatsApp media source message differs from its input");
     }
@@ -158,7 +161,10 @@ export class BaileysMediaRepository
     if (!this.media) throw new Error("Media materialization storage is not configured");
     const resolved = this.resolve(identity, serializedMessage);
     const bytes = await this.download(resolved);
-    const storageKey = `media/whatsapp/${identity.workspaceId}/${identity.accountId}/${
+    const chatPath = identity.chatId === undefined
+      ? ""
+      : createHash("sha256").update(identity.chatId).digest("hex") + "/";
+    const storageKey = `media/whatsapp/${identity.workspaceId}/${identity.accountId}/${chatPath}${
       encodeURIComponent(identity.messageId)
     }/${identity.partId}`;
     return this.media.write(storageKey, bytes, resolved.source.contentType, resolved.source.fileName);

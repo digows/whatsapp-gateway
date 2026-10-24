@@ -7,6 +7,7 @@ import type {
   SessionState,
 } from "@digows/whatsapp-gateway-contracts";
 import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
+import type { WhatsAppSendReceipt } from "./accepted-outbound-part.ts";
 
 export interface PreparedWhatsAppSend
 {
@@ -27,7 +28,7 @@ export interface WhatsAppConnection
   start(account: Account, events: ConnectionEvents): Promise<void>;
   lookupContactAddress(address: string): Promise<ContactRegistration>;
   prepare(message: OutboundMessage, index: number, nativeId: string): Promise<PreparedWhatsAppSend>;
-  send(prepared: PreparedWhatsAppSend): Promise<void>;
+  send(prepared: PreparedWhatsAppSend): Promise<WhatsAppSendReceipt | void>;
   presence(chat: string, composing: boolean): Promise<void>;
   stop(): Promise<void>;
 }

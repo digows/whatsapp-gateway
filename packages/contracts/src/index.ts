@@ -39,6 +39,8 @@ export * from "./commands.ts";
 export * from "./contact-registration.ts";
 export * from "./desired-account.ts";
 export * from "./events.ts";
+export * from "./history.ts";
 export * from "./queries.ts";
+export * from "./remote-queries.ts";
 export * from "./streams.ts";
 export * from "./webhook-authentication.ts";

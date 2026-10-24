@@ -164,6 +164,23 @@ export interface StreamCursorTable
   claimed_sequence: number | null;
   lease_until: NullableTimestampColumn;
 }
+export interface MessageSnapshotTable
+{
+  workspace_id: string;
+  account_id: string;
+  chat_address: string;
+  message_id: string;
+  sender_address: string;
+  position: number;
+  direction: "INBOUND" | "OUTBOUND";
+  message: JsonColumn;
+  native: string | null;
+  occurred_at: TimestampColumn;
+  observed_at: TimestampColumn;
+  timestamp_source: "PROVIDER" | "GATEWAY_OBSERVATION";
+  edited: number;
+  deleted: number;
+}
 export interface GatewayTables
 {
   account: AccountTable;
@@ -182,6 +199,7 @@ export interface GatewayTables
   webhook_delivery: WebhookDeliveryTable;
   stream_receipt: StreamReceiptTable;
   stream_cursor: StreamCursorTable;
+  message_snapshot: MessageSnapshotTable;
 }
 export function jsonValue(value: unknown): unknown
 {

@@ -5,7 +5,11 @@ import {
   GatewayCommandResultSchema,
   GatewayCommandSchema,
   GatewayHttpErrorSchema,
+  GatewayMediaUploadResultSchema,
+  GatewayMediaUploadSchema,
   GatewayOperationResultSchema,
+  GatewayQueryResponseSchema,
+  GatewayQuerySchema,
 } from "@digows/whatsapp-gateway-contracts";
 import { z } from "zod";
 
@@ -48,6 +52,33 @@ export function createGatewayOpenApi()
     servers: [{ url: "/" }],
     security: [{ bearerAuth: [] }],
     paths: {
+      "/v1/media": {
+        post: {
+          operationId: "uploadMedia",
+          description:
+            "Bounded base64 upload to configured private object storage. Content plus metadata determines the scoped object key, so replay reuses the reference. No media bytes enter SQL. Requires configured media storage.",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: schemaReference("GatewayMediaUpload") } },
+          },
+          responses: {
+            "200": jsonResponse("Scoped private reference", "GatewayMediaUploadResult"),
+            ...errors,
+          },
+        },
+      },
+      "/v1/queries": {
+        post: {
+          operationId: "query",
+          description:
+            "Authorized read-only observations; available without local account ownership. Repeating a query may observe newer state. Media bytes are bounded base64 here; the binary GET route avoids that overhead.",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: schemaReference("GatewayQuery") } },
+          },
+          responses: { "200": jsonResponse("Scoped query result", "GatewayQueryResponse"), ...errors },
+        },
+      },
       "/v1/commands": {
         post: {
           operationId: "submitCommand",
@@ -156,6 +187,10 @@ export function createGatewayOpenApi()
     components: {
       securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
       schemas: {
+        GatewayMediaUpload: z.toJSONSchema(GatewayMediaUploadSchema, { io: "input" }),
+        GatewayMediaUploadResult: z.toJSONSchema(GatewayMediaUploadResultSchema, { io: "input" }),
+        GatewayQuery: z.toJSONSchema(GatewayQuerySchema, { io: "input" }),
+        GatewayQueryResponse: z.toJSONSchema(GatewayQueryResponseSchema, { io: "input" }),
         DesiredAccount: z.toJSONSchema(DesiredAccountSchema, { io: "input" }),
         DesiredAccountRequest: z.toJSONSchema(DesiredAccountRequestSchema, { io: "input" }),
         GatewayCommand: z.toJSONSchema(GatewayCommandSchema, { io: "input" }),

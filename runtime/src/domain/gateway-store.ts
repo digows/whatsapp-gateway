@@ -7,6 +7,7 @@ import type {
   OutboundMessage,
   SessionState,
 } from "@digows/whatsapp-gateway-contracts";
+import type { AcceptedOutboundPart } from "./accepted-outbound-part.ts";
 import type { PacingPolicy } from "./pacing.ts";
 import type { SendOperation } from "./send-operation.ts";
 export interface AuthenticationMutation
@@ -54,7 +55,7 @@ export interface GatewayStore
   acquire(accountId: string): Promise<AccountLease>;
   setState(lease: AccountLease, state: SessionState, nativeJid?: string, qr?: string): Promise<void>;
   reserve(lease: AccountLease, message: OutboundMessage, count: number): Promise<SendOperation>;
-  save(lease: AccountLease, operation: SendOperation): Promise<void>;
+  save(lease: AccountLease, operation: SendOperation, acceptedPart?: AcceptedOutboundPart): Promise<void>;
   operation(accountId: string, key: string): Promise<OperationResult>;
   readAuthentication(accountId: string, category: string, keyId: string): Promise<string | null>;
   writeAuthentication(lease: AccountLease, mutations: readonly AuthenticationMutation[]): Promise<void>;
@@ -63,7 +64,7 @@ export interface GatewayStore
   receipts(accountId: string, messageId: string): Promise<readonly DeliveryObservation[]>;
   retain(lease: AccountLease, message: InboundMessage, native: string): Promise<void>;
   retainFailure(lease: AccountLease, native: string, errorName: string): Promise<void>;
-  native(accountId: string, messageId: string): Promise<string>;
+  native(accountId: string, messageId: string, nativeChatId?: string): Promise<string>;
   hasSent(accountId: string, messageId: string): Promise<boolean>;
   materialized(accountId: string, sourceId: string): Promise<MediaReference | null>;
   materialize(
