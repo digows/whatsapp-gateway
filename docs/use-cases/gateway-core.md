@@ -1055,6 +1055,73 @@ Reproduction scripts and sanitized snapshots/results are retained under
 processes and native PostgreSQL storage. The temporary effect log only observes
 the controlled dispatch boundary and is not a consumer execution journal.
 
+### Separate durable Agent qualification and terminal-retention gap
+
+The separate public durable Agent path was examined after the generic-workflow
+gap. It has native execution fencing; the generic workflow result must not be
+attributed to durable Agent execution without testing that path.
+
+Released core 1.79.0 exposes `Agent.durable`, `generate`, `recover`, `resume`,
+`observe` and active-run recovery. Public tool contexts also expose typed
+`suspendPayload` / `resumeData`, so nonterminal prepared data can be represented
+without a private snapshot decoder. Those capabilities alone do not establish
+retention of a completed prepared reply and its authoritative execution outcome.
+
+The released `DurableAgent.settleExecution` calls `deleteRunSnapshots` for every
+non-suspended terminal status (`agent/durable/durable-agent.ts`, source lines
+2639–2665). It deletes both the outer and inner native workflow snapshots.
+`shouldPersistSnapshot` controls writes, not this deletion.
+`cleanupTimeoutMs: 0` disables automatic registry/cache cleanup, not terminal
+snapshot deletion. The inspected public `AgentDurableOption` and
+`CreateDurableAgentOptions` provide no terminal-snapshot retention switch.
+PostgreSQL age-based retention does not prevent an explicit deletion by Agent.
+
+A bounded proof used actual released Agent/Mastra/native storage on isolated
+PostgreSQL 18.6, core 1.79.0 and PostgreSQL adapter 1.32.0. It configured
+`durable: { cache: false, cleanupTimeoutMs: 0, shouldPersistSnapshot: () => true }`,
+with automatic recovery off so fresh processes explicitly invoked `recover`.
+Memory was disabled; no claim about memory-store fencing is inferred from this
+probe. The controlled model returned a complete structured BUTTONS
+`OutboundMessage`, validated by the actual gateway schema, with explicit
+consumer key, destination and choice identity. This exercises a complete reply
+representation, not only an unrelated text-generation run. It does not qualify
+production model policy, code-owned identity injection, media preparation or
+actual gateway/WhatsApp sends.
+
+Six fresh-process invocations completed in **19291.751708 ms**:
+
+- After obtaining complete reply A and observing native terminal cleanup, the
+  process exited 73 before dispatch. A fresh process configured with B called
+  `recover` and received `DURABLE_AGENT_RECOVER_SNAPSHOT_NOT_FOUND`; there were
+  no native workflow rows for that run.
+- The same happened after a controlled ACCEPTED effect followed by exit 74,
+  before a consumer receipt could be committed. This is a controlled dispatch
+  log, not evidence of a WhatsApp send.
+- A completion callback received the complete prepared object and then threw a
+  controlled notification-writer error. Agent returned, terminal snapshots were
+  deleted, and a fresh recovery again found no snapshot. Callback failure did
+  not preserve an authoritative outcome for later inspection.
+
+The callback-time observations still had native workflow rows; after terminal
+settlement all three cases had none. The final cases invoked the controlled
+model three times in total. Recovery did not fall back to fresh generation.
+Store inspection used public list/status reads, not private durable snapshot
+extraction or mutation. These results isolate the missing public terminal
+retention/reconciliation boundary for this direct Agent binding.
+
+The full prepared-plan/outcome requirement therefore remains unqualified on
+this path before a stale-owner/send-recovery matrix would establish a complete
+integration. This is not a finding that durable Agent has the generic workflow's
+obsolete-owner bug, nor proof that every possible public tool/memory composition
+is infeasible. No custom journal, fence propagation/store wrapper, core patch,
+implicit reply key or replacement backend was introduced to hide the gap.
+
+Evidence is retained under
+`/Volumes/Files/.tmp/codex-gateway-durable-agent-fy5fP1`: `agent-probe.mjs`,
+`terminal-probe.py`, `terminal-results.json` and `terminal-summary.json`. The
+consumer implementation remains incomplete pending resolution of the measured
+native boundaries; none of these probes changes published gateway behavior.
+
 ### Earlier custom SQLite proof and limits
 
 A temporary proof used the real released Agent/AgentChannels/Chat/Adapter and
