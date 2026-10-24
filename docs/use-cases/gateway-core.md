@@ -701,7 +701,7 @@ production rollout or real-number qualification.
 ## Proposed consumer reply recovery and run outcomes
 
 **Proposal, not implemented or part of the published guarantee.** The published
-`9e2e771` behavior and the native replay/run-acknowledgement limits above remain
+`9b872f4` behavior and the native replay/run-acknowledgement limits above remain
 unchanged. This follow-up concerns explicit consumer reply intent and observable
 execution outcomes, not a new gateway service, model runtime or transport.
 
@@ -724,7 +724,7 @@ error; a custom channel handler can await it and propagate failure. Chat **4.43.
 then propagates that custom-handler error through the Adapter's existing awaited
 intake, which returns HTTP 503 and leaves completion unmarked.
 
-### Recommended bounded composition
+### Consumer-handler alternative
 
 Use a consumer-owned durable handler through the existing public Mastra override.
 The smallest SDK-facing change would be an optional **proposed** `handlers`
@@ -785,6 +785,208 @@ and run-outcome boundaries, covering inner stream failures and the relevant
 render drivers. They must permit caller-owned identity and durable commit before
 effects. Those are proposed new capabilities, not existing 1.79.0 APIs. Neither
 calling private methods nor wrapping `defaultHandler` is an acceptable substitute.
+
+### Native-framework alternative preserving channel dispatch
+
+**Proposed design, not an existing API, approved implementation or qualified
+durability guarantee.** Prefer this alternative if preserving the native pipeline
+is the decision. Keep the handler override above as an explicit alternative;
+its controlled proof does not select it for consumers.
+
+#### Released source and existing mechanisms
+
+The source analysis uses installed `@mastra/core` **1.79.0** and Chat **4.43.0**,
+with gateway baseline `9b872f4420f943f28a83b1f83d4d2d61489a8115`. Original Mastra
+source is available in the installed `agent-tuAMgHe3.js.map` and
+`create-durable-agent-l1hhnZ_V.js.map`; the paths below are relative to
+`packages/core/src` in Mastra, not new gateway files.
+
+| Existing boundary | Verified behavior and consequence |
+| --- | --- |
+| `channels/agent-channels.ts`, `dispatchInboundMessage` (released source lines 306–357) | `sendMessage().accepted` distinguishes wake from delivery into an existing run. The public `SendAgentSignalAccepted` union carries the authoritative run ID for wake/deliver/blocked; persist/discard have no run. The awakened output is consumed, with consumption errors logged and caught. A delivered signal can join a remotely owned run. |
+| `channels/output-processor.ts`, `ChatChannelOutputProcessor.processOutputStream` (165–206) | Enqueues chunks for a background render driver, awaits it at terminal step/error/abort, then logs and catches driver failure. Its render session/queue are process-local. The internal render request-context key is not a public durable delivery contract. |
+| `channels/chat-driver-static.ts`, `flushText`; `channels/stream-helpers.ts`, `postFileAttachment`, `postStreamError`, `postTripwire`, `editOrPostMessage` | Native output can post text before the run ends, post files/errors/approvals, and edit an earlier card or fall back to another post. Several helpers catch delivery errors. Buffering only a final answer cannot cover these effects or recover their message IDs. |
+| `channels/chat-driver-streaming.ts` | Has additional incremental post/edit behavior. The gateway's qualified Mastra example selects `streaming: false`, `toolDisplay: "hidden"`, plain text and concurrent intake. Streaming support is not implicitly qualified by a static-driver change. |
+| `agent/agent.types.ts`, `AgentExecutionOptionsBase`; `loop/types.ts`, `LoopConfig`; `stream/types.ts`, `MastraOnFinishCallbackArgs` | Existing `onChunk`, `onError`, `onFinish`, `onAbort` callbacks can observe model execution independently of webhook status. Finish includes optional run ID, finish reason and error; `onError` exposes only error and `onAbort` steps/text. A callback completion is not a durable commit. |
+| `processors/index.ts`, `Processor` | A public output-stream processor sees chunks, including their run ID. An output-result processor sees the resolved result. Neither is a prepared Chat message sink: native formatting, splitting and edit/post selection occur in the drivers. `processAPIError` addresses an LLM API error phase, not all terminal failures. Replacing the internal render processor by its reserved ID would duplicate native rendering. |
+| `agent/durable/stream-adapter.ts` (599–669) | Existing durable stream lifecycle translates terminal error finishes into `onError`, including inner LLM error details. It awaits callbacks but catches/logs callback exceptions. Failing an outcome writer there cannot be treated as a guaranteed retry or fail-closed commit. |
+| `observability/types/core.ts`, `ObservabilityExporter`; durable `run-registry.ts`, `endRunSpansWithError` | Existing tracing/export hooks and error spans support diagnosis. Export/drop handling and tracing are not the authoritative execution/delivery ledger. A successful transport ACK may coexist with a failed, attributable run. |
+
+Core 1.79.0 already exposes `AgentConfig.durable` / `AgentDurableOption`,
+`Agent.recover`, `listActiveRuns`, `recoverActiveRuns`, `observe` and `prepare`.
+Durable execution uses existing workflow snapshots and execution claims; it is
+not necessary to invent a parallel run journal merely to obtain these concepts.
+`storage/domains/workflows/base.ts`, `WorkflowsStorage`, exposes snapshot
+load/persist, run lookup, state/result updates and ownership claim/renew/release.
+`supportsRunFencing()` explicitly concerns atomic rejection of stale workflow
+writes; fencing memory is a separate capability. These do not fence a remote
+WhatsApp effect by themselves.
+
+Do not assume `durable: true` enables the required checkpoint policy. The released
+`DurableAgent.resolveShouldPersistSnapshot` default persists pending/paused/
+suspended states, with running checkpoints conditional on automatic recovery or
+shutdown. Its predicate does not select terminal statuses. A consumer must select
+and qualify persistence of the running preparation checkpoints and terminal
+outcomes needed here, using the existing `shouldPersistSnapshot` option. A
+retained stream cache is not a substitute. No selected consumer backend, retention
+policy or durable channel-effect checkpoint binding has been qualified in this
+design exercise.
+
+#### Smallest proposed extension and actual durable binding
+
+Keep default `AgentChannels` intake, thread/resource resolution, skipped-message
+batching, lazy media policy, signal wake/deliver, native rendering and approval/
+decline continuations. Add an awaited effect boundary at the existing render
+drivers/helpers, after their platform message is prepared and before post/edit.
+Keep the qualified static profile; do not enable streaming or additional platform
+controls as part of this correction.
+
+The following names and signatures are **proposals**, not released APIs:
+
+- Optional `ChannelAdapterConfig.delivery: ChannelDeliveryBinding`, with named
+  types `ChannelEffect`, `ChannelEffectContext`, `PreparedChannelEffect` and
+  `ChannelDeliveryReceipt` exported from `@mastra/core/channels`.
+- `ChannelConfig.onSignalAccepted(admission: ChannelSignalAdmission): Promise<void>`
+  exposes the existing signal decision, contributing input identities and actual
+  run ID where one exists. The native durable association must precede this
+  notification and remain queryable if the callback fails. Notification failure
+  cannot roll back an already admitted signal or justify starting another run.
+- `resolveKey(context: ChannelEffectContext): Promise<string>` lets the consumer
+  supply its existing stable reply/effect identity. Context includes agent/run,
+  execution segment, thread/resource/platform, contributing signal IDs and a
+  persisted logical output slot. Approval/tool slots include the tool-call ID
+  and phase; edits include their original target. A random retry ID, text hash,
+  one key per whole run or a reset process-local counter is insufficient.
+- `prepare(effect: ChannelEffect, context: ChannelEffectContext): Promise<PreparedChannelEffect>`
+  performs the consumer's platform conversion. The returned versioned,
+  serializable plan contains the exact gateway `OutboundMessage`, assigned key,
+  destination and stable media references in consumer-owned opaque data. Core
+  must not import gateway contracts. Functions, streams, expiring fetch closures
+  and live Chat objects are not stored as a plan.
+- `deliver(prepared: PreparedChannelEffect, context: ChannelEffectContext): Promise<ChannelDeliveryReceipt>`
+  executes the stored plan and returns original platform IDs plus an explicit
+  accepted/failed/unknown send outcome. It must not call ordinary fresh-key
+  `postMessage` or render/generate again. The receipt supplies the handle native
+  approval tracking and subsequent edits already require.
+
+The port alone is insufficient. Bind it to **native Mastra durable workflow work
+and storage**, with the following ordering and recovery behavior:
+
+1. Persist the consumer input/intent association, signal admission and actual run
+   association. A deliver action associates another input with the existing run;
+   it does not create an independent model run or imply one reply per input.
+   Native channel dispatch needs an awaited, attributable admission boundary for
+   this association; the current void default handler does not expose its local
+   accepted result to a wrapper.
+2. Give each rendered effect a durable logical slot in native execution state.
+   Resolve its key, prepare its complete plan, then checkpoint that plan with
+   ownership fencing **before** external delivery. Recovery loads that slot
+   before rerendering or advancing generation; an existing plan wins over a newly
+   generated candidate. Snapshot persistence must encompass this channel work,
+   not just an unrelated completed LLM step. Preserve rendered output/slot state
+   and approval handles across suspension and process restart.
+3. Invoke delivery from the persisted plan and checkpoint the receipt. A crash
+   after gateway ACCEPTED but before that checkpoint repeats the same key and
+   payload and obtains the original native IDs. A changed payload conflicts.
+   UNKNOWN holds that slot unresolved; recovery must not create another key,
+   advance it as accepted or silently use an edit-to-post fallback. A failed
+   preparation/checkpoint prevents the associated outbound effect.
+4. Recover pending channel work through the consumer's existing native Mastra
+   recovery ownership, with store capabilities verified for that backend.
+   `WorkflowsStorage.updateWorkflowResults` can atomically persist a step result
+   with workflow state and accepts a fence; it is a useful existing primitive,
+   not permission to mutate private durable-agent snapshots from consumer code.
+   Core must integrate the new channel work into its declared workflow state,
+   checkpoint/recovery and pruning rules. Existing declarations do not establish
+   that this integration is already present.
+5. Expose durable run outcome separately from all delivery receipts and intake
+   ACK. Retain current public lifecycle callbacks for notification; extend their
+   existing error/abort payloads with attributable run/segment identity instead
+   of adding a second general terminal-callback system. Persist error/abort/
+   success in native execution state before relying on notification; reconcile
+   missed notifications from that state. Suspension is resumable, not terminal
+   success. Delivery failure is not automatically model failure, and a model
+   failure can follow an already accepted partial reply.
+
+This requires a framework checkpoint/state integration as well as the public
+delivery seam. The exact representation of channel slots in the durable loop,
+atomic admission-to-run association and restoration before resumed rendering
+remain implementation-design questions for the framework owner. There is no
+verified public 1.79.0 hook that supplies all three. If native workflow storage
+cannot support this binding on the selected backend, return that concrete gap
+for decision before selecting a separate durable store. Do not silently install
+the temporary proof's journal.
+
+#### Ownership, package changes and compatibility
+
+| Owner | Bounded changes required by this alternative |
+| --- | --- |
+| Gateway Adapter | In `packages/chat-adapter/src/adapter.ts`, separate existing `postWithKey` conversion/media preparation from sending, expose preparation and replay through `executeWithKey`, and return Chat-compatible message handles from accepted receipts. Preserve complete rich/quoted/media payloads. Preparation uploads need stable persisted references; durable recovery cannot depend on refetching a changed URL. No implicit reply-key policy belongs in `postMessage`. Update `src/index.ts`, the existing Mastra example and focused Adapter tests for this binding. No gateway service/table or command-schema change is selected. |
+| Mastra `@mastra/core` channels | Extend `channels/types.ts` and `channels/index.ts` with the proposed binding/types; wire attributable admission and renderer context in `channels/agent-channels.ts`, the awaited effect lifecycle in `channels/output-processor.ts`, static driver and shared helpers. Preserve approval/decline paths and error/tripwire/file sends through that boundary. Audit the streaming driver to prevent a configured binding silently bypassing it; implementing streaming durability is outside the currently qualified profile. |
+| Mastra `@mastra/core` execution | Extend existing lifecycle payloads in `loop/types.ts`, `stream/types.ts` and durable stream types/adapter as needed for run/segment attribution. Add native channel preparation/delivery checkpoints and restoration to `agent/durable/types.ts`, `workflows/shared/schemas.ts`, `workflows/durable-loop-builder.ts` and their owning finalize/recovery paths in `durable-agent.ts` / `stream-adapter.ts`. Keep claims, state updates and outcome persistence in the existing workflow/storage mechanism. These are affected boundaries, not an assertion that changing only those files completes the fix. |
+| Consumer application | Bind explicit workspace/account/input/run/effect identity, existing durable Mastra storage with verified fencing, checkpoint/terminal retention and recovery configuration, media plan serialization and authoritative gateway outcome reconciliation. Supply the concrete binding, not an interface-only placeholder. No Jarvix workflow/domain reconstruction is authorized by this design. |
+
+Today the Adapter already accepts explicit complete gateway commands through
+`executeWithKey` and explicit keys through `postWithKey`. Separating preparation
+from send can be implemented within the Adapter once this design is selected.
+The Adapter cannot reconstruct native run identity, swallowed model errors or
+durable render slots from an ordinary Chat `postMessage` call alone; the native
+guarantee therefore cannot be completed as an Adapter-only change.
+
+The inspected local fork was clean at
+`313656f46c7ff8b35a737c405a02f4a31227fdc5`, whose core package declares
+**1.80.0-alpha.2**. Source comparison against installed 1.79.0 found identical
+static/streaming drivers but differences in `agent-channels.ts`, output/context
+processors, stream helpers and durable execution files. In particular the fork
+has separate durable channel dispatch-target wiring (`__setDispatchAgent`) absent
+from the released channel source. This is source evidence, not qualification of
+the fork or proof that every durable channel path is incorrect in 1.79.0.
+
+A patch on fork main is therefore a **new consumer framework version**, not a
+transparent patch to the qualified 1.79.0 package. Select either a reviewed
+backport against released 1.79 or the fork version with fresh consumer
+qualification and locked package/artifact identity. Do not change the standalone
+gateway runtime's dependency boundary or claim its published image incorporates
+a consumer-only framework patch. Chat 4.43.0 need not change for the proposed
+Mastra-to-Adapter binding; that remains to be verified by its integration tests.
+
+#### Comparison and acceptance required before implementation is complete
+
+| Alternative | Native behavior | Durability and outcome work |
+| --- | --- | --- |
+| Existing public custom handler | Replaces signal dispatch and automatic media/render/approval continuation policy. Feasibility measured by the temporary proof below. | Consumer must provide a production durable execution binding, claims and recovery. No core patch; not approved as a transparent replacement. |
+| Proposed native binding | Preserves default signal wake/deliver, thread/media policy, rendering and approval continuation. No behavior-preservation test has run yet. | Requires core channel/workflow extensions, concrete Adapter conversion/delivery binding and configured consumer native durable storage/recovery. Prefer existing Mastra execution state over a parallel journal. |
+
+Required controlled qualification for the selected implementation:
+
+1. Crash after plan checkpoint/before send and after gateway ACCEPTED/before
+   receipt checkpoint. Fresh-process recovery reuses the exact plan/key/native
+   IDs, does not rerun completed generation for that plan and produces one native
+   effect even if the model is configured to return different output.
+2. Concurrent intake, two inputs joining one run, competing recovery owners and
+   ownership loss during preparation/delivery. Durable slots cannot collide;
+   stale owners cannot commit new plans/receipts. Concurrent sends for an already
+   committed slot use the same gateway key. Thread/run associations remain
+   attributable across remote deliver, suspension and resumed approval/denial.
+3. Store failure before preparation commit causes no outbound effect; failure
+   after an effect remains recoverable. UNKNOWN never starts a new automatic
+   send/key. Payload/target/media conflict is explicit. Restoring a pending edit
+   does not silently produce a fresh post on ambiguous delivery.
+4. Inner model error, setup failure, abort, tool suspension and render failure
+   yield distinct observable outcomes with input/signal/run/segment attribution.
+   A failure before a run exists is attributed to its input/admission attempt;
+   do not fabricate a run ID or report an unstarted run as failed execution.
+   Test a successful intake ACK with a persisted failed run as a valid case;
+   test a missed/failed lifecycle callback reconciled from durable state. No
+   fabricated successful run or dependency on synchronous model completion.
+5. Preserve actual static plain output, intermediate text flushes, lazy inbound
+   media, rich files/choices/quotes and approval handles through restart. Exercise
+   multiple outputs per run and parallel same-tool approvals. If another render
+   profile is selected later, qualify its effects separately.
+
+These are acceptance criteria for the requested correction, not results of this
+source-only analysis. No native hook, storage binding or framework patch has
+been implemented, and the 126-test published baseline does not validate them.
 
 ### Measured temporary proof and limits
 
