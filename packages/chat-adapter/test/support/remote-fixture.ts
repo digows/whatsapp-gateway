@@ -58,7 +58,12 @@ export class RemoteFixture
   {
     this.directory = await mkdtemp(join(temporaryRoot!, "gateway-sdk-"));
     const configuration = engine === "sqlite"
-      ? { engine, mode: "local" as const, filename: join(this.directory, "sdk.sqlite") }
+      ? {
+        engine,
+        workspaceId: this.workspaceId,
+        mode: "local" as const,
+        filename: join(this.directory, "sdk.sqlite"),
+      }
       : { engine, mode: "cluster" as const, url: postgresUrl! };
     await migrateGatewayStorage(configuration);
     this.storage = await openGatewayStorage(configuration);

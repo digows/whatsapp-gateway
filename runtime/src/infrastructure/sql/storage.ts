@@ -1,3 +1,4 @@
+import { GatewayIdentifierSchema } from "@digows/whatsapp-gateway-contracts";
 import Database from "better-sqlite3";
 import { Kysely, PostgresDialect, sql, SqliteDialect } from "kysely";
 import { closeSync, constants, fstatSync, openSync } from "node:fs";
@@ -13,16 +14,17 @@ import type { GatewayTables } from "./tables.ts";
 const SqliteConfigurationSchema = z.strictObject({
   engine: z.literal("sqlite"),
   filename: z.string().min(1),
+  workspaceId: GatewayIdentifierSchema,
   mode: z.enum(["local", "cluster"]),
 }).refine(value => value.mode === "local", "SQLite supports local mode only");
-const PostgresConfigurationSchema = z.strictObject({
+export const PostgresStorageConfigurationSchema = z.strictObject({
   engine: z.literal("postgresql"),
   url: z.string().min(1),
   mode: z.enum(["local", "cluster"]),
 });
 export const StorageConfigurationSchema = z.discriminatedUnion("engine", [
   SqliteConfigurationSchema,
-  PostgresConfigurationSchema,
+  PostgresStorageConfigurationSchema,
 ]);
 export type StorageConfiguration = z.infer<typeof StorageConfigurationSchema>;
 export type StorageEngine = StorageConfiguration["engine"];
@@ -77,12 +79,14 @@ const tenantTables = [
   "stream_cursor",
   "message_snapshot",
 ];
-const schemaVersion = 8;
+const schemaVersion = 9;
+type SqliteDatabase = InstanceType<typeof Database>;
 
 export class GatewayStorage
 {
   readonly database: Kysely<GatewayTables>;
   readonly engine: StorageEngine;
+  private readonly sqlite: SqliteDatabase | undefined;
   private readonly leases = new Map<string, AccountLease | null>();
   private closing: Promise<void> | undefined;
   private readonly acquisitions = new Set<Promise<AccountLease>>();
@@ -91,6 +95,7 @@ export class GatewayStorage
     this.engine = configuration.engine;
     if (configuration.engine === "postgresql")
     {
+      this.sqlite = undefined;
       const pool = new pg.Pool({
         connectionString: configuration.url,
         max: 8,
@@ -118,10 +123,12 @@ export class GatewayStorage
       {
         sqlite.pragma("foreign_keys = ON");
         sqlite.pragma("locking_mode = EXCLUSIVE");
+        assertSqliteWorkspace(sqlite, configuration.workspaceId, false);
         sqlite.pragma("journal_mode = WAL");
         // Retain the OS-backed exclusive file lock for this runtime's connection lifetime.
         sqlite.exec("BEGIN EXCLUSIVE; COMMIT;");
         this.database = new Kysely<GatewayTables>({ dialect: new SqliteDialect({ database: sqlite }) });
+        this.sqlite = sqlite;
       }
       catch (error)
       {
@@ -129,6 +136,16 @@ export class GatewayStorage
         throw error;
       }
     }
+  }
+  validateWorkspace(workspaceId: string): string
+  {
+    if (this.closing) throw new Error("Storage is closed");
+    const canonical = GatewayIdentifierSchema.parse(workspaceId);
+    if (this.configuration.engine === "sqlite" && canonical !== this.configuration.workspaceId)
+    {
+      throw new Error("SQLite storage belongs to a different workspace");
+    }
+    return canonical;
   }
   workspace(workspaceId: string): SqlGatewayStore
   {
@@ -363,6 +380,10 @@ export class GatewayStorage
         cause: error,
       });
     }
+    if (this.sqlite && this.configuration.engine === "sqlite")
+    {
+      assertSqliteWorkspace(this.sqlite, this.configuration.workspaceId, true);
+    }
   }
   owns(lease: AccountLease): boolean
   {
@@ -371,6 +392,7 @@ export class GatewayStorage
   async acquire(store: SqlGatewayStore, accountId: string): Promise<AccountLease>
   {
     if (this.closing) throw new Error("Storage is closed");
+    this.validateWorkspace(store.workspaceId);
     const acquisition = this.acquireResource(store, accountId);
     this.acquisitions.add(acquisition);
     try
@@ -492,6 +514,7 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
     {
       database.pragma("foreign_keys = ON");
       database.pragma("locking_mode = EXCLUSIVE");
+      assertSqliteWorkspace(database, configuration.workspaceId, false);
       const exists = database.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'",
       ).get();
@@ -561,11 +584,26 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
           ),
         );
       }
+      const workspaceVersion: unknown = database.prepare("SELECT version FROM schema_version").get();
+      if (z.object({ version: z.literal(8) }).safeParse(workspaceVersion).success)
+      {
+        const migration = await readFile(
+          new URL("../../../migrations/sqlite/008_workspace_binding.sql", import.meta.url),
+          "utf8",
+        );
+        database.transaction(() =>
+        {
+          database.exec(migration);
+          database.prepare("INSERT INTO workspace_binding(singleton,workspace_id) VALUES (1,?)")
+            .run(configuration.workspaceId);
+        })();
+      }
       const row: unknown = database.prepare("SELECT version FROM schema_version").get();
       if (z.object({ version: z.literal(schemaVersion) }).safeParse(row).success === false)
       {
         throw new Error("Unsupported SQLite schema version");
       }
+      assertSqliteWorkspace(database, configuration.workspaceId, true);
     }
     finally
     {
@@ -634,6 +672,13 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
         await readFile(new URL("../../../migrations/008_message_history.sql", import.meta.url), "utf8"),
       );
     }
+    const workspaceVersion = await connection.query("SELECT version FROM gateway.schema_version");
+    if (workspaceVersion.rows.length === 1 && workspaceVersion.rows[0]?.version === 8)
+    {
+      await connection.query(
+        await readFile(new URL("../../../migrations/009_workspace_storage.sql", import.meta.url), "utf8"),
+      );
+    }
     const version = await connection.query("SELECT version FROM gateway.schema_version");
     if (version.rows.length !== 1 || version.rows[0]?.version !== schemaVersion)
     {
@@ -643,6 +688,39 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
   finally
   {
     await connection.end();
+  }
+}
+function assertSqliteWorkspace(database: SqliteDatabase, workspaceId: string, requireBinding: boolean): void
+{
+  const bindingTable = database.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_binding'",
+  ).get();
+  if (bindingTable)
+  {
+    const rows: unknown = database.prepare("SELECT singleton,workspace_id FROM workspace_binding").all();
+    const bindings = z.array(z.object({ singleton: z.literal(1), workspace_id: GatewayIdentifierSchema }))
+      .length(1).safeParse(rows);
+    if (!bindings.success || bindings.data[0]?.workspace_id !== workspaceId)
+    {
+      throw new Error("SQLite file belongs to a different workspace or has invalid workspace metadata");
+    }
+  }
+  else if (requireBinding)
+  {
+    throw new Error("SQLite workspace binding is missing; apply migrations explicitly");
+  }
+  for (const table of tenantTables)
+  {
+    if (!database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table))
+    {
+      continue;
+    }
+    if (database.prepare(`SELECT 1 FROM "${table}" WHERE workspace_id<>? LIMIT 1`).get(workspaceId))
+    {
+      throw new Error(
+        "SQLite file contains data for a different workspace; no automatic conversion is supported",
+      );
+    }
   }
 }
 function compareVersion(left: string, right: string): number

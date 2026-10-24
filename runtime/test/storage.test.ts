@@ -38,7 +38,12 @@ if (!temporaryRoot || !postgresUrl) throw new Error("Explicit owned temporary ro
 test("storage configuration rejects SQLite cluster mode and unsupported engines before connecting", async () =>
 {
   await assert.rejects(
-    openGatewayStorage({ engine: "sqlite", filename: ":memory:", mode: "cluster" }),
+    openGatewayStorage({
+      engine: "sqlite",
+      filename: ":memory:",
+      workspaceId: randomUUID(),
+      mode: "cluster",
+    }),
     /SQLite.*local/,
   );
   await assert.rejects(openGatewayStorage({ engine: "mysql", url: "unused", mode: "local" }), /engine/);
@@ -49,6 +54,7 @@ test("SQLite requires a versioned schema and an exclusive local runtime; reopen 
   const directory = await mkdtemp(join(temporaryRoot, "gateway-storage-"));
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId: randomUUID(),
     filename: join(directory, "gateway.sqlite"),
     mode: "local",
   };
@@ -79,12 +85,19 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} real driver isolates workspace/account state and preserves UNKNOWN across restart`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, `gateway-${engine}-`));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "gateway.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "gateway.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     let storage = await openMigrated(configuration);
-    const workspaceId = randomUUID();
     const otherWorkspaceId = randomUUID();
+    const otherStorage = configuration.engine === "sqlite"
+      ? await openMigrated({
+        ...configuration,
+        workspaceId: otherWorkspaceId,
+        filename: join(directory, "other.sqlite"),
+      })
+      : undefined;
     const accountId = randomUUID();
     const otherAccountId = randomUUID();
     const sockets: ControlledConnection[] = [];
@@ -92,7 +105,7 @@ for (const engine of ["sqlite", "postgresql"] as const)
     try
     {
       const store = storage.workspace(workspaceId);
-      const other = storage.workspace(otherWorkspaceId);
+      const other = (otherStorage ?? storage).workspace(otherWorkspaceId);
       await store.createAccount(accountId);
       await store.createAccount(otherAccountId);
       await other.createAccount(accountId);
@@ -183,6 +196,7 @@ for (const engine of ["sqlite", "postgresql"] as const)
     {
       await gateway?.close();
       await storage.close();
+      await otherStorage?.close();
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -198,6 +212,7 @@ test("SQLite schema incompatibility is rejected even when the file opens", async
   const directory = await mkdtemp(join(temporaryRoot, "gateway-invalid-schema-"));
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId: randomUUID(),
     filename: join(directory, "gateway.sqlite"),
     mode: "local",
   };
@@ -224,12 +239,13 @@ test("SQLite schema incompatibility is rejected even when the file opens", async
 test("SQLite OS file ownership survives competing processes and releases after a killed owner", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-process-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "gateway.sqlite"),
     mode: "local",
   };
-  const workspaceId = randomUUID();
   const accountId = randomUUID();
   const moduleUrl = new URL("../src/infrastructure/sql/storage.ts", import.meta.url).href;
   try
@@ -351,6 +367,7 @@ test("SQLite authentication files reject public permissions and symbolic-link al
   const directory = await mkdtemp(join(temporaryRoot, "gateway-private-file-"));
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId: randomUUID(),
     filename: join(directory, "gateway.sqlite"),
     mode: "local",
   };
@@ -377,12 +394,15 @@ test("SQLite stores real Baileys authentication through 515/restart and replays 
   const directory = await mkdtemp(join(temporaryRoot, "gateway-sqlite-native-"));
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId: randomUUID(),
     filename: join(directory, "gateway.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const store = storage.workspace(randomUUID());
+  const store = storage.workspace(
+    configuration.engine === "sqlite" ? configuration.workspaceId : randomUUID(),
+  );
   const sockets: NativeSocketFixture[] = [];
   const connections: BaileysConnection[] = [];
   const gateway = new Gateway(store, (_account, lease) =>

@@ -41,7 +41,7 @@ export class SqlGatewayStore implements GatewayStore
   readonly workspaceId: string;
   constructor(protected readonly storage: GatewayStorage, workspaceId: string)
   {
-    this.workspaceId = GatewayIdentifierSchema.parse(workspaceId);
+    this.workspaceId = storage.validateWorkspace(workspaceId);
   }
   async transaction<Result>(work: (transaction: GatewayTransaction) => Promise<Result>): Promise<Result>
   {

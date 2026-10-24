@@ -32,12 +32,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} observed history orders provider time, scopes cursors and retains accepted outbound identity`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-history-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "history.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "history.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     let storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const accountId = randomUUID();
     const store = storage.workspace(workspaceId);
     const socket = new ControlledConnection();
@@ -107,13 +107,26 @@ for (const engine of ["sqlite", "postgresql"] as const)
         }),
         /cursor.*scope/i,
       );
-      assert.deepEqual(
-        await new SqlGatewayHistory(storage.workspace(randomUUID())).page({
-          ...scope,
-          workspaceId: randomUUID(),
-        }).catch(() => null),
-        null,
-      );
+      const foreignWorkspaceId = randomUUID();
+      const foreignConfiguration = configuration.engine === "sqlite"
+        ? { ...configuration, workspaceId: foreignWorkspaceId, filename: join(directory, "foreign.sqlite") }
+        : configuration;
+      if (foreignConfiguration.engine === "sqlite") await migrateGatewayStorage(foreignConfiguration);
+      const foreignStorage = await openGatewayStorage(foreignConfiguration);
+      try
+      {
+        assert.deepEqual(
+          await new SqlGatewayHistory(foreignStorage.workspace(foreignWorkspaceId)).page({
+            ...scope,
+            workspaceId: randomUUID(),
+          }).catch(() => null),
+          null,
+        );
+      }
+      finally
+      {
+        await foreignStorage.close();
+      }
       const edit = {
         ...inbound,
         contentKind: "EDIT" as const,
@@ -163,12 +176,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
     const redisUrl = process.env["GATEWAY_TEST_REDIS_URL"];
     assert.ok(redisUrl);
     const directory = await mkdtemp(join(temporaryRoot, "gateway-query-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "queries.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "queries.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const accountId = randomUUID();
     const store = storage.workspace(workspaceId);
     await store.createAccount(accountId);

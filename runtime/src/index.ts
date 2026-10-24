@@ -67,3 +67,11 @@ export {
 } from "./infrastructure/redis/transport.ts";
 export { SqlGatewayHistory } from "./infrastructure/sql/history.ts";
 export { SqlRedisStreamStore } from "./infrastructure/sql/redis-stream-store.ts";
+
+export {
+  type GatewayRuntimeStorageConfiguration,
+  GatewayRuntimeStorageConfigurationSchema,
+  gatewayWorkspaceStorageConfiguration,
+  migrateGatewayRuntimeStorage,
+  verifyGatewayRuntimeStorage,
+} from "./application/configuration/storage-configuration.ts";

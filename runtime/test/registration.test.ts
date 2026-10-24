@@ -75,12 +75,13 @@ test("account-scoped contact lookup preserves native identity and explicit negat
   const directory = await mkdtemp(join(temporaryRoot, "gateway-registration-"));
   const configuration = {
     engine: "sqlite",
+    workspaceId: randomUUID(),
     filename: join(directory, "gateway.sqlite"),
     mode: "local",
   } as const;
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const store = storage.workspace(randomUUID());
+  const store = storage.workspace(configuration.workspaceId);
   const account = await store.createAccount();
   let socket: NativeSocketFixture | undefined;
   let connection: BaileysConnection | undefined;

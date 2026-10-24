@@ -23,13 +23,16 @@ identity, not application Person, Household or Case policy.
 ## Storage selection and startup
 
 `StorageConfigurationSchema` accepts only the implemented `sqlite` and `postgresql` engines.
-SQLite requires a durable local filename and `mode: local`; PostgreSQL accepts local or shared
+The standalone SQLite configuration requires a local `directory` and `mode: local`. Each configured
+workspace resolves to `<directory>/<canonical-workspace-id>.sqlite`, shared by all of its accounts.
+The low-level SQLite storage configuration explicitly selects `filename` and `workspaceId`; it cannot
+serve a second workspace. PostgreSQL accepts local or shared
 cluster mode and is currently qualified against PostgreSQL 18. Another Kysely dialect is not a
 supported backend. Changing configuration does not transfer data between engines.
 
 `migrateGatewayStorage()` is an explicit administrative step. PostgreSQL uses the immutable
-`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` `005_public_events.sql` `006_webhook_outbox.sql`, `007_redis_streams.sql` and `008_message_history.sql`; SQLite uses
-`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` `004_public_events.sql` `005_webhook_outbox.sql`, `006_redis_streams.sql` and `007_message_history.sql`. Schema version metadata is intentionally system-level,
+`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` `005_public_events.sql` `006_webhook_outbox.sql`, `007_redis_streams.sql`, `008_message_history.sql` and `009_workspace_storage.sql`; SQLite uses
+`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` `004_public_events.sql` `005_webhook_outbox.sql`, `006_redis_streams.sql`, `007_message_history.sql` and `008_workspace_binding.sql`. Schema version metadata is intentionally system-level,
 not tenant-owned. Unknown versions fail instead of being reset. Migration does not convert legacy
 authentication directories or old deployments. PostgreSQL migration calls serialize on an advisory lock.
 
@@ -41,11 +44,33 @@ needed by the implemented queries. Invalid combinations fail explicitly and rele
 
 SQLite requires a private regular database file (0600) and rejects symbolic links or group/other
 access. It retains an OS-backed exclusive lock for the runtime's database connection lifetime. A second
-runtime/process cannot open that file concurrently; process death releases the OS lock. Multiple
-workspaces/accounts share the one storage instance through `storage.workspace(workspaceId)`. SQLite
+runtime/process cannot open that file concurrently; process death releases the OS lock. All accounts for the selected workspace share its storage instance through
+`storage.workspace(workspaceId)`. Another workspace is rejected, including direct scoped-store
+construction or lease acquisition through a foreign workspace's store. Separate workspace files can have independent local owners. SQLite
 WAL files are local, never a cross-host/shared-filesystem ownership mechanism. PostgreSQL preserves
 its dedicated account advisory locks and generation fences. Cluster participants coordinate over shared PostgreSQL; the local SQLite participant remains under
-the exclusive file owner. Runtime membership and desired state also retain explicit workspace keys.
+each exclusive workspace-file owner. Runtime membership and desired state also retain explicit workspace keys.
+
+Schema 9 binds each SQLite file to one canonical workspace in a singleton
+`workspace_binding` metadata table. The runner creates that metadata, inserts the selected workspace
+and advances the schema marker in one transaction. Startup verifies the binding and tenant row
+scope without adopting another workspace. PostgreSQL schema 9 advances its shared schema marker;
+its RLS/cluster behavior remains unchanged. File identity metadata is local storage metadata, not a
+replacement for principal/account authorization or PostgreSQL RLS.
+
+The runtime opens one SQLite resource per configured workspace and one shared PostgreSQL resource.
+Migration/verification helpers and CLI use the same canonical resolver; migration creates the selected
+directory privately when absent. Startup does not migrate files. Failure on a later workspace closes
+resources already opened; shutdown drains all workspace participants before closing their storage.
+Each versioned migration commits within one file. A multi-version upgrade or migration across
+workspace files is not one transaction; already completed steps can remain after a later failure.
+
+The published global SQLite operator `filename` setting is rejected by the new directory configuration.
+No existing data is automatically split, moved or deleted. An explicit low-level migration can bind
+an existing single-workspace file to the selected ID while preserving accounts/authentication; it
+rejects other-workspace tenant rows before schema changes. A mixed-workspace legacy file requires a
+separately planned explicit data migration; no converter is provided by this change. The operator
+must choose the source/destination layout rather than the runtime guessing from existing rows.
 
 Apply migrations with an administrative role; grant the PostgreSQL runtime role schema usage and
 SELECT/INSERT/UPDATE/DELETE on its tables. The runtime does not silently migrate on startup.
@@ -266,7 +291,7 @@ participant; capacity is not a claimed shared host-resource or cross-workspace g
 
 A reconciliation pass elects one coordinator using a workspace-specific PostgreSQL transaction
 advisory lock. Leadership lasts only for that transaction and is released on commit/rollback or
-connection loss. Followers skip placement for the occupied pass. SQLite's one exclusive runtime
+connection loss. Followers skip placement for the occupied pass. SQLite's exclusive runtime owner for each workspace file
 performs its local placement without a distributed-election claim. The coordinator retains healthy,
 non-draining assignments first, then selects least-loaded eligible peers within capacity. New peers
 do not cause unnecessary migration of existing sessions. Excess accounts remain unassigned.
@@ -609,7 +634,7 @@ consumer archive. OpenAPI and AsyncAPI describe the common owning schemas.
 ## Standalone runtime and distribution
 
 `GatewayRuntimeConfigurationSchema` owns the strict JSON operator contract. `GatewayRuntime` opens
-and verifies the selected storage, creates per-workspace gateways, ingress/query services, embedded
+and verifies each selected SQLite workspace file or the shared PostgreSQL storage, creates per-workspace gateways, ingress/query services, embedded
 fleet participants and optional Redis/webhook loops. Configuration is external and explicit through
 `--config` or `GATEWAY_CONFIG`; there is no implicit `.env`, old auth-directory or database fallback.
 The CLI has `serve`, `migrate`, `verify-storage` and `--help`; migration is a separate administrative
@@ -800,6 +825,5 @@ edits must not be emulated as successful WhatsApp operations. Evaluate individua
 applicable capabilities separately; implementing every SDK optional is outside
 this correction.
 
-SQLite per-workspace files remain a separate unapproved storage/configuration
-proposal. The published local storage selection and PostgreSQL isolation model
-are unchanged.
+SQLite per-workspace files were separately approved and are defined in the storage section above.
+That approval does not select this proposed consumer integration or a framework patch.

@@ -2,7 +2,7 @@
   "storage": {
     "engine": "sqlite",
     "mode": "local",
-    "filename": "/data/gateway.sqlite"
+    "directory": "/data/workspaces"
   },
   "workspaces": [
     {

@@ -14,15 +14,15 @@ import pino from "pino";
 import { createClient } from "redis";
 import { componentLogger } from "../src/application/configuration/logging.ts";
 import { GatewayRuntimeConfigurationSchema } from "../src/application/configuration/runtime-configuration.ts";
+import {
+  gatewayWorkspaceStorageConfiguration,
+  migrateGatewayRuntimeStorage,
+} from "../src/application/configuration/storage-configuration.ts";
 import { GatewayRuntime } from "../src/application/runtime.ts";
 import { BaileysProtocolLogger } from "../src/infrastructure/baileys/protocol-logger.ts";
 import { SqlCommandInbox } from "../src/infrastructure/sql/command-inbox.ts";
 import { SqlFleetStore } from "../src/infrastructure/sql/fleet-store.ts";
-import {
-  migrateGatewayStorage,
-  openGatewayStorage,
-  type StorageConfiguration,
-} from "../src/infrastructure/sql/storage.ts";
+import { openGatewayStorage, type StorageConfiguration } from "../src/infrastructure/sql/storage.ts";
 import { ControlledConnection } from "./support/controlled-connection.ts";
 const temporaryRoot = process.env["TMPDIR"];
 const postgresUrl = process.env["GATEWAY_TEST_DATABASE_URL"];
@@ -89,15 +89,16 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} compiled standalone CLI verifies readiness, durable offline intake and graceful SIGTERM`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-runtime-"));
-    const storageConfiguration: StorageConfiguration = engine === "sqlite"
-      ? { engine, mode: "local", filename: join(directory, "runtime.sqlite") }
-      : { engine, mode: "cluster", url: postgresUrl };
-    await migrateGatewayStorage(storageConfiguration);
     const workspaceId = randomUUID();
+    const runtimeStorage = engine === "sqlite"
+      ? { engine, mode: "local", directory }
+      : { engine, mode: "cluster", url: postgresUrl };
+    const storageConfiguration = gatewayWorkspaceStorageConfiguration(runtimeStorage, workspaceId);
+    await migrateGatewayRuntimeStorage(runtimeStorage, [workspaceId]);
     const accountId = randomUUID();
     const token = randomUUID();
     const configuration = {
-      storage: storageConfiguration,
+      storage: runtimeStorage,
       workspaces: [{ workspaceId, accounts: [{ accountId, enabled: false }] }],
       http: { enabled: true, port: 0 },
       principals: [{ id: "operator", httpToken: token, grants: [{ workspaceId, accountIds: [accountId] }] }],
@@ -165,7 +166,7 @@ test("Redis-only runtime opens no HTTP listener and schedules owner-independent 
   const accountId = randomUUID();
   const prefix = `test:${randomUUID()}`;
   const configuration = {
-    storage: { engine: "sqlite", mode: "local", filename: join(directory, "runtime.sqlite") },
+    storage: { engine: "sqlite", mode: "local", directory },
     workspaces: [{ workspaceId, accounts: [{ accountId, enabled: false }] }],
     http: { enabled: false },
     principals: [{ id: "redis-operator", grants: [{ workspaceId, accountIds: [accountId] }] }],
@@ -174,7 +175,10 @@ test("Redis-only runtime opens no HTTP listener and schedules owner-independent 
       bindings: [{ workspaceId, accountId, principalId: "redis-operator" }],
     },
   };
-  await migrateGatewayStorage(configuration.storage);
+  await migrateGatewayRuntimeStorage(
+    configuration.storage,
+    configuration.workspaces.map(value => value.workspaceId),
+  );
   const runtime = new GatewayRuntime(configuration);
   const client = createClient({ url: redisUrl });
   client.on("error", () => undefined);
@@ -253,7 +257,7 @@ test("operator configuration rejects unauthorized bindings and incompatible stor
   const workspaceId = randomUUID();
   const accountId = randomUUID();
   const base = {
-    storage: { engine: "sqlite", mode: "local", filename: "example.sqlite" },
+    storage: { engine: "sqlite", mode: "local", directory: "example-workspaces" },
     workspaces: [{ workspaceId }],
     http: { enabled: false },
   };
@@ -332,12 +336,16 @@ test("runtime drain stops account placement while an accepted HTTP body is still
 test("closing during actual SQLite startup cancels readiness and releases local exclusivity", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-start-cancel-"));
+  const workspaceId = randomUUID();
   const configuration = {
-    storage: { engine: "sqlite", mode: "local", filename: join(directory, "cancel.sqlite") },
-    workspaces: [{ workspaceId: randomUUID() }],
+    storage: { engine: "sqlite", mode: "local", directory },
+    workspaces: [{ workspaceId }],
     http: { enabled: false },
   };
-  await migrateGatewayStorage(configuration.storage);
+  await migrateGatewayRuntimeStorage(
+    configuration.storage,
+    configuration.workspaces.map(value => value.workspaceId),
+  );
   const runtime = new GatewayRuntime(configuration);
   try
   {
@@ -345,7 +353,9 @@ test("closing during actual SQLite startup cancels readiness and releases local 
     await runtime.close();
     await rejected;
     assert.equal(runtime.ready, false);
-    const reopened = await openGatewayStorage(configuration.storage);
+    const reopened = await openGatewayStorage(
+      gatewayWorkspaceStorageConfiguration(configuration.storage, workspaceId),
+    );
     await reopened.close();
   }
   finally
@@ -365,24 +375,107 @@ test("a failed HTTP bind closes startup resources and releases the actual SQLite
   const workspaceId = randomUUID();
   const token = randomUUID();
   const configuration = {
-    storage: { engine: "sqlite", mode: "local", filename: join(directory, "bind.sqlite") },
+    storage: { engine: "sqlite", mode: "local", directory },
     workspaces: [{ workspaceId }],
     http: { enabled: true, port: address.port },
     principals: [{ id: "operator", httpToken: token, grants: [{ workspaceId, accountIds: "*" }] }],
   };
-  await migrateGatewayStorage(configuration.storage);
+  await migrateGatewayRuntimeStorage(
+    configuration.storage,
+    configuration.workspaces.map(value => value.workspaceId),
+  );
   const runtime = new GatewayRuntime(configuration);
   try
   {
     await assert.rejects(runtime.start(), /EADDRINUSE/);
     assert.equal(runtime.ready, false);
-    const reopened = await openGatewayStorage(configuration.storage);
+    const reopened = await openGatewayStorage(
+      gatewayWorkspaceStorageConfiguration(configuration.storage, workspaceId),
+    );
     await reopened.close();
   }
   finally
   {
     await runtime.close();
     await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Redis runtime routes equal account/request IDs through their independently stored workspaces", async () =>
+{
+  const directory = await mkdtemp(join(temporaryRoot, "gateway-redis-workspaces-"));
+  const workspaceId = randomUUID();
+  const otherWorkspaceId = randomUUID();
+  const accountId = randomUUID();
+  const requestId = randomUUID();
+  const prefix = `test:${randomUUID()}`;
+  const configuration = {
+    storage: { engine: "sqlite", mode: "local", directory },
+    workspaces: [workspaceId, otherWorkspaceId].map(value => ({
+      workspaceId: value,
+      accounts: [{ accountId, enabled: false }],
+    })),
+    http: { enabled: false },
+    principals: [{
+      id: "consumer",
+      grants: [workspaceId, otherWorkspaceId].map(value => ({ workspaceId: value, accountIds: [accountId] })),
+    }],
+    redis: {
+      transport: { enabled: true, url: redisUrl, prefix },
+      bindings: [workspaceId, otherWorkspaceId].map(value => ({
+        workspaceId: value,
+        accountId,
+        principalId: "consumer",
+      })),
+    },
+  };
+  await migrateGatewayRuntimeStorage(configuration.storage, [workspaceId, otherWorkspaceId]);
+  const runtime = new GatewayRuntime(configuration);
+  const client = createClient({ url: redisUrl });
+  client.on("error", () => undefined);
+  try
+  {
+    await runtime.start();
+    await client.connect();
+    for (const selectedWorkspace of [workspaceId, otherWorkspaceId])
+    {
+      const streams = gatewayStreamNames(prefix, { workspaceId: selectedWorkspace, accountId });
+      await client.xAdd(streams.commands, "*", {
+        payload: JSON.stringify({
+          apiVersion: "1",
+          workspaceId: selectedWorkspace,
+          accountId,
+          requestId,
+          type: "account.get",
+        }),
+      });
+      let observed: unknown;
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline)
+      {
+        const record = (await client.xRange(streams.results, "-", "+"))?.[0];
+        if (record)
+        {
+          observed = JSON.parse(record.message["payload"]!);
+          break;
+        }
+        await delay(10);
+      }
+      const event = GatewayQueryCloudEventSchema.parse(observed);
+      assert.equal(event.workspaceid, selectedWorkspace);
+      assert.equal(event.data.requestId, requestId);
+      assert.equal(event.data.failure, null);
+      const response = event.data.response;
+      assert.ok(response?.type === "account.get");
+      assert.equal(response.result.workspaceId, selectedWorkspace);
+      assert.equal(response.result.accountId, accountId);
+    }
+  }
+  finally
+  {
+    await runtime.close();
+    if (client.isOpen) await client.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -3,9 +3,12 @@ import { readFile } from "node:fs/promises";
 import pino from "pino";
 import { componentLogger, createRuntimeLogger } from "./application/configuration/logging.ts";
 import { GatewayRuntimeConfigurationSchema } from "./application/configuration/runtime-configuration.ts";
+import {
+  migrateGatewayRuntimeStorage,
+  verifyGatewayRuntimeStorage,
+} from "./application/configuration/storage-configuration.ts";
 import { GatewayRuntime } from "./application/runtime.ts";
 import { describeWhatsAppError } from "./domain/error-details.ts";
-import { migrateGatewayStorage, openGatewayStorage } from "./infrastructure/sql/storage.ts";
 type GatewayCliFailureCode =
   | "UNSUPPORTED_COMMAND"
   | "INVALID_ARGUMENTS"
@@ -75,14 +78,20 @@ async function main(): Promise<void>
   );
   if (command === "migrate")
   {
-    await migrateGatewayStorage(configuration.storage);
+    await migrateGatewayRuntimeStorage(
+      configuration.storage,
+      configuration.workspaces.map(value => value.workspaceId),
+    );
     logger.info({ event: "storage_migration_completed", storageEngine: configuration.storage.engine });
     return;
   }
   if (command === "verify-storage")
   {
-    const storage = await openGatewayStorage(configuration.storage, logger);
-    await storage.close();
+    await verifyGatewayRuntimeStorage(
+      configuration.storage,
+      configuration.workspaces.map(value => value.workspaceId),
+      logger,
+    );
     logger.info({ event: "storage_verification_completed", storageEngine: configuration.storage.engine });
     return;
   }

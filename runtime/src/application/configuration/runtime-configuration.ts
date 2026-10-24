@@ -5,10 +5,10 @@ import { WebhookDeliveryPolicySchema } from "../../domain/webhook-outbox.ts";
 import { GatewayHttpConfigurationSchema } from "../../infrastructure/http/transport.ts";
 import { GatewayRedisConfigurationSchema } from "../../infrastructure/redis/transport.ts";
 import { MediaStorageConfigurationSchema } from "../../infrastructure/s3/configuration.ts";
-import { StorageConfigurationSchema } from "../../infrastructure/sql/storage.ts";
 import { WebhookDestinationSchema } from "../../infrastructure/sql/webhook-outbox.ts";
 import { FleetConfigurationSchema } from "../fleet-participant.ts";
 import { GatewayConfigurationSchema } from "../gateway.ts";
+import { GatewayRuntimeStorageConfigurationSchema } from "./storage-configuration.ts";
 export const GatewayLogLevelSchema = z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]);
 export const GatewayLogComponentSchema = z.enum([
   "runtime",
@@ -26,7 +26,7 @@ export const GatewayLoggingConfigurationSchema = z.strictObject({
 });
 export type GatewayLoggingConfiguration = z.infer<typeof GatewayLoggingConfigurationSchema>;
 export const GatewayRuntimeConfigurationSchema = z.strictObject({
-  storage: StorageConfigurationSchema,
+  storage: GatewayRuntimeStorageConfigurationSchema,
   workspaces: z.array(z.strictObject({
     workspaceId: GatewayIdentifierSchema,
     accounts: z.array(z.strictObject({ accountId: GatewayIdentifierSchema, enabled: z.boolean().optional() }))

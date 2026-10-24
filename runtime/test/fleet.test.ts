@@ -32,12 +32,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} embedded participant honors desired revisions, drains commands and stops repeated unpaired attempts`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-fleet-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "fleet.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "fleet.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = storage.workspace(workspaceId);
     const account = await store.createAccount();
     const accountId = account.accountId;
@@ -229,14 +229,15 @@ test("PostgreSQL peers retain sticky capacity, hand off paired ownership and can
 test("SQLite participant never reopens an interrupted unpaired socket without an explicit new revision", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-fleet-pairing-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "pairing.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const account = await store.createAccount();
   const principal = new GatewayPrincipal("operator", [{ workspaceId, accountIds: "*" }]);
@@ -355,14 +356,15 @@ class CompletionFailureFleetStore extends SqlFleetStore
 test("SQLite automatic owner recovery finishes a failed command checkpoint without another native send", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-fleet-recovery-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "recovery.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const account = await store.createAccount();
   const accountId = account.accountId;
@@ -454,14 +456,15 @@ test("SQLite runtime timers renew membership during a slow send and shutdown dra
 }, async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-fleet-timers-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "timers.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const account = await store.createAccount();
   const accountId = account.accountId;
@@ -587,12 +590,15 @@ test("a guarded fleet start cannot adopt an unverified manual session or create 
   const directory = await mkdtemp(join(temporaryRoot, "gateway-fleet-guard-"));
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId: randomUUID(),
     filename: join(directory, "guard.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const store = storage.workspace(randomUUID());
+  const store = storage.workspace(
+    configuration.engine === "sqlite" ? configuration.workspaceId : randomUUID(),
+  );
   const first = await store.createAccount();
   const second = await store.createAccount();
   let sockets = 0;
@@ -650,12 +656,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} participant close prevents starting another account after a blocked startup resumes`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-start-drain-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, mode: "local", filename: join(directory, "start.sqlite") }
+      ? { engine, workspaceId, mode: "local", filename: join(directory, "start.sqlite") }
       : { engine, mode: "cluster", url: postgresUrl };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = storage.workspace(workspaceId);
     const fleetStore = new SqlFleetStore(store);
     let release!: () => void;
@@ -732,14 +738,15 @@ class AssignmentBarrierStore extends SqlFleetStore
 test("shutdown during a real SQL assignment claim does not construct a new socket afterward", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-assignment-drain-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     mode: "local",
     filename: join(directory, "claim.sqlite"),
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const account = await store.createAccount();
   let release!: () => void;

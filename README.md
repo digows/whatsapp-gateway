@@ -6,7 +6,8 @@ and built on a pinned
 It manages multiple accounts, durable send operations, paced delivery, rich interactive messages
 and media fetched on demand. SQLite local mode or PostgreSQL shared storage keeps authentication and technical state.
 PostgreSQL enforces workspace isolation with Row Level Security; SQLite enforces workspace/account
-isolation in application queries and runs under one exclusive local runtime.
+isolation in application queries and keeps one private database file per workspace, with one local runtime
+owner per file. That workspace's accounts share its file.
 
 **Delivery:** a standalone or embedded gateway with authenticated HTTP, Redis Streams, signed webhooks,
 embedded fleet coordination and a remote Chat SDK Adapter. Native Mastra channels and freshly
@@ -84,7 +85,8 @@ Baileys to connect to WhatsApp Web; it is not Meta's official WhatsApp Business 
 ## Get started from source
 
 Requirements: Node.js 24 or newer and pnpm 12.9.1. Choose a local SQLite file or PostgreSQL 18.
-Shared multi-runtime storage requires PostgreSQL; SQLite is restricted to one runtime on local disk.
+Shared cluster storage requires PostgreSQL; each SQLite workspace file has one exclusive runtime
+owner on local disk.
 Incoming attachments work on demand without object storage. Select S3-compatible materialization
 when shared stored-media access is needed. Permanent application archives belong to the consumer.
 
@@ -96,8 +98,9 @@ pnpm install --frozen-lockfile
 
 Build the compiled CLI and packages, then prepare a private configuration based on
 [config/operator.example.json](config/operator.example.json). Replace the example IDs/token and choose
-a writable local SQLite path. The template uses `/data/gateway.sqlite` for the container; change it
-for a source checkout. Its account starts disabled, so setup does not initiate pairing.
+a writable local SQLite directory. The template uses `/data/workspaces` for the container; change it
+for a source checkout. Files are named `<canonical-workspace-id>.sqlite`; accounts do not create
+separate files. Its account starts disabled, so setup does not initiate pairing.
 
 ```sh
 pnpm build
@@ -114,9 +117,23 @@ directories. Keep configuration private: it may contain tokens, database URLs an
 
 Migrations are explicit and versioned under [runtime/migrations](runtime/migrations), including
 [gateway-observed history](runtime/migrations/008_message_history.sql) and its
-[SQLite counterpart](runtime/migrations/sqlite/007_message_history.sql). Apply them once with an
+[SQLite counterpart](runtime/migrations/sqlite/007_message_history.sql), followed by schema 9
+[workspace file binding](runtime/migrations/sqlite/008_workspace_binding.sql) and the
+[PostgreSQL version marker](runtime/migrations/009_workspace_storage.sql). Apply them once with an
 administrative configuration, then serve with a restricted runtime configuration. Startup verifies
 the schema without migrating. Backend selection does not convert legacy data or copy it between engines.
+
+The operator SQLite configuration now requires `storage.directory`; the old global `storage.filename`
+configuration is rejected. The CLI migrates/verifies every configured workspace file. PostgreSQL
+still uses one shared connection pool with workspace RLS. Each versioned migration commits within its selected file. An upgrade spanning versions or files
+is not one transaction: completed earlier steps may remain, and a failed command can be rerun
+after correcting its cause.
+
+This does not split, move or import data from the published single-file layout. Keep existing files
+and backups while planning explicit placement. The low-level storage API can explicitly upgrade a
+legacy file only when every tenant row belongs to its selected workspace; mixed-workspace files
+are rejected before schema changes. It never chooses a workspace from existing data. No automatic
+legacy splitter or backend converter is supplied.
 
 For PostgreSQL, give a separate runtime role `USAGE` on schema `gateway` and `SELECT`, `INSERT`,
 `UPDATE`, `DELETE` on its tables. It must have neither superuser privileges nor `BYPASSRLS`.
@@ -126,7 +143,8 @@ In-process embedders establish their own trusted workspace context.
 
 ### Standalone operation and logs
 
-The CLI provisions configured accounts, preserves durable desired state and runs fleet, command,
+The CLI opens each configured workspace's SQLite file (or the shared PostgreSQL storage),
+provisions configured accounts, preserves durable desired state and runs fleet, command,
 Redis and webhook loops. An omitted account `enabled` leaves its recorded intent unchanged; an
 explicit value updates it only when different. To authorize a fresh pairing attempt, use a new CAS
 revision through `/desired`; restarting the process does not manufacture new pairing intent.
@@ -162,7 +180,7 @@ claimed. The image contains the runtime and contracts, without Chat SDK or Mastr
 ```sh
 docker buildx build --platform linux/arm64 --load -t whatsapp-gateway:local .
 docker volume create whatsapp-gateway-data
-# gateway.json must be readable by container UID 1000 and use /data/gateway.sqlite.
+# gateway.json must be readable by container UID 1000 and use directory /data/workspaces.
 docker run --rm --mount type=volume,src=whatsapp-gateway-data,dst=/data \
   --mount type=bind,src=/absolute/path/gateway.json,dst=/run/secrets/gateway.json,readonly \
   whatsapp-gateway:local migrate
@@ -181,7 +199,8 @@ work has bounded waits, so allow drain time rather than relying on Docker's defa
 SIGINT/SIGTERM stop admission and new account starts, drain work, release leases and close storage.
 
 The [qualification script](scripts/qualify-container.py) creates isolated labeled containers and a
-volume, checks migration/startup/readiness, durable intake, SIGTERM and restart, then removes only
+volume, checks two private workspace files and their accounts, migration/verification/startup/readiness,
+durable intake, SIGTERM and restart, then removes only
 its resources. Set `TMPDIR` to an owned disposable directory and pass a locally available image.
 It uses no external network or real WhatsApp session. The
 [workflow](.github/workflows/qualify-and-publish.yml) runs configured checks and archives consumer
@@ -307,7 +326,7 @@ before a new decision; recording intent is asynchronous. A new enabled revision 
 or fresh pairing attempt. Interrupted unpaired attempts need a new revision; paired sessions can
 recover from saved credentials. PostgreSQL peers keep healthy assignments, place remaining accounts
 within per-workspace capacity and obey actual exclusive account locks during handoff. SQLite runs
-one local participant. See the [owning use case](docs/use-cases/gateway-core.md) for exact recovery limits.
+one local participant per owned workspace file. See the [owning use case](docs/use-cases/gateway-core.md) for exact recovery limits.
 
 ### Compose the core
 
@@ -319,13 +338,15 @@ WhatsApp connection:
 import { randomUUID } from "node:crypto";
 import { BaileysConnection, Gateway, migrateGatewayStorage, openGatewayStorage } from "@digows/whatsapp-gateway-runtime";
 
-const configuration = { engine: "sqlite", filename: "./gateway.sqlite", mode: "local" } as const;
+const workspaceId = randomUUID();
+const configuration = {
+  engine: "sqlite", filename: `./${workspaceId}.sqlite`, workspaceId, mode: "local",
+} as const;
 // Explicit setup step; PostgreSQL migrations require an administrative connection.
 await migrateGatewayStorage(configuration);
 const storage = await openGatewayStorage(configuration);
 
-// Supply the workspace from your application's authenticated context.
-const workspaceId = randomUUID();
+// Use the same selected workspace from your application's authenticated context.
 const store = storage.workspace(workspaceId);
 const gateway = new Gateway(store, (_account, lease) => new BaileysConnection(store, lease));
 
@@ -344,7 +365,8 @@ finally
 Retain the workspace/account IDs in your application. Explicit `gateway.start(accountId)` begins
 connection or pairing; inspect `store.account(accountId)` for state and the private QR PNG data URL.
 Starting returns before the session necessarily becomes `CONNECTED`. `gateway.restore()` makes a
-single pass over saved paired accounts. Close the gateway before closing shared storage.
+single pass over saved paired accounts. Close the gateway before closing its storage. A SQLite storage instance rejects another workspace
+even when constructed through a scoped store directly; PostgreSQL exposes multiple RLS-scoped stores.
 For PostgreSQL, select `{ engine: "postgresql", url, mode: "cluster" }` with the restricted runtime URL.
 Use the embedded participant above for automatic placement and recovery; the core can also be driven manually.
 

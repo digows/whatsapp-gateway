@@ -31,12 +31,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} real Redis commands ACK durable scoped intake and publish native outcomes without duplicate sends`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-redis-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "streams.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "streams.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const accountId = randomUUID();
     const prefix = `test:${randomUUID()}`;
     const store = storage.workspace(workspaceId);
@@ -142,12 +142,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} pending Redis intake reclaims after restart without another SQL command or native effect`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-redis-ack-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "ack.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "ack.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = storage.workspace(workspaceId);
     const account = await store.createAccount();
     const accountId = account.accountId;
@@ -243,14 +243,15 @@ for (const engine of ["sqlite", "postgresql"] as const)
 test("Redis ACL credentials restrict account streams and forged payload scope is durably rejected", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-redis-acl-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "acl.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const first = await store.createAccount();
   const second = await store.createAccount();
@@ -386,14 +387,15 @@ class PublicationCheckpointFailure extends SqlRedisStreamStore
 test("Redis publication retries a committed event ID after local AOF acknowledgement and failed SQL cursor", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-redis-publish-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "publication.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const account = await store.createAccount();
   const accountId = account.accountId;
@@ -449,14 +451,15 @@ test("Redis publication retries a committed event ID after local AOF acknowledge
 test("Redis ACKED retention preserves pending and unread command bodies", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-redis-retention-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "retention.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const account = await store.createAccount();
   const accountId = account.accountId;
@@ -509,14 +512,15 @@ test("Redis ACKED retention preserves pending and unread command bodies", async 
 test("Redis startup rejects missing persistence and eviction; disabled transport needs no connection", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-redis-capability-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "capability.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const source = new SqlRedisStreamStore(store);
   const disabled = new GatewayRedisTransport(source, { enabled: false }, []);

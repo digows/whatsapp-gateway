@@ -21,6 +21,7 @@ import {
   type GatewayRuntimeConfiguration,
   GatewayRuntimeConfigurationSchema,
 } from "./configuration/runtime-configuration.ts";
+import { gatewayWorkspaceStorageConfiguration } from "./configuration/storage-configuration.ts";
 import { GatewayFleetParticipant } from "./fleet-participant.ts";
 import { Gateway, type GatewayConnectionFactory } from "./gateway.ts";
 import { GatewayQueryService } from "./query-service.ts";
@@ -41,7 +42,7 @@ export class GatewayRuntime
   private readonly workspaces: RuntimeWorkspace[] = [];
   private readonly loops: Promise<void>[] = [];
   private readonly controller = new AbortController();
-  private storage: GatewayStorage | undefined;
+  private readonly storageResources: GatewayStorage[] = [];
   private media: MediaStorageResources | null = null;
   private http: GatewayHttpTransport | undefined;
   private starting: Promise<void> | undefined;
@@ -95,7 +96,10 @@ export class GatewayRuntime
       redisEnabled: configuration.redis.transport.enabled,
       webhooksEnabled: configuration.webhooks.enabled,
     });
-    this.storage = await openGatewayStorage(configuration.storage, this.scopeLogger("runtime"));
+    const sharedStorage = configuration.storage.engine === "postgresql"
+      ? await openGatewayStorage(configuration.storage, this.scopeLogger("runtime"))
+      : undefined;
+    if (sharedStorage) this.storageResources.push(sharedStorage);
     this.assertStarting();
     this.media = createMediaStorage(configuration.media, {
       maximumBytes: configuration.gateway.maximumMediaBytes,
@@ -107,7 +111,13 @@ export class GatewayRuntime
     for (const entry of configuration.workspaces)
     {
       this.assertStarting();
-      const store = this.storage.workspace(entry.workspaceId);
+      const storage = sharedStorage ?? await openGatewayStorage(
+        gatewayWorkspaceStorageConfiguration(configuration.storage, entry.workspaceId),
+        this.scopeLogger("runtime").child({ workspaceId: entry.workspaceId }),
+      );
+      if (!sharedStorage) this.storageResources.push(storage);
+      this.assertStarting();
+      const store = storage.workspace(entry.workspaceId);
       const gateway = new Gateway(
         store,
         (account, lease) =>
@@ -335,10 +345,7 @@ export class GatewayRuntime
       for (const workspace of this.workspaces) await settle(() => workspace.redis.close());
       await Promise.allSettled(this.loops);
       await Promise.all(participants);
-      await settle(async () =>
-      {
-        await this.storage?.close();
-      });
+      for (const storage of this.storageResources) await settle(() => storage.close());
       this.media?.client.destroy();
       this.scopeLogger("runtime").info({ event: "runtime_stopped", cleanupFailures: failures.length });
       if (failures.length) throw new AggregateError(failures, "Runtime cleanup failed");

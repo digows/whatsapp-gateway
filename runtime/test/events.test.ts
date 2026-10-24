@@ -21,12 +21,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} public CloudEvents commit with owning state, retain stable identity and isolate replay`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-events-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "events.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "events.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     let storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const accountId = randomUUID();
     const store = storage.workspace(workspaceId);
     const socket = new ControlledConnection();
@@ -89,8 +89,21 @@ for (const engine of ["sqlite", "postgresql"] as const)
       const first = events[0];
       assert.ok(first);
       assert.deepEqual(await log.after(accountId, first.sequence, 100), events.slice(1));
-      const other = new SqlGatewayEventLog(storage.workspace(randomUUID()));
-      assert.deepEqual(await other.after(accountId, 0, 100), []);
+      const foreignWorkspaceId = randomUUID();
+      const foreignConfiguration = configuration.engine === "sqlite"
+        ? { ...configuration, workspaceId: foreignWorkspaceId, filename: join(directory, "foreign.sqlite") }
+        : configuration;
+      if (foreignConfiguration.engine === "sqlite") await migrateGatewayStorage(foreignConfiguration);
+      const foreignStorage = await openGatewayStorage(foreignConfiguration);
+      try
+      {
+        const other = new SqlGatewayEventLog(foreignStorage.workspace(foreignWorkspaceId));
+        assert.deepEqual(await other.after(accountId, 0, 100), []);
+      }
+      finally
+      {
+        await foreignStorage.close();
+      }
       assert.deepEqual(await log.after(randomUUID(), 0, 100), []);
       await gateway.close();
       const beforeClose = await log.after(accountId, 0, 100);
@@ -124,12 +137,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} publication failure rolls back native retention, state and send checkpoints`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-event-rollback-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "rollback.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "rollback.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = new FailingEventClockStore(storage, workspaceId);
     const account = await store.createAccount();
     const accountId = account.accountId;

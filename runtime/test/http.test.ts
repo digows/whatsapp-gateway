@@ -37,12 +37,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} real HTTP authenticates durable commands, polls scoped outcomes and serves valid interactive OpenAPI`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-http-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "http.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "http.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = storage.workspace(workspaceId);
     const account = await store.createAccount();
     const denied = await store.createAccount();

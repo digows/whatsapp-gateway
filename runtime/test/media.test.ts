@@ -145,6 +145,7 @@ class MediaFixture
     this.directory = await mkdtemp(join(temporaryRoot, "gateway-media-"));
     const configuration = {
       engine: "sqlite",
+      workspaceId: this.workspaceId,
       filename: join(this.directory, "gateway.sqlite"),
       mode: "local",
     } as const;

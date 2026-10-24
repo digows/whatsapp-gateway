@@ -26,12 +26,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} webhook outbox signs scoped events and deletes success work without replaying history`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-webhook-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "webhooks.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "webhooks.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = storage.workspace(workspaceId);
     const account = await store.createAccount();
     const accountId = account.accountId;
@@ -85,20 +85,33 @@ for (const engine of ["sqlite", "postgresql"] as const)
       // Configuration does not backfill old account-created events.
       assert.equal(await dispatcher.runOnce(), false);
       await store.setState(lease, "CONNECTED", "100@s.whatsapp.net");
-      const otherWorkspace = new SqlWebhookOutbox(storage.workspace(randomUUID()));
-      assert.deepEqual(await otherWorkspace.destinations(), []);
-      assert.deepEqual(await otherWorkspace.deliveries(accountId, destinationId), []);
-      await assert.rejects(
-        otherWorkspace.claim({
-          workspaceId,
-          accountId,
-          id: destinationId,
-          url: `http://127.0.0.1:${address.port}/events`,
-          secret,
-          enabled: true,
-        }),
-        /scope mismatch/,
-      );
+      const foreignWorkspaceId = randomUUID();
+      const foreignConfiguration = configuration.engine === "sqlite"
+        ? { ...configuration, workspaceId: foreignWorkspaceId, filename: join(directory, "foreign.sqlite") }
+        : configuration;
+      if (foreignConfiguration.engine === "sqlite") await migrateGatewayStorage(foreignConfiguration);
+      const foreignStorage = await openGatewayStorage(foreignConfiguration);
+      try
+      {
+        const otherWorkspace = new SqlWebhookOutbox(foreignStorage.workspace(foreignWorkspaceId));
+        assert.deepEqual(await otherWorkspace.destinations(), []);
+        assert.deepEqual(await otherWorkspace.deliveries(accountId, destinationId), []);
+        await assert.rejects(
+          otherWorkspace.claim({
+            workspaceId,
+            accountId,
+            id: destinationId,
+            url: `http://127.0.0.1:${address.port}/events`,
+            secret,
+            enabled: true,
+          }),
+          /scope mismatch/,
+        );
+      }
+      finally
+      {
+        await foreignStorage.close();
+      }
       assert.equal(await dispatcher.runOnce(), true);
       assert.equal(received.length, 1);
       assert.equal(await dispatcher.runOnce(), false);
@@ -131,12 +144,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} restart reclaims accepted-but-uncommitted delivery with identical bytes and event ID`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-webhook-restart-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "restart.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "restart.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     let storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const accountId = randomUUID();
     const destinationId = randomUUID();
     const bodies: Buffer[] = [];
@@ -215,12 +228,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} outbox claims are exclusive, stale completion is rejected and expiry differs from terminal retention`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-webhook-policy-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "policy.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "policy.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = storage.workspace(workspaceId);
     const account = await store.createAccount();
     const accountId = account.accountId;
@@ -304,12 +317,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} accepted timeout, server errors and redirects retry identical signed bytes`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-webhook-http-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "http.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "http.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = storage.workspace(workspaceId);
     const account = await store.createAccount();
     const accountId = account.accountId;
@@ -429,14 +442,15 @@ test("webhook signatures bind identity, timestamp and raw bytes with an explicit
 test("disabled webhook dispatch opens no request and shutdown preserves an accepted active attempt for retry", async () =>
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-webhook-stop-"));
+  const workspaceId = randomUUID();
   const configuration: StorageConfiguration = {
     engine: "sqlite",
+    workspaceId,
     filename: join(directory, "stop.sqlite"),
     mode: "local",
   };
   await migrateGatewayStorage(configuration);
   const storage = await openGatewayStorage(configuration);
-  const workspaceId = randomUUID();
   const store = storage.workspace(workspaceId);
   const account = await store.createAccount();
   const accountId = account.accountId;

@@ -22,12 +22,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} durable ingress authorizes account scope, orders claims and fences recovered commands`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-ingress-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "inbox.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "inbox.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     let storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const accountId = randomUUID();
     const secondAccountId = randomUUID();
     const principal = new GatewayPrincipal("agent", [{ workspaceId, accountIds: [accountId] }]);
@@ -146,11 +146,26 @@ for (const engine of ["sqlite", "postgresql"] as const)
         }),
         /authorized/,
       );
-      const other = new GatewayCommandIngress(new SqlCommandInbox(storage.workspace(randomUUID())));
-      await assert.rejects(
-        other.result(principal, { workspaceId, accountId, requestId: request.requestId }),
-        /workspace/,
-      );
+      const foreignWorkspaceId = randomUUID();
+      const foreignConfiguration = configuration.engine === "sqlite"
+        ? { ...configuration, workspaceId: foreignWorkspaceId, filename: join(directory, "foreign.sqlite") }
+        : configuration;
+      if (foreignConfiguration.engine === "sqlite") await migrateGatewayStorage(foreignConfiguration);
+      const foreignStorage = await openGatewayStorage(foreignConfiguration);
+      try
+      {
+        const other = new GatewayCommandIngress(
+          new SqlCommandInbox(foreignStorage.workspace(foreignWorkspaceId)),
+        );
+        await assert.rejects(
+          other.result(principal, { workspaceId, accountId, requestId: request.requestId }),
+          /workspace/,
+        );
+      }
+      finally
+      {
+        await foreignStorage.close();
+      }
       // A completion cannot be rewritten, even by the current generation.
       await assert.rejects(recoveredInbox.fail(lease, claim, "EXECUTION_FAILED"), /claim|completion/);
     }
@@ -168,12 +183,12 @@ for (const engine of ["sqlite", "postgresql"] as const)
   test(`${engine} ingress recovers UNKNOWN without another native effect and failures do not block the queue`, async () =>
   {
     const directory = await mkdtemp(join(temporaryRoot, "gateway-inbox-unknown-"));
+    const workspaceId = randomUUID();
     const configuration: StorageConfiguration = engine === "sqlite"
-      ? { engine, filename: join(directory, "inbox.sqlite"), mode: "local" }
+      ? { engine, workspaceId, filename: join(directory, "inbox.sqlite"), mode: "local" }
       : { engine, url: postgresUrl, mode: "cluster" };
     await migrateGatewayStorage(configuration);
     const storage = await openGatewayStorage(configuration);
-    const workspaceId = randomUUID();
     const store = storage.workspace(workspaceId);
     const account = await store.createAccount();
     const accountId = account.accountId;
