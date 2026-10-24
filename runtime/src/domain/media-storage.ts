@@ -8,5 +8,5 @@ export interface IMediaRepository
     contentType: string,
     fileName?: string,
   ): Promise<MediaReference>;
-  read(reference: MediaReference): Promise<Uint8Array>;
+  read(reference: MediaReference, maximumBytes?: number): Promise<Uint8Array>;
 }

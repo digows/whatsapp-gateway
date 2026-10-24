@@ -41,7 +41,7 @@ partial mapping; a complete ready-to-use Adapter remains a target.
 | Rich content | Text, explicit link previews, images, video/GIF/video notes, audio/voice notes, files, stickers, contacts, locations, polls, events and albums |
 | Interactions | Reply buttons, image cards, URL buttons, lists, carousels, selection callbacks, reactions, text edits and deletions |
 | Message context | Native WhatsApp IDs, quote correlation, mentions and forwarding where supported by the selected format |
-| Media | Scoped source handles, lazy download/decryption and explicit S3-compatible materialization |
+| Media | Lazy bounded download/decryption without an object store, plus optional S3-compatible materialization |
 | Chat SDK mapping | Real `chat@4.43.0` Message/Attachment projection, lazy attachments and an explicit stable-key text-send helper |
 
 The [gateway use case](docs/use-cases/gateway-core.md) owns the precise behavior, failure modes and
@@ -75,7 +75,8 @@ Baileys to connect to WhatsApp Web; it is not Meta's official WhatsApp Business 
 
 Requirements: Node.js 24 or newer and pnpm 12.9.1. Choose a local SQLite file or PostgreSQL 18.
 Shared multi-runtime storage requires PostgreSQL; SQLite is restricted to one runtime on local disk.
-Configure an S3-compatible client and bucket when using stored media.
+Incoming attachments work on demand without object storage. Select S3-compatible materialization
+when shared stored-media access is needed. Permanent application archives belong to the consumer.
 
 ```sh
 git clone https://github.com/digows/whatsapp-gateway.git
@@ -143,6 +144,23 @@ cannot fence an effect already dispatched to WhatsApp.
 The [Chat SDK mapping](packages/chat-adapter/src/index.ts) exposes `postWithKey()` for durable caller
 identity. A new ordinary `postMessage()` call allocates a new key. Full Adapter initialization,
 event intake/dispatch, history and standard card/action/formatting translation remain incomplete.
+
+## Media delivery modes
+
+The default core path reads incoming source media directly, without S3. Normalization exposes an
+opaque scoped handle; the lazy attachment fetch downloads/decrypts only when requested. Reads have
+byte/time limits and explicit expiry/integrity failures. Downloaded media bytes are not stored in SQL.
+
+For optional materialization, `createMediaStorage()` accepts `mode: "s3"`, `endpoint`, `region`,
+`bucket`, `forcePathStyle` and credentials. Pass its repository to both `BaileysConnection` and
+`Gateway`, and destroy its client on shutdown. `mode: "direct"` creates no S3 client. Configure
+`maximumMediaBytes` (default 32 MiB) and `mediaTimeoutMs` (default 60 seconds) on the gateway.
+Pass matching `maximumBytes`/`timeoutMs` as the factory's second argument for S3 transfers.
+
+Cloudflare R2 uses the same S3 adapter with its endpoint, region `auto` and R2 credentials; a public
+bucket is not required. See the [official AWS SDK configuration example](https://developers.cloudflare.com/r2/examples/aws/aws-sdk-js-v3/).
+R2 live access has not been tested. Outbound stored-media sends still require a media repository;
+direct incoming access does not provide an implicit outbound upload/archive service.
 
 ## Development and validation
 

@@ -13,6 +13,7 @@ import { z } from "zod";
 import type { WhatsAppConnection } from "../domain/connection.ts";
 import { AccountOwnedError } from "../domain/errors.ts";
 import { type AccountLease, type GatewayStore } from "../domain/gateway-store.ts";
+import { defaultMaximumMediaBytes } from "../domain/media-bytes.ts";
 import { decodeWhatsAppMediaSource } from "../domain/media-source.ts";
 import type { IMediaRepository } from "../domain/media-storage.ts";
 import { outboundPartCount } from "../domain/outbound-parts.ts";
@@ -23,6 +24,8 @@ import {
   baileysTypingConfiguration,
 } from "../infrastructure/baileys/baileys-typing-activity.ts";
 export const GatewayConfigurationSchema = z.object({
+  maximumMediaBytes: z.number().int().positive().max(256 * 1024 * 1024).default(defaultMaximumMediaBytes),
+  mediaTimeoutMs: z.number().int().positive().max(60000).default(60000),
   minimumDelayMs: z.number().int().nonnegative().default(1500),
   maximumDelayMs: z.number().int().nonnegative().default(5000),
   dailyMaximum: z.number().int().positive().default(1500),
@@ -384,17 +387,29 @@ export class Gateway implements GatewayOperations
     {
       throw new Error("Media scope mismatch");
     }
-    if (!this.media) throw new Error("Media storage is not configured");
+    const repository = new BaileysMediaRepository(
+      this.media,
+      this.configuration.maximumMediaBytes,
+      this.configuration.mediaTimeoutMs,
+    );
+    if (!this.media) return repository.read(identity, await this.store.native(accountId, identity.messageId));
     const media = this.media;
     const cached = await this.store.materialized(accountId, sourceId);
-    if (cached) return media.read(cached);
+    if (cached)
+    {
+      if (cached.byteSize > this.configuration.maximumMediaBytes)
+      {
+        throw new Error("Media exceeds configured byte limit");
+      }
+      return media.read(cached, this.configuration.maximumMediaBytes);
+    }
     const native = await this.store.native(accountId, identity.messageId);
     const reference = await this.store.materialize(
       accountId,
       sourceId,
-      async () => new BaileysMediaRepository(media).materialize(identity, native),
+      async () => repository.materialize(identity, native),
     );
-    return media.read(reference);
+    return media.read(reference, this.configuration.maximumMediaBytes);
   }
   async stop(accountId: string): Promise<void>
   {

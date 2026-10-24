@@ -1,14 +1,10 @@
 import { type MediaReference, type MediaSource, MediaSourceSchema } from "@digows/whatsapp-gateway-contracts";
-import {
-  BufferJSON,
-  DEF_MEDIA_HOST,
-  downloadContentFromMessage,
-  normalizeMessageContent,
-  proto,
-  toBuffer,
-} from "baileys";
+import { BufferJSON, normalizeMessageContent, proto } from "baileys";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { defaultMaximumMediaBytes, validateMediaLimit } from "../../domain/media-bytes.ts";
 import { encodeWhatsAppMediaSource, type WhatsAppMediaSourceIdentity } from "../../domain/media-source.ts";
 import type { IMediaRepository } from "../../domain/media-storage.ts";
+import { downloadNativeMedia } from "./baileys-media-download.ts";
 
 export type NativeMedia =
   | proto.Message.IImageMessage
@@ -17,6 +13,12 @@ export type NativeMedia =
   | proto.Message.IDocumentMessage
   | proto.Message.IStickerMessage;
 type NativeMediaKind = "image" | "video" | "audio" | "document" | "sticker" | "thumbnail-link";
+
+interface ResolvedNativeMedia
+{
+  readonly part: NativeMediaPart;
+  readonly source: MediaSource;
+}
 
 interface NativeMediaPart
 {
@@ -28,7 +30,7 @@ interface NativeMediaPart
 export function nativeMediaSource(identity: WhatsAppMediaSourceIdentity, source: NativeMedia): MediaSource
 {
   if (!source.mimetype) throw new Error("Native media content type is missing");
-  const length = source.fileLength;
+  const length = Object.hasOwn(source, "fileLength") ? source.fileLength : undefined;
   return MediaSourceSchema.parse({
     sourceId: encodeWhatsAppMediaSource(identity),
     contentType: source.mimetype,
@@ -86,10 +88,20 @@ function nativeMediaPart(content: proto.IMessage, partId: string): NativeMediaPa
 
 export class BaileysMediaRepository
 {
-  constructor(private readonly media: IMediaRepository)
-  {}
+  constructor(
+    private readonly media?: IMediaRepository,
+    private readonly maximumBytes = defaultMaximumMediaBytes,
+    private readonly timeoutMs = 60000,
+  )
+  {
+    validateMediaLimit(maximumBytes);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
+    {
+      throw new Error("Media timeout must be a positive safe integer");
+    }
+  }
 
-  async materialize(identity: WhatsAppMediaSourceIdentity, serializedMessage: string): Promise<MediaReference>
+  private resolve(identity: WhatsAppMediaSourceIdentity, serializedMessage: string): ResolvedNativeMedia
   {
     const value: unknown = JSON.parse(serializedMessage, BufferJSON.reviver);
     if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -110,18 +122,45 @@ export class BaileysMediaRepository
     }
     const part = nativeMediaPart(content, identity.partId);
     const source = nativeMediaSource(identity, part.source);
-    const legacyMediaHost = part.source.directPath && part.source.url && URL.canParse(part.source.url)
-      && new URL(part.source.url).hostname === "a.whatsapp.net";
+    if (source.byteSize !== undefined && source.byteSize > this.maximumBytes)
+    {
+      throw new Error("Media exceeds configured byte limit");
+    }
+    return { part, source };
+  }
+  private async download(resolved: ResolvedNativeMedia): Promise<Uint8Array>
+  {
+    const { part, source } = resolved;
     const bytes = part.inlineBytes
-      ?? await toBuffer(
-        await downloadContentFromMessage(part.source, part.kind, {
-          ...(legacyMediaHost ? { host: DEF_MEDIA_HOST } : {}),
-          options: { signal: AbortSignal.timeout(60000) },
-        }),
-      );
+      ?? await downloadNativeMedia(part.source, part.kind, this.maximumBytes, this.timeoutMs);
+    if (bytes.byteLength > this.maximumBytes) throw new Error("Media exceeds configured byte limit");
+    if (source.byteSize !== undefined && source.byteSize !== bytes.byteLength)
+    {
+      throw new Error("WhatsApp media size does not match its source");
+    }
+    const expectedHash = part.source.fileSha256;
+    if (Object.hasOwn(part.source, "fileSha256") && expectedHash)
+    {
+      const hash = createHash("sha256").update(bytes).digest();
+      if (expectedHash.byteLength !== hash.byteLength || !timingSafeEqual(hash, expectedHash))
+      {
+        throw new Error("WhatsApp media integrity check failed");
+      }
+    }
+    return bytes;
+  }
+  async read(identity: WhatsAppMediaSourceIdentity, serializedMessage: string): Promise<Uint8Array>
+  {
+    return this.download(this.resolve(identity, serializedMessage));
+  }
+  async materialize(identity: WhatsAppMediaSourceIdentity, serializedMessage: string): Promise<MediaReference>
+  {
+    if (!this.media) throw new Error("Media materialization storage is not configured");
+    const resolved = this.resolve(identity, serializedMessage);
+    const bytes = await this.download(resolved);
     const storageKey = `media/whatsapp/${identity.workspaceId}/${identity.accountId}/${
       encodeURIComponent(identity.messageId)
     }/${identity.partId}`;
-    return this.media.write(storageKey, bytes, source.contentType, source.fileName);
+    return this.media.write(storageKey, bytes, resolved.source.contentType, resolved.source.fileName);
   }
 }

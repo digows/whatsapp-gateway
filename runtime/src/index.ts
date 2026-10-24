@@ -9,3 +9,9 @@ export {
   openGatewayStorage,
   type StorageConfiguration,
 } from "./infrastructure/sql/storage.ts";
+
+export {
+  createMediaStorage,
+  type MediaStorageConfiguration,
+  type MediaStorageResources,
+} from "./infrastructure/s3/configuration.ts";

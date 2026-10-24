@@ -134,12 +134,39 @@ for group/community/newsletter/profile/privacy/call operations are outside this 
 old presence does not establish delivered behavior or a requirement to port them.
 
 On-demand media first exposes a workspace/account-scoped source handle and metadata. Normalization
-does not download it. Explicit materialization resolves the retained private native envelope,
-downloads/decrypts when required and writes the configured S3-compatible store. Concurrency reuses
-the stored materialization and deterministic object key. References must stay under
-`media/whatsapp/<workspace>/<account>/`; another workspace's source or object is rejected.
-Unavailable or expired source/media is an error, not a successful empty attachment. Encryption
-keys remain in private native/auth storage; no native envelope is exposed by the portable contract.
+never fetches an attachment. `readMedia()` always checks the handle's workspace/account and resolves
+its private retained native source. It offers two configured modes:
+
+- Direct mode requires no object store: fetch/decrypt bounded bytes only for the explicit consumer
+  request. The SDK attachment remains lazy. A later request may download again; this is not an archive.
+- Optional S3 mode materializes using the existing S3-compatible adapter. Concurrent callers reuse
+  the scoped materialization and deterministic key under `media/whatsapp/<workspace>/<account>/`.
+  A stored object remains available when the original provider source expires, subject to actual
+  object availability and metadata integrity. Both download and stored reads enforce byte bounds; the host passes matching
+  `maximumBytes`/`timeoutMs` transfer limits to the S3 resource factory.
+
+`createMediaStorage({ mode: "direct" })` selects direct access without creating an S3 client.
+The S3 configuration selects endpoint, region, bucket, path style and optional explicit credentials;
+standard AWS credential discovery is available when credentials are omitted. For Cloudflare R2 use
+its S3 endpoint, region `auto` and R2 credentials. No public bucket or R2-specific service is required.
+The owning resources include the SDK client so the host can destroy it during shutdown. Actual R2
+live success has not been measured; local integration uses real signed AWS SDK requests.
+
+`maximumMediaBytes` defaults to 32 MiB (configurable up to 256 MiB); `mediaTimeoutMs` defaults to
+60 seconds and cannot exceed that bound. Declared oversize fails before download; missing size
+stays absent and is enforced against actual received bytes. Native framing/HMAC and available
+SHA-256 checksums are verified before returning or storing plaintext; metadata/size mismatches fail.
+The pinned Baileys `getHttpStream()` drops its supplied AbortSignal and does not forward upstream
+pipe errors. The gateway therefore owns bounded fetch/cancellation and retains the release's
+public `getMediaKeys()` derivation and AES-CBC/10-byte-HMAC framing from `encryptedStream()`.
+Controlled encrypted HTTP scenarios prove timeout, byte limits and corruption rejection.
+
+Unavailable/expired source or missing object is an explicit error, not empty successful media.
+Native envelopes/keys and provider URLs remain private; the portable source exposes none of them.
+SQL retains protocol envelopes/metadata, not downloaded/decrypted media objects. Permanent archive
+and business retention belong to the consumer. No filesystem media backend, automatic incoming
+attachment archive or full history service is added. Outgoing stored media still uses the configured
+media repository; direct incoming access does not silently invent an outbound object store.
 
 ## Chat SDK integration boundary
 
