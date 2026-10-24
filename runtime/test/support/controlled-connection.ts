@@ -3,11 +3,13 @@ import type { ConnectionEvents, WhatsAppConnection } from "../../src/domain/conn
 import type { PreparedWhatsAppSend } from "../../src/domain/connection.ts";
 export class ControlledConnection implements WhatsAppConnection
 {
+  events!: ConnectionEvents;
   readonly sent: PreparedWhatsAppSend[] = [];
   readonly typing: boolean[] = [];
   failSend = false;
   async start(_account: Account, events: ConnectionEvents): Promise<void>
   {
+    this.events = events;
     await events.state("CONNECTED", "100@s.whatsapp.net");
   }
   async prepare(message: OutboundMessage, _index: number, id: string): Promise<PreparedWhatsAppSend>

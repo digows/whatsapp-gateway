@@ -164,6 +164,22 @@ export class RemoteFixture
     assert.ok(event);
     return event;
   }
+  async receiveMessage(message: InboundMessage): Promise<GatewayCloudEvent | null>
+  {
+    await this.socket.events.received(
+      message,
+      JSON.stringify({
+        key: { id: message.channelMessageId, remoteJid: message.chatAddress },
+        message: { conversation: "fixture" },
+      }),
+    );
+    const events = await new SqlGatewayEventLog(this.storage.workspace(this.workspaceId))
+      .after(this.accountId, 0, 1000);
+    return events.find(event =>
+      event.type === "com.digows.whatsapp.message.received.v1"
+      && event.data.message.channelMessageId === message.channelMessageId
+    ) ?? null;
+  }
   async webhook(event: GatewayCloudEvent): Promise<Response>
   {
     const body = Buffer.from(JSON.stringify(event));

@@ -1,5 +1,6 @@
 import { createMemoryState } from "@chat-adapter/state-memory";
 import { createRedisState } from "@chat-adapter/state-redis";
+import type { InboundMessage } from "@digows/whatsapp-gateway-contracts";
 import type { Mastra } from "@mastra/core/mastra";
 import { InMemoryStore } from "@mastra/core/storage";
 import { createMockModel } from "@mastra/core/test-utils/llm-mock";
@@ -157,6 +158,155 @@ for (const engine of ["sqlite", "postgresql"] as const)
 
         assert.equal((await fixture.adapter.fetchThread(fixture.thread())).isDM, true);
         await assert.rejects(fixture.adapter.processGatewayEvent({ ...event, accountid: randomUUID() }));
+      }
+      finally
+      {
+        await chat?.shutdown();
+        await fixture.close();
+      }
+    });
+  }
+}
+
+for (const engine of ["sqlite", "postgresql"] as const)
+{
+  for (const transport of ["http", "redis"] as const)
+  {
+    test(`${engine}/${transport} handset identity survives native intake, history and lifecycle without agent dispatch`, async () =>
+    {
+      const fixture = new RemoteFixture();
+      let chat: Chat | undefined;
+      try
+      {
+        await fixture.start(engine, transport);
+        chat = new Chat({
+          userName: "agent",
+          adapters: { whatsapp: fixture.adapter },
+          state: createMemoryState(),
+          concurrency: "concurrent",
+        });
+        let messages = 0;
+        let edits = 0;
+        let reactions = 0;
+        let actions = 0;
+        let deletions = 0;
+        chat.onDirectMessage(async () =>
+        {
+          messages++;
+        });
+        chat.onMessageUpdated(async () =>
+        {
+          edits++;
+        });
+        chat.onReaction(async () =>
+        {
+          reactions++;
+        });
+        chat.onAction("handset-action", async () =>
+        {
+          actions++;
+        });
+        chat.onMessageDeleted(async () =>
+        {
+          deletions++;
+        });
+        const editedAuthors = new Map<string, ReturnType<WhatsAppGatewayAdapter["parseMessage"]>["author"]>();
+        const processUpdated = chat.processMessageUpdated.bind(chat);
+        chat.processMessageUpdated = async (event, options) =>
+        {
+          const message = typeof event.message === "function" ? await event.message() : event.message;
+          editedAuthors.set(message.id, message.author);
+          return processUpdated({ ...event, message }, options);
+        };
+        await chat.initialize();
+        const handset: InboundMessage = {
+          channel: "WHATSAPP",
+          contentKind: "TEXT",
+          receivingAddress: "100@s.whatsapp.net",
+          senderAddress: "100@s.whatsapp.net",
+          chatAddress: "200@s.whatsapp.net",
+          channelMessageId: randomUUID(),
+          mentionsReceiver: false,
+          occurredAt: new Date().toISOString(),
+          text: "Written on the account handset",
+        };
+        const handsetEvent = await fixture.receiveMessage(handset);
+        assert.ok(handsetEvent);
+        const own = await fixture.adapter.fetchMessage(fixture.thread(), handset.channelMessageId);
+        assert.ok(own);
+        assert.equal(own.author.isMe, true);
+        assert.equal(own.author.isBot, false);
+        assert.equal(own.raw.direction, "INBOUND");
+        assert.equal((await fixture.adapter.fetchMessages(fixture.thread())).messages[0]?.author.isMe, true);
+        assert.equal((await fixture.webhook(handsetEvent)).status, 204);
+        assert.equal((await fixture.webhook(handsetEvent)).status, 204);
+        assert.equal(messages, 0);
+        assert.throws(() => fixture.adapter.parseMessage({ ...own.raw, accountId: randomUUID() }), /scope/);
+        assert.throws(() => fixture.adapter.parseMessage({ ...own.raw, workspaceId: randomUUID() }), /scope/);
+        const peer = { ...handset, channelMessageId: randomUUID(), senderAddress: "200@s.whatsapp.net" };
+        const peerEvent = await fixture.receiveMessage(peer);
+        assert.ok(peerEvent);
+        assert.equal((await fixture.webhook(peerEvent)).status, 204);
+        assert.equal(messages, 1);
+        const peerMessage = await fixture.adapter.fetchMessage(fixture.thread(), peer.channelMessageId);
+        assert.equal(peerMessage?.author.isMe, false);
+        assert.equal(peerMessage?.author.isBot, "unknown");
+        const posted = await fixture.adapter.postWithKey(fixture.thread(), "Agent reply", "identity-reply");
+        assert.equal((await fixture.adapter.fetchMessage(fixture.thread(), posted.id))?.author.isBot, true);
+        assert.equal(await fixture.receiveMessage({ ...handset, channelMessageId: posted.id }), null);
+        assert.equal(
+          (await fixture.adapter.fetchMessage(fixture.thread(), posted.id))?.raw.direction,
+          "OUTBOUND",
+        );
+        const { contentKind: _kind, text: _text, ...base } = handset;
+        for (const original of [handset, peer, { ...handset, channelMessageId: posted.id }])
+        {
+          const editEvent = await fixture.receiveMessage({
+            ...base,
+            senderAddress: original.senderAddress,
+            channelMessageId: randomUUID(),
+            contentKind: "EDIT",
+            text: "Edited text",
+            target: {
+              channelMessageId: original.channelMessageId,
+              senderAddress: original.senderAddress,
+              chatAddress: original.chatAddress,
+            },
+          });
+          assert.ok(editEvent);
+          assert.equal((await fixture.webhook(editEvent)).status, 204);
+        }
+        assert.equal(edits, 1);
+        assert.equal(editedAuthors.get(handset.channelMessageId)?.isMe, true);
+        assert.equal(editedAuthors.get(handset.channelMessageId)?.isBot, false);
+        assert.equal(editedAuthors.get(peer.channelMessageId)?.isMe, false);
+        assert.equal(editedAuthors.get(posted.id)?.isMe, true);
+        assert.equal(editedAuthors.get(posted.id)?.isBot, true);
+        const target = {
+          channelMessageId: handset.channelMessageId,
+          chatAddress: handset.chatAddress,
+          senderAddress: handset.senderAddress,
+        };
+        for (
+          const message of [
+            { ...base, contentKind: "REACTION", emoji: "👍", target },
+            {
+              ...base,
+              contentKind: "SELECTION",
+              optionId: "handset-action",
+              originatingChannelMessageId: posted.id,
+            },
+            { ...base, contentKind: "DELETE", target },
+          ] as const
+        )
+        {
+          const event = await fixture.receiveMessage({ ...message, channelMessageId: randomUUID() });
+          assert.ok(event);
+          assert.equal((await fixture.webhook(event)).status, 204);
+        }
+        assert.deepEqual([messages, edits, reactions, actions, deletions], [1, 1, 0, 0, 1]);
+        assert.equal(await fixture.adapter.fetchMessage(fixture.thread(), handset.channelMessageId), null);
+        assert.equal(fixture.socket.sent.length, 1);
       }
       finally
       {

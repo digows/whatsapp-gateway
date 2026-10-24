@@ -68,7 +68,8 @@ test("actual Chat SDK Message retains self-chat authorship and fetches media onl
     media: { sourceId: "opaque", contentType: "image/jpeg" },
     caption: "action",
   });
-  assert.equal(message.author.isMe, false);
+  assert.equal(message.author.isMe, true);
+  assert.equal(message.author.isBot, false);
   assert.equal(message.raw.contentKind, "IMAGE");
   assert.equal(operations.reads, 0);
   const attachment = message.attachments[0];

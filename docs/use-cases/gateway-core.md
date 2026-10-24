@@ -468,8 +468,16 @@ the client to reconnect and inspect/retry original operation keys.
 
 Thread IDs encode workspace, account and native chat. Raw SDK messages retain the
 owning `GatewayObservedMessage`, including direction, timestamp provenance and
-edited/deleted state. Handset self-chat input remains user-authored; a retained
-outbound observation is marked as the adapter's own message. History comes from
+edited/deleted state. A native sender equal to the configured receiving account is
+`author.isMe: true` in intake and history, including handset messages in peer chats
+and self chats. Handset-origin input remains human (`isBot: false`); only a
+retained gateway outbound observation marks it as a bot (`isBot: true`). Ordinary
+peers remain `isMe: false` with bot status unknown. Native Chat self-message/action/
+reaction/edit filtering therefore uses the actual author identity without deleting
+handset activity or history. Gateway-operation native echoes remain suppressed by
+the existing account-scoped send identity check. Edit dispatch preserves a known
+target's retained direction/author identity; missing target history does not invent
+bot authorship. Delete notifications keep native SDK semantics. History comes from
 observed snapshots, with scoped cursors and chronological pages. Incoming native
 and stored attachments stay lazy and can be rehydrated from scoped metadata.
 

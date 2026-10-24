@@ -166,8 +166,8 @@ export class WhatsAppGatewayAdapter implements Adapter<GatewayThread, GatewayObs
       attachments: [...parsed.attachments, ...stored],
       author: {
         ...parsed.author,
-        isMe: observation.direction === "OUTBOUND",
-        isBot: observation.direction === "OUTBOUND" ? true : "unknown",
+        isMe: parsed.author.isMe || observation.direction === "OUTBOUND",
+        isBot: observation.direction === "OUTBOUND" ? true : parsed.author.isBot,
       },
       metadata: { ...parsed.metadata, edited: observation.edited },
     });
@@ -630,8 +630,12 @@ export class WhatsAppGatewayAdapter implements Adapter<GatewayThread, GatewayObs
       else if (raw.contentKind === "EDIT")
       {
         const { target, ...content } = raw;
+        const retained = await this.configuration.client.message(target.chatAddress, target.channelMessageId);
         const edited = this.parseMessage({
           ...observation,
+          direction: retained?.message.senderAddress === target.senderAddress
+            ? retained.direction
+            : observation.direction,
           message: {
             ...content,
             contentKind: "TEXT",

@@ -32,7 +32,7 @@ export class GatewayOutcomeError extends Error
     this.name = "GatewayOutcomeError";
   }
 }
-/** Actual SDK projection and send mapping; remote request/event bindings await the wire decision. */
+/** Native author/media projection shared by the remote Adapter and stable-key mapping. */
 export class GatewayChatMapping implements
   Pick<
     Adapter<GatewayThread, InboundMessage>,
@@ -143,8 +143,8 @@ export class GatewayChatMapping implements
         userId: raw.senderAddress,
         userName: raw.senderDisplayName ?? raw.senderAddress,
         fullName: raw.senderDisplayName ?? raw.senderAddress,
-        isMe: false,
-        isBot: "unknown",
+        isMe: raw.senderAddress === this.nativeJid,
+        isBot: raw.senderAddress === this.nativeJid ? false : "unknown",
       },
       metadata: { dateSent: new Date(raw.occurredAt), edited: raw.contentKind === "EDIT" },
     });
