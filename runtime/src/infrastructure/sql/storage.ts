@@ -71,8 +71,10 @@ const tenantTables = [
   "runtime",
   "desired_account",
   "public_event",
+  "webhook_destination",
+  "webhook_delivery",
 ];
-const schemaVersion = 5;
+const schemaVersion = 6;
 
 export class GatewayStorage
 {
@@ -291,6 +293,32 @@ export class GatewayStorage
         "envelope",
         "created_at",
       ]).limit(0).execute();
+      await this.database.selectFrom("webhook_destination").select([
+        "workspace_id",
+        "account_id",
+        "id",
+        "url",
+        "secret",
+        "enabled",
+        "delivery_lifetime_ms",
+      ]).limit(0).execute();
+      await this.database.selectFrom("webhook_delivery").select([
+        "workspace_id",
+        "account_id",
+        "destination_id",
+        "event_id",
+        "event_sequence",
+        "body",
+        "state",
+        "attempts",
+        "next_attempt_at",
+        "expires_at",
+        "terminal_at",
+        "claim_token",
+        "lease_until",
+        "last_status",
+        "failure",
+      ]).limit(0).execute();
     }
     catch (error)
     {
@@ -466,6 +494,16 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
           ),
         );
       }
+      const webhookVersion: unknown = database.prepare("SELECT version FROM schema_version").get();
+      if (z.object({ version: z.literal(5) }).safeParse(webhookVersion).success)
+      {
+        database.exec(
+          await readFile(
+            new URL("../../../migrations/sqlite/005_webhook_outbox.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+      }
       const row: unknown = database.prepare("SELECT version FROM schema_version").get();
       if (z.object({ version: z.literal(schemaVersion) }).safeParse(row).success === false)
       {
@@ -516,6 +554,13 @@ export async function migrateGatewayStorage(input: unknown): Promise<void>
     {
       await connection.query(
         await readFile(new URL("../../../migrations/005_public_events.sql", import.meta.url), "utf8"),
+      );
+    }
+    const webhookVersion = await connection.query("SELECT version FROM gateway.schema_version");
+    if (webhookVersion.rows.length === 1 && webhookVersion.rows[0]?.version === 5)
+    {
+      await connection.query(
+        await readFile(new URL("../../../migrations/006_webhook_outbox.sql", import.meta.url), "utf8"),
       );
     }
     const version = await connection.query("SELECT version FROM gateway.schema_version");

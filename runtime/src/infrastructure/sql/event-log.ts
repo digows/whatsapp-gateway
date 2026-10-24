@@ -53,6 +53,34 @@ export async function appendGatewayEvent(
     envelope: JSON.stringify(envelope),
     created_at: now,
   }).execute();
+  const destinations = await transaction.selectFrom("webhook_destination").select([
+    "id",
+    "delivery_lifetime_ms",
+  ]).where("workspace_id", "=", store.workspaceId).where("account_id", "=", accountId).where(
+    "enabled",
+    "=",
+    1,
+  ).execute();
+  for (const destination of destinations)
+  {
+    await transaction.insertInto("webhook_delivery").values({
+      workspace_id: store.workspaceId,
+      account_id: accountId,
+      destination_id: destination.id,
+      event_id: envelope.id,
+      event_sequence: envelope.sequence,
+      body: JSON.stringify(envelope),
+      state: "PENDING",
+      attempts: 0,
+      next_attempt_at: now,
+      expires_at: new Date(new Date(now).getTime() + destination.delivery_lifetime_ms).toISOString(),
+      terminal_at: null,
+      claim_token: null,
+      lease_until: null,
+      last_status: null,
+      failure: null,
+    }).execute();
+  }
   return envelope;
 }
 export class SqlGatewayEventLog

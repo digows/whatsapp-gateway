@@ -9,7 +9,7 @@ PostgreSQL enforces workspace isolation with Row Level Security; SQLite enforces
 isolation in application queries and runs under one exclusive local runtime.
 
 **Current delivery:** an embeddable core with an authenticated HTTP server, portable contracts and
-embedded fleet coordination and a partial Chat SDK mapping. Redis, webhooks and the complete Chat SDK
+embedded fleet coordination and a partial Chat SDK mapping. Redis and the complete Chat SDK
 Adapter remain in progress; no standalone distribution is published.
 
 ## Built for agent integrations
@@ -38,7 +38,8 @@ partial mapping; a complete ready-to-use Adapter remains a target.
 | Fleet | Embedded elected placement, per-workspace capacity, sticky/least-load assignment, revisioned desired state and fenced recovery |
 | Session safety | Exclusive ownership per account, generation checks, stale-callback rejection and shutdown cleanup |
 | HTTP | Authenticated commands/queries, scoped lazy media and generated OpenAPI with local interactive docs |
-| Events | Transactional account-scoped CloudEvents with stable identity and ordered SQL replay; network dispatch is in progress |
+| Events | Transactional account-scoped CloudEvents with stable identity and ordered SQL replay; signed webhook delivery with bounded retries |
+| Webhooks | SQL per-destination retry queues, HMAC signatures, expiry and separate retention; success work retention defaults to zero |
 | Durable commands | Versioned scoped requests, explicit grants, per-account SQL ingress ordering and generation-fenced recovery |
 | Durable sends | Per-account ordering, stable caller keys, payload-conflict detection, reserved native IDs and explicit `UNKNOWN` outcomes |
 | Contact lookup | Account-scoped registered/unregistered/indeterminate results and authoritative native IDs; no country-specific number rewriting |
@@ -92,8 +93,8 @@ pnpm install --frozen-lockfile
 
 Migrations are explicit. Use `migrateGatewayStorage(configuration)` once with administrative access,
 then `openGatewayStorage(configuration)` for startup. PostgreSQL applies the
-[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql) plus [command ingress](runtime/migrations/003_command_ingress.sql) and [runtime placement](runtime/migrations/004_runtime_placement.sql) plus [public events](runtime/migrations/005_public_events.sql);
-SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql) and [command ingress](runtime/migrations/sqlite/002_command_ingress.sql) and [runtime placement](runtime/migrations/sqlite/003_runtime_placement.sql) plus [public events](runtime/migrations/sqlite/004_public_events.sql). These do not convert
+[baseline](runtime/migrations/001_gateway_core.sql) and [storage-version migration](runtime/migrations/002_storage_version.sql) plus [command ingress](runtime/migrations/003_command_ingress.sql) and [runtime placement](runtime/migrations/004_runtime_placement.sql) plus [public events](runtime/migrations/005_public_events.sql) and [webhooks](runtime/migrations/006_webhook_outbox.sql);
+SQLite has its own [baseline](runtime/migrations/sqlite/001_gateway_core.sql) and [command ingress](runtime/migrations/sqlite/002_command_ingress.sql) and [runtime placement](runtime/migrations/sqlite/003_runtime_placement.sql) plus [public events](runtime/migrations/sqlite/004_public_events.sql) and [webhooks](runtime/migrations/sqlite/005_webhook_outbox.sql). These do not convert
 legacy deployments or copy data when switching backends. Unsupported engines, incompatible schema
 versions and invalid storage/topology combinations fail at startup.
 
@@ -135,7 +136,35 @@ intake; poll the account-scoped command endpoint for the outcome. A `GatewayFlee
 `GatewayCommandWorker.runOne(lease)` on the exclusive account owner. HTTP intake can run on a
 separate PostgreSQL instance of the gateway without a local socket. An accepted command can remain
 queued until an owner executes it. Selecting `{ enabled: false }` opens no HTTP listener.
-Redis and webhooks remain separate unfinished increments.
+Redis remains a separate unfinished increment.
+
+### Deliver signed webhooks
+
+Configure each trusted receiver against its account before events are created, then drive the dispatcher
+loop independently of HTTP. The destination secret comes from private operator configuration.
+
+```ts
+import { GatewayWebhookDispatcher, SqlWebhookOutbox } from "@digows/whatsapp-gateway-runtime";
+
+const outbox = new SqlWebhookOutbox(store);
+await outbox.configure({
+  workspaceId: store.workspaceId,
+  accountId: account.accountId,
+  id: destinationId,
+  url: receiverUrl,
+  secret: webhookSecret,
+  enabled: true,
+});
+const dispatcher = new GatewayWebhookDispatcher(outbox, { enabled: true });
+await dispatcher.runOnce(); // The embedder repeats this; a call processes at most one attempt.
+```
+
+Receivers verify the raw body with `verifyGatewayWebhook` from the contracts package, validate the
+CloudEvent and configured workspace/account, then deduplicate its ID. Delivery is at least once.
+Retries preserve the exact event bytes. The [owning use case](docs/use-cases/gateway-core.md) defines
+header/transcript details and timeout/backoff/attempt/expiry/retention defaults. Success work retention
+is zero by default; source event/message history and send-idempotency are preserved. A disabled
+dispatcher opens no request. Shutdown aborts active requests and leaves retryable work.
 
 ### Run a fleet participant
 
@@ -201,7 +230,7 @@ connection or pairing; inspect `store.account(accountId)` for state and the priv
 Starting returns before the session necessarily becomes `CONNECTED`. `gateway.restore()` makes a
 single pass over saved paired accounts. Close the gateway before closing shared storage.
 For PostgreSQL, select `{ engine: "postgresql", url, mode: "cluster" }` with the restricted runtime URL.
-Cluster storage currently supplies exclusive ownership; automatic placement is still pending.
+Use the embedded participant above for automatic placement and recovery; the core can also be driven manually.
 
 For outbound operations, use the [portable schemas](packages/contracts/src/index.ts) and retain the
 caller-owned `idempotencyKey`. Retry/status lookup must use the same workspace, account and key.
@@ -254,9 +283,8 @@ tests do not require QR pairing or live WhatsApp sends. There is no separate lin
 
 ## Next, not implemented yet
 
-- Independently configurable webhook events and Redis Streams messaging.
+- Independently configurable Redis Streams messaging.
 - A complete, ready-to-use Chat SDK Adapter.
-- Durable webhook retries with explicit delivery and retention policies.
 
 These are approved design targets, not current setup options. No NATS transport is included.
 There is no full WhatsApp history service. Live client/R2 qualification, application replay qualification,

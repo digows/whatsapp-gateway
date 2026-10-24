@@ -2,8 +2,8 @@
 
 This document owns the transport-independent gateway behavior reviewed on October 23, 2026.
 The runtime, portable contracts and application-side Chat SDK projection are implemented here.
-The versioned command contract, SQL ingress and HTTP transport are implemented. Embedded placement is implemented. Public CloudEvents are transactionally retained; Redis transport and webhook
-acknowledgement remain pending increments of the approved design.
+The versioned command contract, SQL ingress and HTTP transport are implemented. Embedded placement is implemented. Public CloudEvents and signed SQL webhook delivery are implemented; Redis transport
+remains a pending increment of the approved design.
 No legacy NATS subject is retained as a compatibility contract.
 
 ## Actors and boundaries
@@ -28,8 +28,8 @@ cluster mode and is currently qualified against PostgreSQL 18. Another Kysely di
 supported backend. Changing configuration does not transfer data between engines.
 
 `migrateGatewayStorage()` is an explicit administrative step. PostgreSQL uses the immutable
-`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` and `005_public_events.sql`; SQLite uses
-`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` and `004_public_events.sql`. Schema version metadata is intentionally system-level,
+`runtime/migrations/001_gateway_core.sql` plus `002_storage_version.sql`, `003_command_ingress.sql` `004_runtime_placement.sql` `005_public_events.sql` and `006_webhook_outbox.sql`; SQLite uses
+`runtime/migrations/sqlite/001_gateway_core.sql` plus `002_command_ingress.sql` `003_runtime_placement.sql` `004_public_events.sql` and `005_webhook_outbox.sql`. Schema version metadata is intentionally system-level,
 not tenant-owned. Unknown versions fail instead of being reset. Migration does not convert legacy
 authentication directories or old deployments. PostgreSQL migration calls serialize on an advisory lock.
 
@@ -107,9 +107,57 @@ transitions remain visible. `SqlGatewayEventLog.after(accountId, sequence, limit
 committed events in per-account sequence, with stable IDs across process/storage reopen. There is
 no global cross-account order. This trusted in-process reader does not replace transport authentication.
 The log is not automatically trimmed in this increment; future delivery-state retention must not delete
-this history/idempotency or rescan it to recreate successful webhook deliveries. Public SQL retention
-is implemented; actual Redis publication and webhook delivery remain pending, with no delivery guarantee
-inferred from the CloudEvents format itself.
+this history/idempotency or rescan it to recreate successful webhook deliveries. Public SQL retention and webhook delivery are implemented; Redis publication remains pending.
+No delivery guarantee is inferred from the CloudEvents format itself.
+
+## Signed webhook outbox, retries and retention
+
+`SqlWebhookOutbox.configure()` accepts a trusted operator destination: workspace/account, stable
+UUID, HTTP(S) URL without embedded credentials, signing secret and enabled flag. No public caller can
+set its own delivery URL/principal through a command. Configuration serializes on the account row.
+Multiple enabled destinations receive independent delivery work. Disabled destinations receive no
+new work. A disabled dispatcher makes no requests; an embedder can pause dispatch independently of
+spooling. Standalone bootstrap/loop wiring is still pending this delivery increment.
+
+When a public event commits, the same transaction inserts one `webhook_delivery` row per currently
+enabled scoped destination. It stores the exact serialized body for byte-identical retries, including
+across PostgreSQL JSONB normalization, process restart or later serializer changes. Enabling a new
+destination does not backfill old public history. Successful task deletion never causes a history scan
+that recreates the delivery. Public event/native message history and send-idempotency remain separate.
+
+Dispatch claims only the oldest unfinished event for a destination and records its attempt/token/lease
+before the HTTP call. Claims are exclusive under SQL serialization, and stale completion cannot change
+a newer attempt. Another runtime can reclaim an expired claim. The HTTP request occurs outside SQL
+transactions. Fair destination rotation lets separate destination queues progress. Per-account source
+sequence remains available to consumers; delayed requests at the receiver can still complete after a
+timeout, so external effect order/exactly-once delivery is not promised.
+
+POST uses `application/cloudevents+json`. All 2xx statuses acknowledge receiver acceptance, not Agent
+processing. Other statuses and network errors retry; redirects are not followed. Response bodies are
+cancelled rather than downloaded. The request timeout is bounded by the remaining delivery lifetime.
+A timeout/crash after receiver acceptance can duplicate the same event. Receivers must retain an
+idempotency key by event ID before acknowledging durable intake. `SUCCEEDED`, `EXHAUSTED` and
+`EXPIRED` are terminal; stop aborts an active request and preserves retryable work. SQL completion
+failure leaves the claim recoverable instead of claiming delivery success.
+
+`WebhookDeliveryPolicySchema` is the owning tuning surface. Defaults are a 10-second request timeout,
+1-second initial retry delay, 60-second cap, 12 attempts, 24-hour delivery lifetime and seven-day terminal
+retention. Retry delay doubles with bounded 50–100% jitter. These are application defaults, not provider
+quotas. Delivery lifetime is distinct from terminal retention. Successful delivery retention defaults
+zero: the successful delivery record/body is deleted in its completion transaction. Nonzero success
+retention is configurable separately. Cleanup removes only webhook delivery records at their own
+terminal deadline; it does not delete event/message history, native authentication or operation keys.
+
+Webhook authentication is HMAC-SHA256 over the exact bytes of
+`UTF8(timestamp + "." + eventId + ".") || rawBody`. Headers are `x-gateway-event-id`,
+`x-gateway-timestamp` (Unix seconds) and `x-gateway-signature` (`v1=` plus lowercase hex).
+A retry signs the stable ID/body with the current timestamp/configured secret. Shared portable
+`signGatewayWebhook()`/`verifyGatewayWebhook()` use WebCrypto. Verification binds metadata and raw
+bytes, defaults to a five-minute clock-skew window, and rejects unknown signature versions. The receiver
+must also parse `GatewayCloudEventSchema` and match the event ID/workspace/account to its configured
+scope before invoking application code. Destination secrets stay in private scoped SQL/configuration,
+never public events, logs or API responses. TLS is an operator deployment requirement beyond local
+fixtures. No standard-webhooks protocol alias or physical endpoint interoperability is claimed.
 
 ## HTTP commands, queries and interactive documentation
 
@@ -206,7 +254,7 @@ Closing a participant cancels its timers, waits for reconciliation/heartbeat, ad
 closes the gateway and command workers, then removes its membership. It preserves durable desired
 state and send history. Expiry recovers membership after ungraceful process loss; live account locks
 still govern handoff. Close the participant before its shared storage. Automatic SQL scheduling is
-implemented; Redis/CloudEvents publication and webhook delivery are separate pending increments.
+implemented; Redis Streams publication remains a separate pending increment.
 
 ## Session flow and ownership
 

@@ -39,3 +39,15 @@ export { type GatewayFleetStore } from "./domain/fleet-store.ts";
 export { SqlFleetStore } from "./infrastructure/sql/fleet-store.ts";
 
 export { SqlGatewayEventLog } from "./infrastructure/sql/event-log.ts";
+
+export {
+  type WebhookDeliveryPolicy,
+  type WebhookDeliveryPolicyInput,
+  WebhookDeliveryPolicySchema,
+  type WebhookDestination,
+} from "./domain/webhook-outbox.ts";
+export { SqlWebhookOutbox } from "./infrastructure/sql/webhook-outbox.ts";
+export {
+  GatewayWebhookDispatcher,
+  type WebhookDispatcherConfiguration,
+} from "./infrastructure/webhook/dispatcher.ts";

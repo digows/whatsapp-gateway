@@ -2,6 +2,8 @@ import type { GatewayCommandState, OperationState, SessionState } from "@digows/
 import type { ColumnType, Generated } from "kysely";
 export type JsonColumn = ColumnType<unknown, string, string>;
 export type NullableJsonColumn = ColumnType<unknown, string | null, string | null>;
+import type { WebhookAttemptFailure, WebhookDeliveryState } from "../../domain/webhook-outbox.ts";
+export type NullableTimestampColumn = ColumnType<Date | string | null, string | null, string | null>;
 export type TimestampColumn = ColumnType<Date | string, string, string>;
 export interface AccountTable
 {
@@ -114,6 +116,34 @@ export interface PublicEventTable
   envelope: JsonColumn;
   created_at: TimestampColumn;
 }
+export interface WebhookDestinationTable
+{
+  workspace_id: string;
+  account_id: string;
+  id: string;
+  url: string;
+  secret: string;
+  enabled: number;
+  delivery_lifetime_ms: number;
+}
+export interface WebhookDeliveryTable
+{
+  workspace_id: string;
+  account_id: string;
+  destination_id: string;
+  event_id: string;
+  event_sequence: number;
+  body: string;
+  state: WebhookDeliveryState;
+  attempts: number;
+  next_attempt_at: TimestampColumn;
+  expires_at: TimestampColumn;
+  terminal_at: NullableTimestampColumn;
+  claim_token: string | null;
+  lease_until: NullableTimestampColumn;
+  last_status: number | null;
+  failure: WebhookAttemptFailure | null;
+}
 export interface GatewayTables
 {
   account: AccountTable;
@@ -128,6 +158,8 @@ export interface GatewayTables
   runtime: RuntimeTable;
   desired_account: DesiredAccountTable;
   public_event: PublicEventTable;
+  webhook_destination: WebhookDestinationTable;
+  webhook_delivery: WebhookDeliveryTable;
 }
 export function jsonValue(value: unknown): unknown
 {
