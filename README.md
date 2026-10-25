@@ -173,12 +173,13 @@ socket shutdown is logged at debug level without an error stack.
 
 ### Run the container
 
-Build from the reviewed source; the Dockerfile pins Node.js 24.18.0 and runs as UID 1000. The current
-qualified publication platform is **linux/arm64**. No amd64 image or multi-platform qualification is
-claimed. The image contains the runtime and contracts, without Chat SDK or Mastra dependencies.
+Build from the reviewed source; the Dockerfile pins Node.js 24.18.0 and runs as UID 1000. Publication
+requires native checks and container qualification on **linux/amd64** and **linux/arm64**, followed
+by a verified multi-platform index. The release records the measured platforms and immutable digest.
+The image contains the runtime and contracts, without Chat SDK or Mastra dependencies.
 
 ```sh
-GATEWAY_IMAGE=ghcr.io/digows/whatsapp-gateway:2.0.0
+GATEWAY_IMAGE=ghcr.io/digows/whatsapp-gateway:2.0.1
 docker pull "$GATEWAY_IMAGE"
 docker volume create whatsapp-gateway-data
 # gateway.json must be readable by container UID 1000 and use directory /data/workspaces.
@@ -222,14 +223,15 @@ alone is not proof of publication.
 
 ### Versioning and releases
 
-The repository, runtime, contracts and Chat Adapter share **SemVer 2.0.0**.
-Git tags use `v<version>` (for example `v2.0.0`); GHCR uses `2.0.0`, the moving major alias `2`,
-and `latest`. Only **linux/arm64** is qualified. Pin the version or, for immutable deployments, the
-image digest reported in the GitHub Release. The SHA image tag also identifies its source commit.
+The repository, runtime, contracts and Chat Adapter share **SemVer 2.0.1**.
+Git tags use `v<version>` (for example `v2.0.1`); GHCR uses `2.0.1`, the moving major alias `2`,
+and `latest`. Release 2.0.0 remains the original ARM64 artifact. New publications qualify both
+native architectures before assembling their shared image tag. Pin the version or, for immutable
+deployments, the image digest reported in the GitHub Release. The SHA image tag identifies its source commit.
 Major and latest aliases can move on subsequent stable releases.
 
 Package SemVer is independent of the wire protocol (`apiVersion: "1"`) and database schema (9).
-Release 2.0.0 does not change either identifier or imply that the proposed Mastra durable consumer
+Release 2.0.1 does not change either identifier or imply that the proposed Mastra durable consumer
 binding is complete. Its measured native-framework limitations remain documented below and in the
 [owning use case](docs/use-cases/gateway-core.md).
 
@@ -238,9 +240,9 @@ and run `pnpm release:check`. After review, push the accepted main commit and cr
 on that exact commit:
 
 ```sh
-git tag -a v2.0.0 <accepted-commit> -m 'WhatsApp Gateway 2.0.0'
+git tag -a v2.0.1 <accepted-commit> -m 'WhatsApp Gateway 2.0.1'
 git push origin main
-git push origin v2.0.0
+git push origin v2.0.1
 ```
 
 The tag workflow rejects mismatched versions, lightweight tags and commits outside main. It runs
@@ -313,7 +315,8 @@ dispatcher opens no request. Shutdown aborts active requests and leaves retryabl
 
 ### Use Redis Streams independently
 
-Redis mode requires Redis 8.2 with AOF and `noeviction`. HTTP can be disabled. The embedder supplies
+Redis mode requires Redis 8.2 or later within 8.x, with AOF and `noeviction`. The qualification
+matrix exercises Redis 8.2.10 and 8.10.2 on both native platforms. HTTP can be disabled. The embedder supplies
 trusted account principals and drives consume/publication/retention separately from the session owner.
 
 ```ts
@@ -453,12 +456,12 @@ These limits are documented in the [owning use case](docs/use-cases/gateway-core
 
 ### Install the consumer packages
 
-Download the versioned archives and `SHA256SUMS` from the selected GitHub Release. For 2.0.0:
+Download the versioned archives and `SHA256SUMS` from the selected GitHub Release. For 2.0.1:
 
 ```sh
-gh release download v2.0.0 --repo digows/whatsapp-gateway \
-  --pattern '*.tgz' --pattern SHA256SUMS --dir ./gateway-2.0.0
-cd gateway-2.0.0
+gh release download v2.0.1 --repo digows/whatsapp-gateway \
+  --pattern '*.tgz' --pattern SHA256SUMS --dir ./gateway-2.0.1
+cd gateway-2.0.1
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -477,13 +480,13 @@ consumer's `pnpm-workspace.yaml` so the Adapter's contracts dependency resolves 
 
 ```yaml
 overrides:
-  '@digows/whatsapp-gateway-contracts': file:./digows-whatsapp-gateway-contracts-2.0.0.tgz
+  '@digows/whatsapp-gateway-contracts': file:./digows-whatsapp-gateway-contracts-2.0.1.tgz
   chat: 4.43.0
 ```
 
 ```sh
-pnpm add ./digows-whatsapp-gateway-contracts-2.0.0.tgz \
-  ./digows-chat-adapter-whatsapp-gateway-2.0.0.tgz chat@4.43.0
+pnpm add ./digows-whatsapp-gateway-contracts-2.0.1.tgz \
+  ./digows-chat-adapter-whatsapp-gateway-2.0.1.tgz chat@4.43.0
 # Only consumers using the optional Mastra composition need this peer:
 pnpm add @mastra/core@1.79.0
 ```

@@ -17,7 +17,15 @@ permissions:
 
 jobs:
   qualify:
-    runs-on: ubuntu-24.04-arm
+    name: Qualify ${{ matrix.platform.architecture }} / Redis ${{ matrix.redis }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - {architecture: amd64, runner: ubuntu-24.04}
+          - {architecture: arm64, runner: ubuntu-24.04-arm}
+        redis: ['8.2.10', '8.10.2']
     outputs:
       version: ${{ steps.version.outputs.version }}
     services:
@@ -32,7 +40,7 @@ jobs:
           --health-cmd "pg_isready -U fixture_admin -d gateway_fixture"
           --health-interval 5s --health-timeout 5s --health-retries 20
       redis:
-        image: redis:8.2
+        image: redis:${{ matrix.redis }}
         ports: [6379:6379]
         options: >-
           --health-cmd "redis-cli ping"
@@ -109,7 +117,31 @@ jobs:
           docker exec "$REDIS_CONTAINER" redis-cli CONFIG SET appendfsync always
           docker exec "$REDIS_CONTAINER" redis-cli CONFIG SET maxmemory-policy noeviction
       - name: Run all configured checks
-        run: pnpm check
+        run: pnpm check | tee "$RUNNER_TEMP/gateway-check.log"
+      - name: Record the native test environment
+        env:
+          REDIS_CONTAINER: ${{ job.services.redis.id }}
+          EXPECTED_REDIS: ${{ matrix.redis }}
+          EXPECTED_ARCHITECTURE: ${{ matrix.platform.architecture }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          const server=execFileSync('docker',['exec',process.env.REDIS_CONTAINER,'redis-cli','INFO','server'],{encoding:'utf8'});
+          const version=server.match(/^redis_version:([^\r\n]+)/m)?.[1];
+          const expectedNode=process.env.EXPECTED_ARCHITECTURE==='amd64'?'x64':'arm64';
+          if(version!==process.env.EXPECTED_REDIS||process.arch!==expectedNode)throw new Error('Native test environment mismatch');
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/gateway-fixture.json',JSON.stringify({
+            revision:process.env.GITHUB_SHA,node:process.version,architecture:process.arch,redis:version
+          },null,2));
+          JS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: gateway-checks-${{ github.sha }}-${{ matrix.platform.architecture }}-redis-${{ matrix.redis }}
+          path: |
+            ${{ runner.temp }}/gateway-check.log
+            ${{ runner.temp }}/gateway-fixture.json
       - name: Package the consumer artifacts
         run: |
           mkdir -p "$RUNNER_TEMP/gateway-packages"
@@ -117,6 +149,7 @@ jobs:
           pnpm --store-dir "$GATEWAY_TEST_PNPM_STORE" --dir packages/chat-adapter pack --pack-destination "$RUNNER_TEMP/gateway-packages"
           node scripts/release.mjs artifacts "$RUNNER_TEMP/gateway-packages"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.platform.architecture == 'amd64' && matrix.redis == '8.10.2'
         with:
           name: gateway-consumer-packages-${{ github.sha }}
           path: |
@@ -129,9 +162,14 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     needs: qualify
-    runs-on: ubuntu-24.04-arm
-    outputs:
-      image_reference: ${{ steps.image.outputs.reference }}
+    name: Publish ${{ matrix.platform.architecture }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - {architecture: amd64, runner: ubuntu-24.04}
+          - {architecture: arm64, runner: ubuntu-24.04-arm}
     permissions:
       contents: read
       packages: write
@@ -146,36 +184,27 @@ jobs:
         with:
           node-version: 24.18.0
       - name: Publish the qualified architecture
-        id: image
         env:
           TMPDIR: ${{ runner.temp }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USER: ${{ github.actor }}
           GATEWAY_EXPECTED_VERSION: ${{ needs.qualify.outputs.version }}
           GATEWAY_EXPECTED_REVISION: ${{ github.sha }}
-          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          GATEWAY_ARCHITECTURE: ${{ matrix.platform.architecture }}
+          GATEWAY_EXPECTED_PLATFORM: linux/${{ matrix.platform.architecture }}
         run: |
+          image="ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA-$GATEWAY_ARCHITECTURE"
           docker buildx create --name gateway-publication --driver docker-container --use
-          docker buildx build --platform linux/arm64 --load --tag "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA" --build-arg "GATEWAY_REVISION=$GITHUB_SHA" --build-arg "GATEWAY_VERSION=$GATEWAY_EXPECTED_VERSION" --metadata-file "$RUNNER_TEMP/gateway-image.json" .
-          python3 scripts/qualify-container.py "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA" > "$RUNNER_TEMP/gateway-container.json"
+          docker buildx build --platform "$GATEWAY_EXPECTED_PLATFORM" --load --tag "$image" --build-arg "GATEWAY_REVISION=$GITHUB_SHA" --build-arg "GATEWAY_VERSION=$GATEWAY_EXPECTED_VERSION" --metadata-file "$RUNNER_TEMP/gateway-$GATEWAY_ARCHITECTURE-build.json" .
+          python3 scripts/qualify-container.py "$image" > "$RUNNER_TEMP/gateway-$GATEWAY_ARCHITECTURE-container.json"
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
-          docker push "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA"
-          if [ -n "$RELEASE_TAG" ]; then
-            major=${GATEWAY_EXPECTED_VERSION%%.*}
-            for alias in "$GATEWAY_EXPECTED_VERSION" "$major" latest; do
-              docker tag "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA" "ghcr.io/digows/whatsapp-gateway:$alias"
-              docker push "ghcr.io/digows/whatsapp-gateway:$alias"
-            done
-          fi
-          docker image inspect "ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA" > "$RUNNER_TEMP/gateway-published.json"
-          node --input-type=module <<'JS'
-          import fs from 'node:fs';
-          const result=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/gateway-published.json'))[0];
-          const reference=result.RepoDigests.find(value=>/^ghcr\.io\/digows\/whatsapp-gateway@sha256:[a-f0-9]{64}$/.test(value));
-          if(!reference)throw new Error('Published digest unavailable');
-          fs.appendFileSync(process.env.GITHUB_OUTPUT,`reference=${reference}\n`);
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`Published ${reference}\nCommit ${process.env.GITHUB_SHA}\nPlatform linux/arm64\n`);
-          JS
+          docker push "$image"
+          docker image inspect "$image" > "$RUNNER_TEMP/gateway-$GATEWAY_ARCHITECTURE-published.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gateway-image-${{ github.sha }}-${{ matrix.platform.architecture }}
+          path: ${{ runner.temp }}/gateway-${{ matrix.platform.architecture }}-*.json
+          if-no-files-found: error
       - name: Clear registry credentials and the owned builder
         if: always()
         run: |
@@ -184,9 +213,92 @@ jobs:
             docker buildx rm gateway-publication
           fi
 
+  manifest:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    needs: [qualify, publish]
+    runs-on: ubuntu-24.04
+    outputs:
+      image_reference: ${{ steps.index.outputs.reference }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: gateway-image-${{ github.sha }}-*
+          path: ${{ runner.temp }}/gateway-images
+          merge-multiple: true
+      - name: Publish and verify the qualified multi-platform index
+        id: index
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          RELEASE_VERSION: ${{ needs.qualify.outputs.version }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: |
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'gateway-images'
+          references=[]
+          for architecture in ['amd64','arm64']:
+              image=json.loads((root/f'gateway-{architecture}-published.json').read_text())[0]
+              receipt=json.loads((root/f'gateway-{architecture}-container.json').read_text())
+              assert image['Os']=='linux' and image['Architecture']==architecture
+              assert image['Config']['Labels']['org.opencontainers.image.revision']==os.environ['GITHUB_SHA']
+              assert image['Config']['Labels']['org.opencontainers.image.version']==os.environ['RELEASE_VERSION']
+              assert receipt['qualifiedPlatform']==receipt['dockerHostPlatform']=='linux/'+architecture
+              assert receipt['architecture']==('x64' if architecture=='amd64' else 'arm64')
+              assert receipt['imageId']==image['Id']
+              reference=next(value for value in image['RepoDigests'] if re.fullmatch(r'ghcr.io/digows/whatsapp-gateway@sha256:[a-f0-9]{64}',value))
+              references.append(reference)
+          (root/'references.txt').write_text('\n'.join(references)+'\n')
+          PY
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+          mapfile -t qualified_images < "$RUNNER_TEMP/gateway-images/references.txt"
+          image="ghcr.io/digows/whatsapp-gateway:$GITHUB_SHA"
+          docker buildx imagetools create --tag "$image" "${qualified_images[@]}"
+          docker buildx imagetools inspect --raw "$image" > "$RUNNER_TEMP/gateway-index.json"
+          docker buildx imagetools inspect --format '{{json .Manifest}}' "$image" > "$RUNNER_TEMP/gateway-index-descriptor.json"
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])
+          index=json.loads((root/'gateway-index.json').read_text())
+          expected={value.rsplit('@',1)[1] for value in (root/'gateway-images/references.txt').read_text().splitlines()}
+          manifests=index['manifests']
+          assert len(manifests)==2 and {value['digest'] for value in manifests}==expected
+          assert {(value['platform']['os'],value['platform']['architecture']) for value in manifests}=={('linux','amd64'),('linux','arm64')}
+          digest=json.loads((root/'gateway-index-descriptor.json').read_text())['digest']
+          assert re.fullmatch(r'sha256:[a-f0-9]{64}',digest)
+          reference='ghcr.io/digows/whatsapp-gateway@'+digest
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output: output.write('reference='+reference+'\n')
+          (root/'gateway-reference.txt').write_text(reference+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as summary: summary.write('Qualified native platforms: linux/amd64, linux/arm64\nPublished '+reference+'\n')
+          PY
+          if [ -n "$RELEASE_TAG" ]; then
+            reference=$(cat "$RUNNER_TEMP/gateway-reference.txt")
+            major=${RELEASE_VERSION%%.*}
+            for alias in "$RELEASE_VERSION" "$major" latest; do
+              docker buildx imagetools create --tag "ghcr.io/digows/whatsapp-gateway:$alias" "$reference"
+            done
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gateway-index-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/gateway-index*.json
+            ${{ runner.temp }}/gateway-reference.txt
+          if-no-files-found: error
+      - name: Clear registry credentials
+        if: always()
+        run: docker logout ghcr.io
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [qualify, publish]
+    needs: [qualify, manifest]
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
@@ -204,7 +316,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_VERSION: ${{ needs.qualify.outputs.version }}
-          IMAGE_REFERENCE: ${{ needs.publish.outputs.image_reference }}
+          IMAGE_REFERENCE: ${{ needs.manifest.outputs.image_reference }}
         run: |
           node scripts/release.mjs check "$RELEASE_TAG"
           (cd "$RUNNER_TEMP/gateway-packages" && sha256sum --check SHA256SUMS)
@@ -214,6 +326,6 @@ jobs:
           const {RELEASE_VERSION,IMAGE_REFERENCE,GITHUB_SHA,RUNNER_TEMP}=process.env;
           if(!/^ghcr\.io\/digows\/whatsapp-gateway@sha256:[a-f0-9]{64}$/.test(IMAGE_REFERENCE))throw new Error('Release image digest unavailable');
           const notes=fs.readFileSync(`docs/releases/${RELEASE_VERSION}.md`,'utf8');
-          fs.writeFileSync(RUNNER_TEMP+'/gateway-release-notes.md',`${notes}\nCommit: ${GITHUB_SHA}\n\nImage: \`${IMAGE_REFERENCE}\`\n\nQualified platform: linux/arm64.\n`);
+          fs.writeFileSync(RUNNER_TEMP+'/gateway-release-notes.md',notes+'\nCommit: '+GITHUB_SHA+'\n\nImage: '+IMAGE_REFERENCE+'\n\nQualified platforms: linux/amd64, linux/arm64.\n');
           JS
           gh release create "$RELEASE_TAG" --verify-tag --latest --title "WhatsApp Gateway $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/gateway-release-notes.md" "$RUNNER_TEMP/gateway-packages/"*.tgz "$RUNNER_TEMP/gateway-packages/SHA256SUMS"

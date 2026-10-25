@@ -48,7 +48,13 @@ def main():
     )
     image = sys.argv[1]
     metadata = json.loads(docker("image", "inspect", image))[0]
-    require(metadata["Os"] == "linux" and metadata["Architecture"] == "arm64", "Expected linux/arm64 image")
+    expected_platform = os.environ.get("GATEWAY_EXPECTED_PLATFORM", "linux/arm64")
+    require(expected_platform in ("linux/amd64", "linux/arm64"), "Unsupported qualification platform")
+    observed_platform = metadata["Os"] + "/" + metadata["Architecture"]
+    require(observed_platform == expected_platform, "Image platform mismatch: " + observed_platform)
+    daemon_platform = docker("info", "--format", "{{.OSType}}/{{.Architecture}}")
+    daemon_platform = daemon_platform.replace("/x86_64", "/amd64").replace("/aarch64", "/arm64")
+    require(daemon_platform == expected_platform, "Native qualification requires a matching Docker host")
     image_labels = metadata["Config"]["Labels"]
     for variable, label_key in [
         ("GATEWAY_EXPECTED_VERSION", "org.opencontainers.image.version"),
@@ -150,6 +156,10 @@ console.log(JSON.stringify({node:process.version,architecture:process.arch,platf
         result = json.loads(docker(
             "exec", "-i", application_name, "node", "--input-type=module", input_text=probe
         ))
+        expected_node_architecture = "x64" if expected_platform == "linux/amd64" else "arm64"
+        require(result["architecture"] == expected_node_architecture, "Runtime architecture mismatch")
+        result["qualifiedPlatform"] = expected_platform
+        result["dockerHostPlatform"] = daemon_platform
         stopped_at = time.monotonic()
         docker("stop", "--time", "20", application_name)
         shutdown_ms = round((time.monotonic() - stopped_at) * 1000, 3)

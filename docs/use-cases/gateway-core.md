@@ -189,8 +189,11 @@ fixtures. No standard-webhooks protocol alias or physical endpoint interoperabil
 ## Redis Streams command intake and publication
 
 `GatewayRedisTransport` is independently enabled. Disabled mode opens no Redis connection. Enabled
-mode currently qualifies Redis 8.2 (measured 8.2.10), AOF enabled and `noeviction`; incompatible startup
-fails explicitly. It uses the pinned node-redis client rather than a generic broker abstraction.
+mode requires Redis 8.2 or later within 8.x, AOF enabled and `noeviction`; incompatible startup
+fails explicitly. Native qualification covers Redis 8.2.10 and 8.10.2 with the actual transport,
+including durable intake, ACK/reclaim, publication, ACLs and adapter interoperability. Version-guard
+regressions cover the minimum version, multi-digit minors, unsupported majors and malformed INFO.
+It uses the pinned node-redis client rather than a generic broker abstraction.
 Account bindings come from trusted operator principals and explicit account IDs, not message fields.
 `gatewayStreamNames(prefix, scope)` owns deterministic lowercase UUID stream names:
 `{prefix}:{workspaceId}:{accountId}:commands`, `:results` and `:events` (default prefix `gateway:v1`).
@@ -582,11 +585,11 @@ scoped request and the actual server response; it does not establish every brows
 No live pairing, external message, production deployment or production DML is part of qualification.
 Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
-Release packages share SemVer 2.0.0 across root, runtime, contracts and Adapter.
+Release packages share SemVer 2.0.1 across root, runtime, contracts and Adapter.
 Annotated `v<version>` tags must match all manifests and target a commit on main.
 The release workflow runs configured qualification and validates the packed
-compiled consumer exports/dependencies/checksums, then smoke-tests the ARM64
-image and its exact version/revision labels before image publication. Stable
+compiled consumer exports/dependencies/checksums, then smoke-tests native AMD64
+and ARM64 images and their exact version/revision labels before image publication. Stable
 GitHub Releases depend on both qualification and image publication, and attach
 the same versioned consumer tarballs plus `SHA256SUMS`. Image tags include the
 version, moving major/latest aliases and immutable source SHA; the release
@@ -700,14 +703,16 @@ The context allowlist excludes local authentication and private configuration. T
 qualifier uses owned labeled resources and a synthetic disabled account to measure explicit migration,
 startup/readiness, durable queued intake, SIGTERM, restart and retained work. It verifies Node/platform,
 SQLite and absence of Chat/Mastra from runtime. It removes only its own containers/volume. The
-qualified architecture is linux/arm64; another architecture is not inferred. Allow deployment stop
+qualifier requires a matching native Docker host for linux/amd64 or linux/arm64. Allow deployment stop
 time for bounded in-flight work rather than relying on Docker's default ten-second kill window.
 
-CI runs formatting, strict types, compilation and all tests using isolated PostgreSQL/Redis fixtures,
+CI runs formatting, strict types, compilation and all tests using isolated PostgreSQL/Redis fixtures
+on both native architectures, with Redis 8.2.10 and 8.10.2,
 then archives contracts/Adapter tarballs. Test files are serialized because Redis capability tests
 mutate the isolated server's global AOF/eviction settings; explicit within-file concurrency remains
 covered. Manual image publication matches the reviewed main SHA, builds and qualifies the actual
-arm64 image before pushing it, then records its registry digest. Publication is distinct from any
+image on each platform before pushing it, then verifies a shared index containing only those two
+qualified digests. Publication is distinct from any
 production rollout or real-number qualification.
 
 ## Proposed consumer reply recovery and run outcomes

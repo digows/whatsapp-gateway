@@ -13,6 +13,18 @@ import type { GatewayQueryService } from "../../application/query-service.ts";
 import { GatewayAuthorizationError, type GatewayPrincipal } from "../../domain/authorization.ts";
 import type { GatewayStreamKind } from "../../domain/redis-stream-store.ts";
 import type { RedisStreamStore } from "../../domain/redis-stream-store.ts";
+
+export function verifyRedisServerVersion(serverInformation: string): void
+{
+  const version = /(?:^|\r?\n)redis_version:([0-9]+)\.([0-9]+)\.[0-9]+(?:\r?\n|$)/.exec(
+    serverInformation,
+  );
+  if (version?.[1] !== "8" || Number(version[2]) < 2)
+  {
+    throw new Error("Redis Streams requires Redis 8.2 or later within 8.x");
+  }
+}
+
 const EnabledRedisSchema = z.strictObject({
   enabled: z.literal(true),
   url: z.url().refine(value => ["redis:", "rediss:"].includes(new URL(value).protocol), "Expected Redis URL"),
@@ -149,10 +161,7 @@ export class GatewayRedisTransport
       }
     }
     const server = await this.commands().info("server");
-    if (!/(?:^|\r?\n)redis_version:8\.2\.[0-9]+(?:\r?\n|$)/.test(server))
-    {
-      throw new Error("Qualified Redis Streams requires Redis 8.2");
-    }
+    verifyRedisServerVersion(server);
     const persistence = await this.commands().info("persistence");
     if (!/(?:^|\r?\n)aof_enabled:1(?:\r?\n|$)/.test(persistence))
     {
