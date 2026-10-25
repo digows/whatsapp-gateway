@@ -1,6 +1,6 @@
 {
   "name": "@digows/chat-adapter-whatsapp-gateway",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "private": true,
   "type": "module",
   "exports": {
@@ -16,15 +16,16 @@
     }
   },
   "dependencies": {
-    "@digows/whatsapp-gateway-contracts": "workspace:*",
     "zod": "4.6.5",
     "redis": "6.3.0"
   },
   "peerDependencies": {
+    "@digows/whatsapp-gateway-contracts": "workspace:*",
     "chat": "4.43.0",
     "@mastra/core": "1.79.0"
   },
   "devDependencies": {
+    "@digows/whatsapp-gateway-contracts": "workspace:*",
     "chat": "4.43.0"
   },
   "files": [

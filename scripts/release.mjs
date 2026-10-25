@@ -60,9 +60,17 @@ export async function writeConsumerChecksums(root, directory)
     }
     if (consumerPackage.directory === "packages/chat-adapter")
     {
-      if (manifest.dependencies?.[consumerPackages[0].name] !== version)
+      const contracts = consumerPackages[0].name;
+      if (
+        manifest.peerDependencies?.[contracts] !== version
+        || Object.hasOwn(manifest.dependencies ?? {}, contracts)
+        || Object.hasOwn(manifest.optionalDependencies ?? {}, contracts)
+        || manifest.peerDependenciesMeta?.[contracts]?.optional === true
+      )
       {
-        throw new Error("Packed Adapter must depend on the exact released contracts version");
+        throw new Error(
+          "Packed Adapter must require a required peer at the exact released contracts version",
+        );
       }
     }
     const { stdout: entryText } = await execute("tar", ["-tzf", archive]);

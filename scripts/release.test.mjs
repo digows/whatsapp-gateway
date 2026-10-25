@@ -31,7 +31,9 @@ async function packFixture(root, name, overrides = {})
     name,
     version: "2.0.0",
     exports: { ".": { types: "./dist/index.d.ts", default: "./dist/index.js" } },
-    dependencies: { "@digows/whatsapp-gateway-contracts": "2.0.0" },
+    ...(name === "@digows/chat-adapter-whatsapp-gateway"
+      ? { peerDependencies: { "@digows/whatsapp-gateway-contracts": "2.0.0" } }
+      : {}),
     ...overrides,
   };
   await writeFile(join(staging, "package/package.json"), JSON.stringify(manifest));
@@ -58,7 +60,7 @@ test("release metadata requires synchronized stable versions and exact tag", asy
   }
 });
 
-test("release archives validate packaged versions, compiled exports and exact contracts dependency", async () =>
+test("release archives validate packaged versions, compiled exports and required exact contracts peer", async () =>
 {
   const root = await createFixture();
   const contracts = "@digows/whatsapp-gateway-contracts";
@@ -72,8 +74,23 @@ test("release archives validate packaged versions, compiled exports and exact co
     const checksums = await readFile(join(root, "SHA256SUMS"), "utf8");
     assert.equal(checksums.trim().split("\n").length, 2);
     await execute("shasum", ["-a", "256", "-c", "SHA256SUMS"], { cwd: root });
-    await packFixture(root, adapter, { dependencies: { [contracts]: "workspace:*" } });
-    await assert.rejects(writeConsumerChecksums(root, root), /exact released contracts version/);
+    for (
+      const invalid of [
+        { peerDependencies: { [contracts]: "workspace:*" } },
+        { peerDependencies: { [contracts]: "^2.0.0" } },
+        { peerDependencies: {} },
+        { dependencies: { [contracts]: "2.0.0" } },
+        { optionalDependencies: { [contracts]: "2.0.0" } },
+        { peerDependenciesMeta: { [contracts]: { optional: true } } },
+      ]
+    )
+    {
+      await packFixture(root, adapter, invalid);
+      await assert.rejects(
+        writeConsumerChecksums(root, root),
+        /required peer.*exact released contracts version/,
+      );
+    }
     await packFixture(root, adapter, { version: "0.0.0" });
     await assert.rejects(writeConsumerChecksums(root, root), /manifest does not match/);
     await packFixture(root, adapter, {

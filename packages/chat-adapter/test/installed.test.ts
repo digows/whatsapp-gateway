@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,20 @@ test("packed and freshly installed Adapter runs released native Mastra channels 
 {
   const directory = await mkdtemp(join(temporaryRoot, "gateway-installed-"));
   const fixture = new RemoteFixture();
+  const archivePaths = new Map<string, string>();
+  const archiveServer = createServer((request, response) =>
+  {
+    const archive = archivePaths.get(request.url ?? "");
+    if (archive === undefined)
+    {
+      response.writeHead(404).end();
+      return;
+    }
+    readFile(archive).then(bytes =>
+      response.writeHead(200, { "content-type": "application/gzip" }).end(bytes)
+    )
+      .catch(() => response.writeHead(500).end());
+  });
   try
   {
     for (const packageDirectory of ["packages/contracts", "packages/chat-adapter"])
@@ -40,6 +55,16 @@ test("packed and freshly installed Adapter runs released native Mastra channels 
       name.startsWith("digows-chat-adapter-whatsapp-gateway-") && name.endsWith(".tgz")
     );
     assert.ok(contracts && adapter);
+    archivePaths.set(`/${contracts}`, join(directory, contracts));
+    archivePaths.set(`/${adapter}`, join(directory, adapter));
+    await new Promise<void>((resolve, reject) =>
+    {
+      archiveServer.once("error", reject);
+      archiveServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = archiveServer.address();
+    assert.ok(address && typeof address !== "string");
+    const archiveOrigin = `http://127.0.0.1:${address.port}`;
     await writeFile(
       join(directory, "package.json"),
       JSON.stringify({
@@ -48,8 +73,8 @@ test("packed and freshly installed Adapter runs released native Mastra channels 
         type: "module",
         packageManager: "pnpm@12.9.1",
         dependencies: {
-          "@digows/whatsapp-gateway-contracts": `file:./${contracts}`,
-          "@digows/chat-adapter-whatsapp-gateway": `file:./${adapter}`,
+          "@digows/whatsapp-gateway-contracts": `${archiveOrigin}/${contracts}`,
+          "@digows/chat-adapter-whatsapp-gateway": `${archiveOrigin}/${adapter}`,
           chat: "4.43.0",
           "@mastra/core": "1.79.0",
           "@chat-adapter/state-memory": "4.43.0",
@@ -59,7 +84,7 @@ test("packed and freshly installed Adapter runs released native Mastra channels 
     await writeFile(
       join(directory, "pnpm-workspace.yaml"),
       JSON.stringify({
-        overrides: { "@digows/whatsapp-gateway-contracts": `file:./${contracts}`, chat: "4.43.0" },
+        blockExoticSubdeps: true,
       }),
     );
     await execute("pnpm", ["--store-dir", store, "install", "--prefer-offline"], {
@@ -140,6 +165,12 @@ try {
   finally
   {
     await fixture.close();
+    if (archiveServer.listening)
+    {
+      await new Promise<void>((resolve, reject) =>
+        archiveServer.close(error => error ? reject(error) : resolve())
+      );
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });

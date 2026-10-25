@@ -585,7 +585,7 @@ scoped request and the actual server response; it does not establish every brows
 No live pairing, external message, production deployment or production DML is part of qualification.
 Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
-Release packages share SemVer 2.0.1 across root, runtime, contracts and Adapter.
+Release packages share SemVer 2.0.2 across root, runtime, contracts and Adapter.
 Annotated `v<version>` tags must match all manifests and target a commit on main.
 The release workflow runs configured qualification and validates the packed
 compiled consumer exports/dependencies/checksums, then smoke-tests native AMD64
@@ -596,6 +596,18 @@ version, moving major/latest aliases and immutable source SHA; the release
 records the registry digest. Manual SHA publication retains its exact reviewed
 main-SHA check. No npm publication, protocol bump or SQL schema bump is implied:
 wire `apiVersion: "1"` and SQL schema 9 are independently owned identifiers.
+
+The packaged Adapter requires the exact matching contracts release as a mandatory
+peer, supplied directly by its consumer. It must not declare that package as a
+regular or optional dependency or mark the peer optional. The release checker
+rejects missing, ranged, workspace-protocol and optional contracts peers in the
+packed manifest. Source workspace metadata resolves to the exact release during
+packing. Consumers may use the two verified versioned GitHub Release tarball URLs
+without URL overrides, vendoring or weakening pnpm's transitive dependency
+protection. The installed-package test serves real compiled archives over HTTP,
+installs them with pnpm 12.9.1 and `blockExoticSubdeps: true`, and exercises native
+Mastra intake, completed-event deduplication and stable-key posting. This packaging
+change leaves gateway runtime code, wire API1 and SQL schema9 unchanged.
 
 
 ## Gateway-observed history and remote queries

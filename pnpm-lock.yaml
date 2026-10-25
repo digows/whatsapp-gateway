@@ -208,9 +208,6 @@ importers:
 
   packages/chat-adapter:
     dependencies:
-      '@digows/whatsapp-gateway-contracts':
-        specifier: workspace:*
-        version: link:../contracts
       '@mastra/core':
         specifier: 1.79.0
         version: 1.79.0(zod@4.6.5)
@@ -221,6 +218,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@digows/whatsapp-gateway-contracts':
+        specifier: workspace:*
+        version: link:../contracts
       chat:
         specifier: 4.43.0
         version: 4.43.0(zod@4.6.5)
