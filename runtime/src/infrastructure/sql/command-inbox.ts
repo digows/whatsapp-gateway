@@ -1,4 +1,5 @@
 import {
+  canonicalGatewayJson,
   type GatewayCommand,
   type GatewayCommandFailure,
   GatewayCommandFailureSchema,
@@ -15,7 +16,7 @@ import type { ClaimedGatewayCommand, GatewayCommandInbox } from "../../domain/co
 import { GatewayConflictError, GatewayResourceUnavailableError } from "../../domain/errors.ts";
 import type { AccountLease } from "../../domain/gateway-store.ts";
 import { appendGatewayEvent } from "./event-log.ts";
-import { canonical, SqlGatewayStore } from "./gateway-store.ts";
+import { SqlGatewayStore } from "./gateway-store.ts";
 import { type CommandTable, jsonValue } from "./tables.ts";
 
 export class SqlCommandInbox implements GatewayCommandInbox
@@ -29,7 +30,7 @@ export class SqlCommandInbox implements GatewayCommandInbox
   {
     const command = GatewayCommandSchema.parse(input);
     if (command.workspaceId !== this.workspaceId) throw new Error("Command workspace mismatch");
-    const digest = createHash("sha256").update(canonical(command)).digest("hex");
+    const digest = createHash("sha256").update(canonicalGatewayJson(command)).digest("hex");
     return this.store.transaction(async transaction =>
     {
       // Serialize intake with claims and other producers on both qualified engines.

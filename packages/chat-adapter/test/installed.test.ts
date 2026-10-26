@@ -107,7 +107,7 @@ test("packed and freshly installed Adapter runs released native Mastra channels 
     const program = `
 import {WhatsAppGatewayAdapter,GatewayRemoteClient,GatewayHttpClient} from '@digows/chat-adapter-whatsapp-gateway';
 import {createMastraGatewayExample} from '@digows/chat-adapter-whatsapp-gateway/examples/mastra';
-import {signGatewayWebhook} from '@digows/whatsapp-gateway-contracts';
+import {signGatewayWebhook,outboundMessageDigest} from '@digows/whatsapp-gateway-contracts';
 import {createMemoryState} from '@chat-adapter/state-memory';
 import {InMemoryStore} from '@mastra/core/storage';
 import {createMockModel} from '@mastra/core/test-utils/llm-mock';
@@ -131,8 +131,12 @@ try {
   const first=await adapter.postWithKey(thread,'Stable installed send','installed-stable-key');
   const second=await adapter.postWithKey(thread,'Stable installed send','installed-stable-key');
   if(first.id!==second.id)throw new Error('Installed operation identity changed');
+  const operation=await client.operation(c.accountId,'installed-stable-key');
+  const digest=await outboundMessageDigest({channel:'WHATSAPP',senderAddress:'100@s.whatsapp.net',recipientAddress:'200@s.whatsapp.net',contentKind:'TEXT',text:'Stable installed send',idempotencyKey:'installed-stable-key'});
+  if(operation.digest!==digest)throw new Error('Installed operation payload binding differs');
   let conflict=false;try{await adapter.postWithKey(thread,'Conflicting content','installed-stable-key');}catch{conflict=true;}
   if(!conflict)throw new Error('Installed payload conflict was accepted');
+  if(JSON.stringify(await client.operation(c.accountId,'installed-stable-key'))!==JSON.stringify(operation))throw new Error('Conflict replaced original operation');
   console.log('CONSUMER_RESULT '+JSON.stringify({stableId:first.id,modelCalls,adapterUrl:import.meta.resolve('@digows/chat-adapter-whatsapp-gateway'),mastra:JSON.parse(fs.readFileSync('node_modules/@mastra/core/package.json')).version,chat:JSON.parse(fs.readFileSync('node_modules/chat/package.json')).version}));
 } finally {await composition.mastra.shutdown();}
 `;

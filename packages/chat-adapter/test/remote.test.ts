@@ -1,6 +1,6 @@
 import { createMemoryState } from "@chat-adapter/state-memory";
 import { createRedisState } from "@chat-adapter/state-redis";
-import type { InboundMessage } from "@digows/whatsapp-gateway-contracts";
+import { type InboundMessage, outboundMessageDigest } from "@digows/whatsapp-gateway-contracts";
 import type { Mastra } from "@mastra/core/mastra";
 import { InMemoryStore } from "@mastra/core/storage";
 import { createMockModel } from "@mastra/core/test-utils/llm-mock";
@@ -58,6 +58,18 @@ for (const engine of ["sqlite", "postgresql"] as const)
         assert.equal(result.raw.message.contentKind, "TEXT");
         if (result.raw.message.contentKind !== "TEXT") throw new Error("Text result missing");
         assert.equal(result.raw.message.text, "*reply* to incoming");
+        const operation = await fixture.client.operation(fixture.accountId, "stable-handler-reply");
+        assert.equal(
+          operation.digest,
+          await outboundMessageDigest({
+            channel: "WHATSAPP",
+            senderAddress: "100@s.whatsapp.net",
+            recipientAddress: "200@s.whatsapp.net",
+            contentKind: "TEXT",
+            text: "*reply* to incoming",
+            idempotencyKey: "stable-handler-reply",
+          }),
+        );
         await fixture.adapter.editMessage(fixture.thread(), result.id, "edited");
         assert.equal((await fixture.adapter.fetchMessage(fixture.thread(), result.id))?.text, "edited");
         await fixture.adapter.addReaction(fixture.thread(), result.id, "👍");
@@ -67,6 +79,10 @@ for (const engine of ["sqlite", "postgresql"] as const)
         assert.equal((await fixture.adapter.fetchMessages(fixture.thread())).messages.length, 1);
         await assert.rejects(
           fixture.adapter.postWithKey(fixture.thread(), "conflicting text", "stable-handler-reply"),
+        );
+        assert.deepEqual(
+          await fixture.client.operation(fixture.accountId, "stable-handler-reply"),
+          operation,
         );
         const card = Card({
           title: "Choose",

@@ -1,6 +1,7 @@
 import {
   type Account,
   AccountScopeSchema,
+  canonicalGatewayJson,
   type DeliveryObservation,
   GatewayIdentifierSchema,
   type InboundMessage,
@@ -9,6 +10,7 @@ import {
   type OperationResult,
   OperationStateSchema,
   type OutboundMessage,
+  outboundMessageDigest,
   type SessionState,
 } from "@digows/whatsapp-gateway-contracts";
 import { type Selectable, sql, type Transaction } from "kysely";
@@ -213,7 +215,7 @@ export class SqlGatewayStore implements GatewayStore
   }
   async reserve(lease: AccountLease, message: OutboundMessage, count: number): Promise<SendOperation>
   {
-    const digest = createHash("sha256").update(canonical(message)).digest("hex");
+    const digest = await outboundMessageDigest(message);
     return this.transaction(async transaction =>
     {
       await this.assertOwnership(transaction, lease);
@@ -412,7 +414,7 @@ export class SqlGatewayStore implements GatewayStore
     await this.transaction(async transaction =>
     {
       await this.assertOwnership(transaction, lease);
-      const id = createHash("sha256").update(canonical(message)).digest("hex");
+      const id = createHash("sha256").update(canonicalGatewayJson(message)).digest("hex");
       const inserted = await transaction.insertInto("event").values({
         workspace_id: this.workspaceId,
         account_id: lease.accountId,
@@ -594,17 +596,4 @@ function operationResult(row: Selectable<OperationTable>): OperationResult
     acceptedParts: row.accepted_parts,
     state: OperationStateSchema.parse(row.state),
   };
-}
-export function canonical(value: unknown): string
-{
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object")
-  {
-    return `{${
-      Object.entries(value).filter(([, item]) => item !== undefined).sort(([left], [right]) =>
-        left < right ? -1 : left > right ? 1 : 0
-      ).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")
-    }}`;
-  }
-  return JSON.stringify(value);
 }

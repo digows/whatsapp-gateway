@@ -375,6 +375,15 @@ for every album parent/part before transmission. The same key and digest returns
 result; reusing a key with another payload is a conflict. Native IDs also exclude bot echoes while
 preserving handset-originated messages, including self-chat.
 
+The contracts package exports `outboundMessageDigest(message)` for the exact validated
+portable outbound message. Callers retain its result before dispatch and compare it with
+the original operation's digest, workspace, account and key during reconciliation. A key
+match alone does not establish that the operation used the approved payload. Digest
+mismatch never authorizes a new send or acceptance of another payload. The public helper
+and SQL reservation share one implementation, preserving released fingerprints; canonical
+object keys are sorted, absent object fields are omitted and array order is retained.
+The helper uses Web Crypto and does not require a Node-only dependency in contracts.
+
 The operation states are PENDING, IN_FLIGHT, ACCEPTED, FAILED and UNKNOWN. ACCEPTED means the
 native send call returned, not that a person received/read the message. The accepted album prefix
 and its reserved IDs remain durable. Delivery observations retain native acknowledgement names
@@ -585,7 +594,7 @@ scoped request and the actual server response; it does not establish every brows
 No live pairing, external message, production deployment or production DML is part of qualification.
 Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
-Release packages share SemVer 2.0.2 across root, runtime, contracts and Adapter.
+Release packages share SemVer 2.0.3 across root, runtime, contracts and Adapter.
 Annotated `v<version>` tags must match all manifests and target a commit on main.
 The release workflow runs configured qualification and validates the packed
 compiled consumer exports/dependencies/checksums, then smoke-tests native AMD64

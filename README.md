@@ -179,7 +179,7 @@ by a verified multi-platform index. The release records the measured platforms a
 The image contains the runtime and contracts, without Chat SDK or Mastra dependencies.
 
 ```sh
-GATEWAY_IMAGE=ghcr.io/digows/whatsapp-gateway:2.0.2
+GATEWAY_IMAGE=ghcr.io/digows/whatsapp-gateway:2.0.3
 docker pull "$GATEWAY_IMAGE"
 docker volume create whatsapp-gateway-data
 # gateway.json must be readable by container UID 1000 and use directory /data/workspaces.
@@ -223,15 +223,15 @@ alone is not proof of publication.
 
 ### Versioning and releases
 
-The repository, runtime, contracts and Chat Adapter share **SemVer 2.0.2**.
-Git tags use `v<version>` (for example `v2.0.2`); GHCR uses `2.0.2`, the moving major alias `2`,
+The repository, runtime, contracts and Chat Adapter share **SemVer 2.0.3**.
+Git tags use `v<version>` (for example `v2.0.3`); GHCR uses `2.0.3`, the moving major alias `2`,
 and `latest`. Release 2.0.0 remains the original ARM64 artifact. New publications qualify both
 native architectures before assembling their shared image tag. Pin the version or, for immutable
 deployments, the image digest reported in the GitHub Release. The SHA image tag identifies its source commit.
 Major and latest aliases can move on subsequent stable releases.
 
 Package SemVer is independent of the wire protocol (`apiVersion: "1"`) and database schema (9).
-Release 2.0.2 does not change either identifier or imply that the proposed Mastra durable consumer
+Release 2.0.3 does not change either identifier or imply that the proposed Mastra durable consumer
 binding is complete. Its measured native-framework limitations remain documented below and in the
 [owning use case](docs/use-cases/gateway-core.md).
 
@@ -240,9 +240,9 @@ and run `pnpm release:check`. After review, push the accepted main commit and cr
 on that exact commit:
 
 ```sh
-git tag -a v2.0.2 <accepted-commit> -m 'WhatsApp Gateway 2.0.2'
+git tag -a v2.0.3 <accepted-commit> -m 'WhatsApp Gateway 2.0.3'
 git push origin main
-git push origin v2.0.2
+git push origin v2.0.3
 ```
 
 The tag workflow rejects mismatched versions, lightweight tags and commits outside main. It runs
@@ -421,6 +421,14 @@ A changed payload under the same key is a conflict. An `UNKNOWN` outcome must be
 `gateway.operation(accountId, key)`; it must not trigger a fresh automatic send. Database ownership
 cannot fence an effect already dispatched to WhatsApp.
 
+Before dispatch, retain `await outboundMessageDigest(message)` from
+`@digows/whatsapp-gateway-contracts` for the exact validated portable outbound message.
+When reconciling, compare that digest with `OperationResult.digest` as well as the workspace,
+account and original key. A different digest describes a different payload; it does not confirm
+your intended effect. This check reads the operation and requires no second send. The helper
+uses the gateway's existing fingerprint algorithm, including nested key ordering and array order.
+The digest is a payload binding, not authentication or proof of delivery.
+
 Use `gateway.lookupContactAddress(accountId, address)` to resolve a phone address. A `REGISTERED`
 result contains `resolvedAddress`; retain that native address in durable send jobs. Explicit
 negatives remain distinct from incomplete responses, timeout, unavailable sessions and unsupported
@@ -456,12 +464,12 @@ These limits are documented in the [owning use case](docs/use-cases/gateway-core
 
 ### Install the consumer packages
 
-Download the versioned archives and `SHA256SUMS` from the selected GitHub Release. For 2.0.2:
+Download the versioned archives and `SHA256SUMS` from the selected GitHub Release. For 2.0.3:
 
 ```sh
-gh release download v2.0.2 --repo digows/whatsapp-gateway \
-  --pattern '*.tgz' --pattern SHA256SUMS --dir ./gateway-2.0.2
-cd gateway-2.0.2
+gh release download v2.0.3 --repo digows/whatsapp-gateway \
+  --pattern '*.tgz' --pattern SHA256SUMS --dir ./gateway-2.0.3
+cd gateway-2.0.3
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -482,8 +490,8 @@ release checksums above, install the immutable versioned URLs:
 
 ```sh
 pnpm add \
-  https://github.com/digows/whatsapp-gateway/releases/download/v2.0.2/digows-whatsapp-gateway-contracts-2.0.2.tgz \
-  https://github.com/digows/whatsapp-gateway/releases/download/v2.0.2/digows-chat-adapter-whatsapp-gateway-2.0.2.tgz \
+  https://github.com/digows/whatsapp-gateway/releases/download/v2.0.3/digows-whatsapp-gateway-contracts-2.0.3.tgz \
+  https://github.com/digows/whatsapp-gateway/releases/download/v2.0.3/digows-chat-adapter-whatsapp-gateway-2.0.3.tgz \
   chat@4.43.0
 # Only consumers using the optional Mastra composition need this peer:
 pnpm add @mastra/core@1.79.0

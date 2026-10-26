@@ -1,9 +1,46 @@
+import { type OutboundMessage, outboundMessageDigest } from "@digows/whatsapp-gateway-contracts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { SendOperation } from "../src/domain/send-operation.ts";
 
 const operationScope = { workspaceId: randomUUID(), accountId: randomUUID() };
+
+test("public outbound digest retains the released SQL fingerprint and detects changed approved content", async () =>
+{
+  const message: OutboundMessage = {
+    channel: "WHATSAPP",
+    senderAddress: "100@s.whatsapp.net",
+    recipientAddress: "200@s.whatsapp.net",
+    contentKind: "TEXT",
+    text: "Olá 🌊",
+    idempotencyKey: "approved-1",
+  };
+  const digest = await outboundMessageDigest(message);
+  // Captured from the released 2.0.2 SqlGatewayStore canonicalization before extraction.
+  assert.equal(digest, "619383396739ee596e437828c9667ec01b4513f8e6dc0204eec664560624ce5b");
+  assert.equal(
+    await outboundMessageDigest({
+      idempotencyKey: message.idempotencyKey,
+      text: message.text,
+      contentKind: "TEXT",
+      recipientAddress: message.recipientAddress,
+      senderAddress: message.senderAddress,
+      channel: message.channel,
+    }),
+    digest,
+  );
+  for (
+    const changed of [
+      { ...message, text: "Different approved content" },
+      { ...message, recipientAddress: "300@s.whatsapp.net" },
+      { ...message, idempotencyKey: "another-operation" },
+    ]
+  )
+  {
+    assert.notEqual(await outboundMessageDigest(changed), digest);
+  }
+});
 
 test("dispatch uncertainty cannot be reset into a second send", () =>
 {
