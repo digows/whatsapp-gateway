@@ -4,6 +4,7 @@ import { sql } from "kysely";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
+import { setImmediate } from "node:timers/promises";
 import { Gateway } from "../src/application/gateway.ts";
 import { encodeWhatsAppMediaSource } from "../src/domain/media-source.ts";
 import type { IMediaRepository } from "../src/domain/media-storage.ts";
@@ -57,6 +58,99 @@ after(async () =>
   await gateway.close();
   await store.close();
 });
+
+for (const stateFailure of [false, true])
+{
+  test(`native disconnect cancels pending typing and closes its socket with state failure ${stateFailure}`, async context =>
+  {
+    const isolatedStore = new PostgresGatewayStore(url!, randomUUID());
+    const id = randomUUID();
+    const localSockets: NativeSocketFixture[] = [];
+    let connection: BaileysConnection;
+    const instance = new Gateway(isolatedStore, (_account, lease) =>
+    {
+      connection = new BaileysConnection(isolatedStore, lease, media, configuration =>
+      {
+        const socket = new NativeSocketFixture(configuration);
+        localSockets.push(socket);
+        return socket.socket;
+      });
+      return connection;
+    });
+    try
+    {
+      await isolatedStore.createAccount(id);
+      await instance.start(id);
+      const original = localSockets[0]!;
+      original.pair();
+      original.update("open");
+      await connection!.drainEvents();
+      context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+      const originalPresence = context.mock.method(
+        original.socket,
+        "sendPresenceUpdate",
+        async () => undefined,
+      );
+      original.events.emit("messages.upsert", {
+        messages: [{
+          key: { id: "typing-before-restart", remoteJid: "200@s.whatsapp.net", fromMe: false },
+          messageTimestamp: Math.floor(Date.now() / 1000),
+          message: { conversation: "hello" },
+        }],
+      });
+      await connection!.drainEvents();
+      assert.equal(originalPresence.mock.callCount(), 0);
+      if (stateFailure)
+      {
+        const setState = isolatedStore.setState.bind(isolatedStore);
+        context.mock.method(
+          isolatedStore,
+          "setState",
+          async (...parameters: Parameters<typeof isolatedStore.setState>) =>
+          {
+            if (parameters[1] === "CONNECTING")
+            {
+              throw new Error("Controlled disconnect state failure");
+            }
+            await setState(...parameters);
+          },
+        );
+      }
+      original.update("close", 515);
+      if (stateFailure)
+      {
+        await assert.rejects(connection!.drainEvents(), /Controlled disconnect state failure/);
+        assert.equal(localSockets.length, 1);
+      }
+      else
+      {
+        await connection!.drainEvents();
+        assert.equal(localSockets.length, 2);
+        const replacement = localSockets[1]!;
+        const replacementPresence = context.mock.method(
+          replacement.socket,
+          "sendPresenceUpdate",
+          async () => undefined,
+        );
+        replacement.update("open");
+        await connection!.drainEvents();
+        context.mock.timers.tick(30000);
+        await setImmediate();
+        assert.equal(replacementPresence.mock.callCount(), 0);
+      }
+      assert.equal(original.closed, true);
+      context.mock.timers.tick(30000);
+      await setImmediate();
+      assert.equal(originalPresence.mock.callCount(), 0);
+    }
+    finally
+    {
+      await instance.close();
+      context.mock.timers.reset();
+      await isolatedStore.close();
+    }
+  });
+}
 
 test("real Baileys adapter persists QR/creds, recreates on 515 and restores without a new QR", async () =>
 {

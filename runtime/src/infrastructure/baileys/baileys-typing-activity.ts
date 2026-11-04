@@ -27,6 +27,7 @@ type PresenceSocket = Pick<WASocket, "sendPresenceUpdate">;
 export class BaileysTypingActivity
 {
   private stopped = false;
+  private composing = false;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private waitTimer: ReturnType<typeof setTimeout> | undefined;
   private finishWait: (() => void) | undefined;
@@ -42,7 +43,7 @@ export class BaileysTypingActivity
   )
   {}
 
-  async start(ttlMs: number): Promise<void>
+  async start(ttlMs: number, initialDelayMs = 0): Promise<void>
   {
     if (this.stopped) return;
     this.expiryTimer = setTimeout(() =>
@@ -50,6 +51,7 @@ export class BaileysTypingActivity
       void this.stop();
     }, ttlMs);
     this.expiryTimer.unref();
+    if (initialDelayMs > 0) await this.wait(initialDelayMs);
     await this.compose();
   }
 
@@ -78,7 +80,7 @@ export class BaileysTypingActivity
     clearTimeout(this.waitTimer);
     this.finishWait?.();
     this.onStopped();
-    this.stopping = this.presence("paused");
+    this.stopping = this.composing ? this.presence("paused") : Promise.resolve();
     return this.stopping;
   }
 
@@ -92,6 +94,7 @@ export class BaileysTypingActivity
     if (this.stopped) return;
     try
     {
+      this.composing = true;
       const pending = this.socket.sendPresenceUpdate("composing", this.recipientJid);
       // A timed-out transport call can complete later. Clear that late indicator too.
       void pending.then(() =>

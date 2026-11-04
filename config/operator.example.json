@@ -39,5 +39,6 @@
   },
   "webhooks": { "enabled": false, "destinations": [] },
   "media": { "mode": "direct" },
+  "gateway": { "initialTypingDelayMs": 2000 },
   "logging": { "level": "info" }
 }

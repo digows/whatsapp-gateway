@@ -182,7 +182,14 @@ export class BaileysConnection implements WhatsAppConnection
             failure: describeWhatsAppError(error),
           });
           this.socket = null;
-          await closeBaileysSocket(socket, 15000);
+          try
+          {
+            await this.events?.state("CONNECTING");
+          }
+          finally
+          {
+            await closeBaileysSocket(socket, 15000);
+          }
           if (code === DisconnectReason.loggedOut)
           {
             await this.authenticationStore.clear();
@@ -208,7 +215,6 @@ export class BaileysConnection implements WhatsAppConnection
             await this.events?.state("FAILED");
             return;
           }
-          await this.events?.state("CONNECTING");
           const wait = Math.min(900000, 30000 * 2 ** Math.min(this.retry++, 10))
             * (0.8 + Math.random() * 0.4);
           this.timer = setTimeout(() => this.createSocket(), wait);

@@ -36,6 +36,7 @@ export const GatewayConfigurationSchema = z.object({
   dailyMaximum: z.number().int().positive().default(1500),
   sendTimeoutMs: z.number().int().positive().max(60000).default(10000),
   typingDelayMs: z.number().int().nonnegative().max(5000).default(400),
+  initialTypingDelayMs: z.number().int().nonnegative().max(2147483647).default(2000),
   sendRateLimit: z.number().int().positive().default(8),
   sendRatePeriodMs: z.number().int().positive().default(60000),
   firstDayLimit: z.number().int().positive().default(60),
@@ -78,6 +79,10 @@ class HostedAccount
     await this.connection.start(await this.store.account(this.lease.accountId), {
       state: async (state, jid, qr) =>
       {
+        if (state !== "CONNECTED")
+        {
+          await Promise.allSettled([...this.activities.values()].map(activity => activity.stop()));
+        }
         await this.store.setState(this.lease, state, jid, qr);
         this.logger.info({
           event: "gateway_session_state",
@@ -104,18 +109,23 @@ class HostedAccount
           && await this.store.hasSent(this.lease.accountId, message.channelMessageId)
         ) return;
         await this.store.retain(this.lease, message, native);
+        if (!this.lease.alive || this.controller.signal.aborted) return;
         if (message.senderAddress === message.receivingAddress)
         {
           await this.activities.get(message.chatAddress)?.stop();
         }
         else if (
           message.contentKind === "TEXT" && !message.chatAddress.endsWith("@g.us")
-          && this.activities.size < 32
+          && !this.activities.has(message.chatAddress) && this.activities.size < 32
         )
         {
+          const remainingMs = baileysTypingConfiguration.heartbeatTtlMs
+            - Math.max(0, Date.now() - Date.parse(message.occurredAt));
+          if (remainingMs <= 0) return;
           const typing = await this.typing(message.chatAddress);
-          await typing.start(30000);
-          void typing.heartbeat();
+          void typing.start(remainingMs, this.configuration.initialTypingDelayMs).then(() =>
+            typing.heartbeat()
+          );
         }
       },
     });
@@ -212,6 +222,7 @@ class HostedAccount
           }
           throw error;
         }
+        await this.activities.get(prepared.recipientAddress)?.stop();
         await delay(await this.store.pace(this.lease, this.configuration), undefined, {
           signal: this.controller.signal,
         });

@@ -408,9 +408,20 @@ a daily ceiling and inactivity reset. Defaults are 1.5–5 seconds spacing, eigh
 60 on the first day growing by 1.6, seven warm-up days, a 1,500 ceiling and 168 hours inactivity.
 Reservations count attempts conservatively; they do not claim delivered-message totals.
 
-Typing before send has a deadline and finally cleanup. Incoming direct text may start a bounded
-30-second heartbeat with randomized 4–7 second spacing, without an Agent signal. Handset activity,
-reply, stop and ownership loss end activity. A stale activity may not clear a newer activity.
+Typing before send has a deadline and finally cleanup. `gateway.typingDelayMs` retains its independent
+pre-send delay. Incoming direct text starts typing after `gateway.initialTypingDelayMs`, a fixed
+nonnegative integer in milliseconds, defaulting to 2000. Zero means immediate typing, not disabled
+typing; values above the native timer maximum of 2147483647 are rejected. The initial timer runs in
+the background after retention, without blocking input handling or holding a ready reply back.
+
+The initial delay belongs to the bounded 30-second heartbeat window measured from the message's
+`occurredAt`, not an additional window before it. Expired messages start no activity; later messages
+do not restart a pending delay or extend an active window. Heartbeat spacing remains randomized
+4–7 seconds, without an Agent signal. A prepared send cancels pending incoming typing before its
+existing pacing and pre-send typing. Handset replies, explicit presence stop, shutdown, disconnect
+and ownership loss cancel both the pending delay and subsequent heartbeat. Reconnection does not
+replay presence. Cancelling before the first composition sends no typing signal. A stale activity
+may not clear a newer activity.
 Presence failure never causes an automatic duplicate send. The number of active activities is
 bounded. These controls are pacing/UX behavior, not a promise against account bans.
 
@@ -594,7 +605,7 @@ scoped request and the actual server response; it does not establish every brows
 No live pairing, external message, production deployment or production DML is part of qualification.
 Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
-Release packages share SemVer 2.0.3 across root, runtime, contracts and Adapter.
+Release packages share SemVer 2.0.4 across root, runtime, contracts and Adapter.
 Annotated `v<version>` tags must match all manifests and target a commit on main.
 The release workflow runs configured qualification and validates the packed
 compiled consumer exports/dependencies/checksums, then smoke-tests native AMD64
