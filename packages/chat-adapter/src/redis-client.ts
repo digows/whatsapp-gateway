@@ -1,6 +1,7 @@
 import {
   type AccountScope,
   AccountScopeSchema,
+  type GatewayCloudEvent,
   GatewayCloudEventSchema,
   GatewayQueryCloudEventSchema,
   gatewayStreamNames,
@@ -275,7 +276,7 @@ export class GatewayRedisEvents
     })();
     await this.started;
   }
-  async consumeOnce(handler: (event: unknown) => Promise<void>): Promise<boolean>
+  async consumeOnce(handler: (event: GatewayCloudEvent) => Promise<void>): Promise<boolean>
   {
     if (this.running) throw new Error("An event consumption is already active");
     this.running = this.consume(handler);
@@ -288,7 +289,7 @@ export class GatewayRedisEvents
       this.running = undefined;
     }
   }
-  private async consume(handler: (event: unknown) => Promise<void>): Promise<boolean>
+  private async consume(handler: (event: GatewayCloudEvent) => Promise<void>): Promise<boolean>
   {
     await this.start();
     const commands = this.client.withAbortSignal(this.controller.signal);

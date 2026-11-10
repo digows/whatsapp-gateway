@@ -14,6 +14,16 @@ import { GatewayStreamReceiptSchema } from "./streams.ts";
 const messageData = AccountScopeSchema.extend({ message: InboundMessageSchema });
 const receiptData = AccountScopeSchema.extend(DeliveryObservationSchema.shape);
 const rejectionData = AccountScopeSchema.extend({ errorName: z.string().min(1) });
+export const GroupMembershipChangeSchema = z.strictObject({
+  receivingAddress: z.string().min(1),
+  chatAddress: z.string().endsWith("@g.us"),
+  channelMessageId: z.string().min(1),
+  occurredAt: z.iso.datetime({ offset: true }),
+  change: z.enum(["JOINED", "LEFT"]),
+  actorAddress: z.string().min(1).optional(),
+});
+export type GroupMembershipChange = Readonly<z.infer<typeof GroupMembershipChangeSchema>>;
+const groupMembershipData = AccountScopeSchema.extend(GroupMembershipChangeSchema.shape);
 export const GatewayEventPayloadSchema = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("com.digows.whatsapp.message.sent.v1"),
@@ -28,6 +38,10 @@ export const GatewayEventPayloadSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("com.digows.whatsapp.message.received.v1"), data: messageData }),
   z.strictObject({ type: z.literal("com.digows.whatsapp.message.delivery.v1"), data: receiptData }),
   z.strictObject({ type: z.literal("com.digows.whatsapp.message.rejected.v1"), data: rejectionData }),
+  z.strictObject({
+    type: z.literal("com.digows.whatsapp.group.membership.v1"),
+    data: groupMembershipData,
+  }),
   z.strictObject({
     type: z.literal("com.digows.whatsapp.operation.updated.v1"),
     data: OperationResultSchema,

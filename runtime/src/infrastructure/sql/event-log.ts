@@ -15,6 +15,7 @@ export async function appendGatewayEvent(
   transaction: GatewayTransaction,
   accountId: string,
   payload: GatewayEventPayload,
+  eventId?: string,
 ): Promise<GatewayCloudEvent>
 {
   if (payload.data.workspaceId !== store.workspaceId || payload.data.accountId !== accountId)
@@ -27,6 +28,14 @@ export async function appendGatewayEvent(
     store.workspaceId,
   ).where("id", "=", accountId).returning("id").executeTakeFirst();
   if (!account) throw new Error("Event account unavailable");
+  const retainedId = eventId === undefined ? undefined : GatewayIdentifierSchema.parse(eventId);
+  if (retainedId !== undefined)
+  {
+    const retained = await transaction.selectFrom("public_event").select("envelope")
+      .where("workspace_id", "=", store.workspaceId).where("account_id", "=", accountId)
+      .where("id", "=", retainedId).executeTakeFirst();
+    if (retained) return GatewayCloudEventSchema.parse(jsonValue(retained.envelope));
+  }
   const previous = await transaction.selectFrom("public_event").select("sequence").where(
     "workspace_id",
     "=",
@@ -36,7 +45,7 @@ export async function appendGatewayEvent(
   const envelope = GatewayCloudEventSchema.parse({
     ...payload,
     specversion: "1.0",
-    id: randomUUID(),
+    id: retainedId ?? randomUUID(),
     source: "urn:digows:whatsapp-gateway",
     subject: `accounts/${accountId}`,
     time: now,

@@ -135,6 +135,35 @@ The log is not automatically trimmed in this increment; future delivery-state re
 this history/idempotency or rescan it to recreate successful webhook deliveries. Public SQL retention and webhook delivery are implemented; Redis publication uses separate SQL cursors.
 No delivery guarantee is inferred from the CloudEvents format itself.
 
+## Connected account group membership
+
+`com.digows.whatsapp.group.membership.v1` reports the connected number entering (`JOINED`)
+or leaving (`LEFT`) a group. Its data carries `workspaceId`, `accountId`, `receivingAddress`,
+the group's `chatAddress`, native `channelMessageId` and `occurredAt`. `actorAddress` is present
+only when WhatsApp supplies an actor; an absent actor is not inferred from the affected number.
+Provider LID and phone aliases are normalized using the connected identity and existing address
+resolution. Equal user strings in different address namespaces do not identify the same number.
+
+The pinned Baileys participant-add/invite/approved-join and remove/leave notification stubs supply
+the native identity and time. The gateway publishes only when their affected participants include
+its connected identity. A group-create notification also qualifies when its accompanying native
+group metadata explicitly includes that identity. Group metadata alone, other participants'
+changes and promotion/demotion do not produce this event. No participant directory or application
+group policy is maintained.
+
+Membership observations use the existing ownership fence and transactional public-event log,
+including Redis publication, webhook delivery and SQL replay. A UUIDv8 derived from workspace,
+account, receiving address, group, native ID and change identifies the occurrence; actor enrichment
+does not create another occurrence. Concurrent/repeated observations retained in the log reuse
+the original envelope without another sequence or webhook job. After public-log expiry the same
+native occurrence retains its event ID; consumers own the lifetime of their effect deduplication.
+There is no additional table or group-state snapshot. Normalization failures use the existing
+private failure path; publication failures propagate without consuming the occurrence identity.
+
+The portable contracts and typed `GatewayRedisEvents.consumeOnce` handler expose this event to
+any consumer. A consumer may handle it before forwarding ordinary message events to the Chat SDK
+Adapter. The Adapter continues to treat membership changes as technical events, not chat messages.
+
 ## Signed webhook outbox, retries and retention
 
 `SqlWebhookOutbox.configure()` accepts a trusted operator destination: workspace/account, stable

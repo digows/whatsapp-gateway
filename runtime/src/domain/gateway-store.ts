@@ -1,6 +1,7 @@
 import type {
   Account,
   DeliveryObservation,
+  GroupMembershipChange,
   InboundMessage,
   MediaReference,
   OperationResult,
@@ -61,6 +62,7 @@ export interface GatewayStore
   writeAuthentication(lease: AccountLease, mutations: readonly AuthenticationMutation[]): Promise<void>;
   clearAuthentication(lease: AccountLease): Promise<void>;
   recordReceipt(lease: AccountLease, observation: DeliveryObservation): Promise<void>;
+  recordGroupMembership(lease: AccountLease, observation: GroupMembershipChange): Promise<void>;
   receipts(accountId: string, messageId: string): Promise<readonly DeliveryObservation[]>;
   retain(lease: AccountLease, message: InboundMessage, native: string): Promise<void>;
   retainFailure(lease: AccountLease, native: string, errorName: string): Promise<void>;

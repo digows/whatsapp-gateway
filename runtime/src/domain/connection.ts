@@ -2,6 +2,7 @@ import type {
   Account,
   ContactRegistration,
   DeliveryObservation,
+  GroupMembershipChange,
   InboundMessage,
   OutboundMessage,
   SessionState,
@@ -22,6 +23,7 @@ export interface ConnectionEvents
   receipt(observation: DeliveryObservation): Promise<void>;
   rejected(native: string, errorName: string): Promise<void>;
   received(message: InboundMessage, native: string): Promise<void>;
+  groupMembershipChanged(change: GroupMembershipChange): Promise<void>;
 }
 export interface WhatsAppConnection
 {

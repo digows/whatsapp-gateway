@@ -9,12 +9,100 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { SqlGatewayEventLog } from "../../../runtime/src/infrastructure/sql/event-log.ts";
 import { createMastraGatewayExample } from "../examples/mastra.ts";
 import { WhatsAppGatewayAdapter } from "../src/adapter.ts";
 import { GatewayRedisEvents } from "../src/redis-client.ts";
 import { GatewayHttpClient, GatewayRemoteClient } from "../src/remote-client.ts";
 import { RemoteFixture } from "./support/remote-fixture.ts";
 const redisUrl = process.env["GATEWAY_TEST_REDIS_URL"];
+
+for (const transport of ["http", "redis"] as const)
+{
+  test(`group membership reaches the scoped consumer over ${transport} without becoming a chat message`, async () =>
+  {
+    const fixture = new RemoteFixture();
+    let chat: Chat | undefined;
+    let events: GatewayRedisEvents | undefined;
+    let messageCalls = 0;
+    try
+    {
+      await fixture.start("sqlite", transport);
+      chat = new Chat({
+        userName: "agent",
+        adapters: { whatsapp: fixture.adapter },
+        state: createMemoryState(),
+      });
+      chat.onDirectMessage(async () =>
+      {
+        messageCalls++;
+      });
+      await chat.initialize();
+      const change = {
+        receivingAddress: "100@s.whatsapp.net",
+        chatAddress: "120000000000001@g.us",
+        channelMessageId: "membership-sdk",
+        occurredAt: new Date().toISOString(),
+        change: "JOINED" as const,
+        actorAddress: "200@s.whatsapp.net",
+      };
+      await fixture.socket.events!.groupMembershipChanged(change);
+      const store = fixture.storage.workspace(fixture.workspaceId);
+      const event = (await new SqlGatewayEventLog(store).after(fixture.accountId, 0, 100))
+        .find(value => value.type === "com.digows.whatsapp.group.membership.v1");
+      assert.ok(event);
+      if (transport === "http")
+      {
+        assert.equal((await fixture.webhook(event)).status, 204);
+      }
+      else
+      {
+        events = new GatewayRedisEvents({
+          workspaceId: fixture.workspaceId,
+          accountId: fixture.accountId,
+          url: redisUrl!,
+          prefix: fixture.prefix,
+          group: `membership-${randomUUID()}`,
+          reclaimIdleMs: 1,
+        });
+        let delivered = false;
+        for (let attempt = 0; attempt < 100 && !delivered; attempt++)
+        {
+          await events.consumeOnce(async value =>
+          {
+            if (value.type === "com.digows.whatsapp.group.membership.v1")
+            {
+              assert.deepEqual(value, event);
+              assert.equal(value.data.actorAddress, "200@s.whatsapp.net");
+              delivered = true;
+            }
+            await fixture.adapter.processGatewayEvent(value);
+          });
+          if (!delivered) await delay(10);
+        }
+        assert.equal(delivered, true);
+      }
+      assert.equal(messageCalls, 0);
+      assert.equal(fixture.socket.sent.length, 0);
+      const foreignWorkspace = randomUUID();
+      await assert.rejects(
+        fixture.adapter.processGatewayEvent({
+          ...event,
+          workspaceid: foreignWorkspace,
+          data: { ...event.data, workspaceId: foreignWorkspace },
+        }),
+        /scope mismatch/,
+      );
+    }
+    finally
+    {
+      await events?.close();
+      await chat?.shutdown();
+      await fixture.close();
+    }
+  });
+}
+
 if (!redisUrl) throw new Error("Explicit isolated Redis fixture required");
 for (const engine of ["sqlite", "postgresql"] as const)
 {

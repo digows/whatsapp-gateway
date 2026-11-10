@@ -41,7 +41,7 @@ or another agent framework; the gateway runtime has no framework dependency.
 | Session safety | Exclusive ownership per account, generation checks, stale-callback rejection and shutdown cleanup |
 | HTTP | Authenticated commands/queries, scoped lazy media and generated OpenAPI with local interactive docs |
 | Redis Streams | Scoped durable command intake/ACK/reclaim, result/event publication after local AOF acknowledgement and generated AsyncAPI |
-| Events | Transactional account-scoped CloudEvents with stable identity and ordered SQL replay; signed webhook delivery with bounded retries |
+| Events | Transactional account-scoped CloudEvents for messages and the connected number's group membership, with stable identity, ordered SQL replay and signed webhook delivery |
 | Webhooks | SQL per-destination retry queues, HMAC signatures, expiry and separate retention; success work retention defaults to zero |
 | Durable commands | Versioned scoped requests, explicit grants, per-account SQL ingress ordering and generation-fenced recovery |
 | Durable sends | Per-account ordering, stable caller keys, payload-conflict detection, reserved native IDs and explicit `UNKNOWN` outcomes |

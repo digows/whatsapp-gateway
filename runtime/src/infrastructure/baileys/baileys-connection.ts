@@ -1,6 +1,8 @@
 import {
   type Account,
   type ContactRegistration,
+  type GroupMembershipChange,
+  GroupMembershipChangeSchema,
   type InboundMessage,
   InboundMessageSchema,
   type MessageReference,
@@ -11,6 +13,7 @@ import makeWASocket, {
   BufferJSON,
   DisconnectReason,
   isJidBroadcast,
+  isJidGroup,
   isJidNewsletter,
   jidNormalizedUser,
   proto,
@@ -20,6 +23,7 @@ import makeWASocket, {
 } from "baileys";
 import pino, { type Logger } from "pino";
 import QRCode from "qrcode";
+import { z } from "zod";
 import type { WhatsAppSendReceipt } from "../../domain/accepted-outbound-part.ts";
 import type { ConnectionEvents, PreparedWhatsAppSend, WhatsAppConnection } from "../../domain/connection.ts";
 import { describeWhatsAppError } from "../../domain/error-details.ts";
@@ -38,6 +42,19 @@ import { closeBaileysSocket, withBaileysTimeout } from "./baileys-socket-lifecyc
 import { BaileysProtocolLogger } from "./protocol-logger.ts";
 export type SocketConfiguration = Parameters<typeof makeWASocket>[0];
 export type SocketFactory = (configuration: SocketConfiguration) => WASocket;
+const NativeGroupParticipantSchema = z.object({
+  id: z.string().min(1),
+  phoneNumber: z.string().min(1).optional(),
+  lid: z.string().min(1).optional(),
+});
+type NativeGroupParticipant = z.infer<typeof NativeGroupParticipantSchema>;
+const membershipStubs = new Map<proto.WebMessageInfo.StubType, GroupMembershipChange["change"]>([
+  [proto.WebMessageInfo.StubType.GROUP_PARTICIPANT_ADD, "JOINED"],
+  [proto.WebMessageInfo.StubType.GROUP_PARTICIPANT_INVITE, "JOINED"],
+  [proto.WebMessageInfo.StubType.GROUP_PARTICIPANT_ADD_REQUEST_JOIN, "JOINED"],
+  [proto.WebMessageInfo.StubType.GROUP_PARTICIPANT_REMOVE, "LEFT"],
+  [proto.WebMessageInfo.StubType.GROUP_PARTICIPANT_LEAVE, "LEFT"],
+]);
 export class BaileysConnection implements WhatsAppConnection
 {
   private socket: WASocket | null = null;
@@ -112,6 +129,7 @@ export class BaileysConnection implements WhatsAppConnection
       getMessage: async key => this.cache.read(key),
     });
     this.socket = socket;
+    const createdGroups = new Set<string>();
     if (!this.authentication.creds.me)
     {
       this.pairingTimer = setTimeout(() =>
@@ -221,10 +239,21 @@ export class BaileysConnection implements WhatsAppConnection
           this.timer.unref();
         }
       }));
+    socket.ev.on("groups.upsert", groups =>
+    {
+      if (this.stopped || !this.lease.alive || this.socket !== socket) return;
+      for (const group of groups)
+      {
+        if (group.participants.some(participant => this.isConnectedParticipant(participant)))
+        {
+          createdGroups.add(group.id);
+        }
+      }
+    });
     socket.ev.on("messages.upsert", update =>
       enqueue(async () =>
       {
-        for (const message of update.messages) await this.receive(message);
+        for (const message of update.messages) await this.receive(message, createdGroups);
       }));
     socket.ev.on("messages.update", updates =>
       enqueue(async () =>
@@ -242,7 +271,7 @@ export class BaileysConnection implements WhatsAppConnection
           if (update.update.message)
           {
             const prior = this.cache.readMessage(update.key);
-            await this.receive({ ...prior, ...update.update, key: update.key } as WAMessage);
+            await this.receive({ ...prior, ...update.update, key: update.key } as WAMessage, createdGroups);
           }
         }
       }));
@@ -273,10 +302,81 @@ export class BaileysConnection implements WhatsAppConnection
     }
     return jidNormalizedUser(candidate);
   }
-  private async receive(message: WAMessage): Promise<void>
+  private isConnectedParticipant(participant: NativeGroupParticipant): boolean
+  {
+    const own = [this.authentication?.creds.me?.id, this.authentication?.creds.me?.lid]
+      .filter((jid): jid is string => Boolean(jid)).map(jid => jidNormalizedUser(jid));
+    return [participant.id, participant.phoneNumber, participant.lid]
+      .some(jid => jid !== undefined && own.includes(jidNormalizedUser(jid)));
+  }
+  private async groupMembership(
+    message: WAMessage,
+    createdGroups: Set<string>,
+  ): Promise<GroupMembershipChange | null>
   {
     const chat = message.key.remoteJid;
-    if (!chat || !message.key.id || !message.message || isJidBroadcast(chat) || isJidNewsletter(chat)) return;
+    const stub = message.messageStubType;
+    if (!chat || !isJidGroup(chat) || stub === undefined || stub === null) return null;
+    const creation = stub === proto.WebMessageInfo.StubType.GROUP_CREATE;
+    const change = creation ? "JOINED" : membershipStubs.get(stub);
+    if (change === undefined) return null;
+    if (creation)
+    {
+      if (!createdGroups.delete(chat)) return null;
+    }
+    else
+    {
+      const parameters: readonly string[] = message.messageStubParameters ?? [];
+      const participants = parameters
+        .map(value => NativeGroupParticipantSchema.parse(JSON.parse(value)));
+      if (!participants.some(participant => this.isConnectedParticipant(participant))) return null;
+    }
+    const receiving = this.authentication?.creds.me?.id;
+    if (!receiving) throw new Error("Receiving account identity unavailable");
+    const timestamp = message.messageTimestamp;
+    const seconds = typeof timestamp === "number" ? timestamp : timestamp?.toNumber();
+    if (seconds === undefined || !Number.isSafeInteger(seconds))
+    {
+      throw new Error("Native membership time unavailable");
+    }
+    const actor = message.key.participant ?? message.participant;
+    const alternate = message.key.participantAlt;
+    return GroupMembershipChangeSchema.parse({
+      receivingAddress: jidNormalizedUser(receiving),
+      chatAddress: chat,
+      channelMessageId: message.key.id,
+      occurredAt: new Date(seconds * 1000).toISOString(),
+      change,
+      ...(actor || alternate ? { actorAddress: await this.address(actor, alternate) } : {}),
+    });
+  }
+  private async receive(message: WAMessage, createdGroups: Set<string>): Promise<void>
+  {
+    const chat = message.key.remoteJid;
+    if (!chat || !message.key.id || isJidBroadcast(chat) || isJidNewsletter(chat)) return;
+    const stub = message.messageStubType;
+    if (
+      stub !== undefined && stub !== null
+      && (membershipStubs.has(stub) || stub === proto.WebMessageInfo.StubType.GROUP_CREATE)
+    )
+    {
+      let change: GroupMembershipChange | null;
+      try
+      {
+        change = await this.groupMembership(message, createdGroups);
+      }
+      catch (error)
+      {
+        await this.events?.rejected(
+          JSON.stringify(message, BufferJSON.replacer),
+          describeWhatsAppError(error).errorName,
+        );
+        return;
+      }
+      if (change) await this.events?.groupMembershipChanged(change);
+      return;
+    }
+    if (!message.message) return;
     const content = message.message.protocolMessage;
     if (
       content && content.type !== proto.Message.ProtocolMessage.Type.REVOKE

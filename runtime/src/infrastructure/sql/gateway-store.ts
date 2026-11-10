@@ -4,6 +4,8 @@ import {
   canonicalGatewayJson,
   type DeliveryObservation,
   GatewayIdentifierSchema,
+  type GroupMembershipChange,
+  GroupMembershipChangeSchema,
   type InboundMessage,
   type MediaReference,
   MediaReferenceSchema,
@@ -394,6 +396,34 @@ export class SqlGatewayStore implements GatewayStore
           data: { workspaceId: this.workspaceId, accountId: lease.accountId, ...observation },
         });
       }
+    });
+  }
+  async recordGroupMembership(lease: AccountLease, observation: GroupMembershipChange): Promise<void>
+  {
+    const change = GroupMembershipChangeSchema.parse(observation);
+    await this.transaction(async transaction =>
+    {
+      await this.assertOwnership(transaction, lease);
+      const digest = createHash("sha256").update(canonicalGatewayJson([
+        "com.digows.whatsapp.group.membership.v1",
+        this.workspaceId,
+        lease.accountId,
+        change.receivingAddress,
+        change.chatAddress,
+        change.channelMessageId,
+        change.change,
+      ])).digest().subarray(0, 16);
+      // UUIDv8 retains one identity for this scoped native occurrence, including after log expiry.
+      digest[6] = (digest[6]! & 0x0f) | 0x80;
+      digest[8] = (digest[8]! & 0x3f) | 0x80;
+      const hex = digest.toString("hex");
+      const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${
+        hex.slice(20)
+      }`;
+      await appendGatewayEvent(this, transaction, lease.accountId, {
+        type: "com.digows.whatsapp.group.membership.v1",
+        data: { workspaceId: this.workspaceId, accountId: lease.accountId, ...change },
+      }, id);
     });
   }
   async receipts(requestedAccountId: string, messageId: string): Promise<readonly DeliveryObservation[]>

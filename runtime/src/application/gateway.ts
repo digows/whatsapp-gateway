@@ -92,6 +92,7 @@ class HostedAccount
         });
       },
       receipt: observation => this.store.recordReceipt(this.lease, observation),
+      groupMembershipChanged: change => this.store.recordGroupMembership(this.lease, change),
       rejected: async (native, errorName) =>
       {
         await this.store.retainFailure(this.lease, native, errorName);

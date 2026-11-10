@@ -210,6 +210,24 @@ for (const engine of ["sqlite", "postgresql"] as const)
         after.filter(event => event.type === "com.digows.whatsapp.message.received.v1").length,
         12,
       );
+      const membership = {
+        receivingAddress: "100@s.whatsapp.net",
+        chatAddress: "120000000000001@g.us",
+        channelMessageId: "membership-publication-failure",
+        occurredAt: new Date().toISOString(),
+        change: "LEFT" as const,
+      };
+      store.failPublicEvent = true;
+      await assert.rejects(store.recordGroupMembership(lease, membership), /publication transaction failure/);
+      assert.deepEqual(await log.after(accountId, 0, 100), after);
+      store.failPublicEvent = false;
+      await store.recordGroupMembership(lease, membership);
+      await store.recordGroupMembership(lease, membership);
+      assert.equal(
+        (await log.after(accountId, 0, 100))
+          .filter(event => event.type === "com.digows.whatsapp.group.membership.v1").length,
+        1,
+      );
     }
     finally
     {
