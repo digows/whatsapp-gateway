@@ -16,6 +16,7 @@ import { createReadStream } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import pino, { type Logger } from "pino";
 import { z } from "zod";
@@ -570,7 +571,10 @@ export class Gateway implements GatewayOperations
         byteSize: reference.byteSize,
         contentType: reference.contentType,
         ...(reference.fileName === undefined ? {} : { fileName: reference.fileName }),
-        stream: await this.media.open(reference, this.configuration.maximumMediaBytes, signal),
+        stream: abortWith(
+          await this.media.open(reference, this.configuration.maximumMediaBytes, signal),
+          signal,
+        ),
       };
     }
     const directory = await mkdtemp(join(this.configuration.mediaTemporaryDirectory ?? tmpdir(), "media-"));
@@ -589,7 +593,7 @@ export class Gateway implements GatewayOperations
     {
       const native = await this.store.native(accountId, identity.messageId, identity.chatId);
       const opened = await this.mediaRepository().open(identity, native, directory, signal);
-      const stream = createReadStream(opened.file.path);
+      const stream = abortWith(createReadStream(opened.file.path), signal);
       stream.once("close", () => void release());
       return {
         byteSize: opened.file.byteSize,
@@ -625,6 +629,32 @@ export class Gateway implements GatewayOperations
     const failures = results.filter(result => result.status === "rejected");
     if (failures.length) throw new AggregateError(failures, "Gateway shutdown failed");
   }
+}
+/**
+ * The caller's signal governs the whole read, including after the verified stream is returned. The stream is
+ * destroyed with the abort reason, so a later reader still observes the abort; the abort's own error emission
+ * is absorbed because a caller that cancels may legitimately stop listening.
+ */
+function abortWith<Stream extends Readable>(stream: Stream, signal: AbortSignal | undefined): Stream
+{
+  if (signal === undefined) return stream;
+  const abort = (): void =>
+  {
+    const reason = signal.reason instanceof Error ? signal.reason : new Error("Media read aborted");
+    stream.once("error", error =>
+    {
+      if (error !== reason) throw error;
+    });
+    stream.destroy(reason);
+  };
+  if (signal.aborted)
+  {
+    abort();
+    return stream;
+  }
+  signal.addEventListener("abort", abort, { once: true });
+  stream.once("close", () => signal.removeEventListener("abort", abort));
+  return stream;
 }
 async function bounded<Value>(promise: Promise<Value>, timeoutMs: number): Promise<Value>
 {

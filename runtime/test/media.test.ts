@@ -984,3 +984,27 @@ test("the HTTP media client requires a declared length and accepts an explicit e
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+for (const materialize of [false, true])
+{
+  test(`aborting after open stops the returned stream and releases temporary files with S3 mode ${materialize}`, async () =>
+  {
+    const fixture = new MediaFixture();
+    try
+    {
+      await fixture.start(materialize, { payload: randomBytes(128 * 1024 + 7) });
+      const controller = new AbortController();
+      const opened = await fixture.gateway.openMedia(fixture.accountId, fixture.sourceId, controller.signal);
+      controller.abort();
+      await assert.rejects(
+        collectStream(opened.stream),
+        error => error instanceof Error && error.name === "AbortError",
+      );
+      await assertNoResidue(fixture);
+    }
+    finally
+    {
+      await fixture.close();
+    }
+  });
+}

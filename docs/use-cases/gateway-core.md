@@ -513,8 +513,10 @@ files) under `mediaTemporaryDirectory` (default: the operating-system temporary 
 the encrypted SHA-256 and native HMAC as bytes arrive. HMAC and the encrypted checksum are verified
 before any decryption; decryption then writes plaintext to a second private file while measuring its
 size and SHA-256 against the byte limit and the declared checksum. Only verified plaintext is exposed.
-The directory is removed when the consumer finishes or destroys the stream, and on any failure or
-caller abort before exposure. These per-read files are transient, not a filesystem media backend.
+The directory is removed when the consumer finishes or destroys the stream, and on any failure. The
+caller's signal governs the whole read: an abort before exposure fails the open, and an abort after it
+destroys the returned stream with the abort reason. These per-read files are transient, not a
+filesystem media backend.
 S3 mode streams the stored object, failing when its body differs from the reference size.
 `GatewayHttpClient.openMedia()` reads the binary endpoint: its client timeout bounds only the response
 headers, the caller's signal controls the transfer, and the body fails when it differs from the
