@@ -950,3 +950,37 @@ test("the HTTP media client rejects a response shorter than its declared length"
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+test("the HTTP media client requires a declared length and accepts an explicit empty body", async () =>
+{
+  const token = randomBytes(32).toString("hex");
+  let declareLength = false;
+  const server = createServer((_request, response) =>
+  {
+    // Without a declared length Node frames the body with Transfer-Encoding: chunked.
+    response.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      ...(declareLength ? { "Content-Length": 0 } : {}),
+    });
+    response.end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try
+  {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Fixture address unavailable");
+    const client = new GatewayHttpClient({ url: `http://127.0.0.1:${address.port}`, token });
+    const scope = { workspaceId: randomUUID(), accountId: randomUUID() };
+    await assert.rejects(client.openMedia(scope, "source"), /length/);
+    declareLength = true;
+    const empty = await client.openMedia(scope, "source");
+    assert.equal(empty.byteSize, 0);
+    assert.equal((await collectStream(empty.body)).byteLength, 0);
+  }
+  finally
+  {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});

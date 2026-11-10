@@ -187,13 +187,16 @@ export class GatewayHttpClient implements GatewayRemoteWire
       await response.body?.cancel();
       throw new Error(`Gateway media is unavailable (HTTP status ${response.status})`);
     }
-    const byteSize = z.coerce.number().int().nonnegative().safeParse(response.headers.get("content-length"));
-    if (!byteSize.success)
+    // An absent header must not coerce to zero: a chunked response would otherwise pass as empty media.
+    const declaredLength = response.headers.get("content-length");
+    const expected = declaredLength === null || !/^(?:0|[1-9][0-9]*)$/u.test(declaredLength)
+      ? undefined
+      : Number(declaredLength);
+    if (expected === undefined || !Number.isSafeInteger(expected))
     {
       await response.body.cancel();
-      throw new Error("Gateway media response has no valid length");
+      throw new Error("Gateway media response has no valid declared length");
     }
-    const expected = byteSize.data;
     let received = 0;
     const body = response.body.pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({

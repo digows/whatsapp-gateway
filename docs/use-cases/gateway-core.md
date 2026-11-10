@@ -649,7 +649,7 @@ scoped request and the actual server response; it does not establish every brows
 No live pairing, external message, production deployment or production DML is part of qualification.
 Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
-Release packages share SemVer 3.0.0 across root, runtime, contracts and Adapter.
+Release packages share SemVer 3.0.1 across root, runtime, contracts and Adapter.
 Annotated `v<version>` tags must match all manifests and target a commit on main.
 The release workflow runs configured qualification and validates the packed
 compiled consumer exports/dependencies/checksums, then smoke-tests native AMD64
