@@ -3,6 +3,7 @@ import { type WAMessage } from "baileys";
 import { sql } from "kysely";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 import { after, test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { Gateway } from "../src/application/gateway.ts";
@@ -26,6 +27,10 @@ class Media implements IMediaRepository
     const bytes = this.objects.get(reference.storageKey);
     if (!bytes) throw new Error("Media unavailable");
     return bytes;
+  }
+  async open(reference: MediaReference): Promise<Readable>
+  {
+    return Readable.from([Buffer.from(await this.read(reference))]);
   }
 }
 const url = process.env["GATEWAY_TEST_DATABASE_URL"];

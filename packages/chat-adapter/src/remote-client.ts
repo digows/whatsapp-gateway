@@ -44,6 +44,12 @@ export class GatewayRemoteRequestError extends Error
     this.name = "GatewayRemoteRequestError";
   }
 }
+/** Verified media bytes streamed from the gateway; the body errors when it differs from byteSize. */
+export interface GatewayOpenedMedia
+{
+  readonly byteSize: number;
+  readonly body: ReadableStream<Uint8Array>;
+}
 export interface GatewayHttpClientConfiguration
 {
   readonly url: string;
@@ -140,6 +146,73 @@ export class GatewayHttpClient implements GatewayRemoteWire
       throw new Error(`Gateway HTTP status ${response.status}`);
     }
     return response.json();
+  }
+  /**
+   * Streams one media part through the authenticated binary endpoint. The client timeout bounds only the
+   * wait for the response headers; the caller's signal controls the transfer itself.
+   */
+  async openMedia(scope: AccountScope, sourceId: string, signal?: AbortSignal): Promise<GatewayOpenedMedia>
+  {
+    const validated = AccountScopeSchema.parse(scope);
+    const source = z.string().min(1).max(16384).parse(sourceId);
+    const headersDeadline = new AbortController();
+    const timer = setTimeout(
+      () => headersDeadline.abort(new Error("Gateway media headers timed out")),
+      this.timeoutMs,
+    );
+    let response: Response;
+    try
+    {
+      response = await fetch(
+        `${this.url}/v1/accounts/${encodeURIComponent(validated.workspaceId)}/${
+          encodeURIComponent(validated.accountId)
+        }/media?sourceId=${encodeURIComponent(source)}`,
+        {
+          signal: AbortSignal.any([
+            this.controller.signal,
+            headersDeadline.signal,
+            ...(signal === undefined ? [] : [signal]),
+          ]),
+          redirect: "error",
+          headers: { authorization: `Bearer ${this.configuration.token}` },
+        },
+      );
+    }
+    finally
+    {
+      clearTimeout(timer);
+    }
+    if (!response.ok || !response.body)
+    {
+      await response.body?.cancel();
+      throw new Error(`Gateway media is unavailable (HTTP status ${response.status})`);
+    }
+    const byteSize = z.coerce.number().int().nonnegative().safeParse(response.headers.get("content-length"));
+    if (!byteSize.success)
+    {
+      await response.body.cancel();
+      throw new Error("Gateway media response has no valid length");
+    }
+    const expected = byteSize.data;
+    let received = 0;
+    const body = response.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller)
+        {
+          received += chunk.byteLength;
+          if (received > expected) controller.error(new Error("Gateway media exceeded its declared length"));
+          else controller.enqueue(chunk);
+        },
+        flush(controller)
+        {
+          if (received !== expected)
+          {
+            controller.error(new Error("Gateway media ended before its declared length"));
+          }
+        },
+      }),
+    );
+    return { byteSize: expected, body };
   }
   async close(): Promise<void>
   {

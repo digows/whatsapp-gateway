@@ -12,6 +12,10 @@ import {
   OutboundMessageSchema,
 } from "@digows/whatsapp-gateway-contracts";
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pino, { type Logger } from "pino";
 import { z } from "zod";
@@ -19,8 +23,9 @@ import type { WhatsAppConnection } from "../domain/connection.ts";
 import { AccountOwnedError } from "../domain/errors.ts";
 import { type AccountLease, type GatewayStore } from "../domain/gateway-store.ts";
 import { defaultMaximumMediaBytes } from "../domain/media-bytes.ts";
-import { decodeWhatsAppMediaSource } from "../domain/media-source.ts";
+import { decodeWhatsAppMediaSource, type WhatsAppMediaSourceIdentity } from "../domain/media-source.ts";
 import type { IMediaRepository } from "../domain/media-storage.ts";
+import type { OpenedMedia } from "../domain/media-stream.ts";
 import { outboundPartCount } from "../domain/outbound-parts.ts";
 import { SendOperation } from "../domain/send-operation.ts";
 import { BaileysMediaRepository } from "../infrastructure/baileys/baileys-media-repository.ts";
@@ -31,6 +36,8 @@ import {
 export const GatewayConfigurationSchema = z.object({
   maximumMediaBytes: z.number().int().positive().max(256 * 1024 * 1024).default(defaultMaximumMediaBytes),
   mediaTimeoutMs: z.number().int().positive().max(60000).default(60000),
+  /** Parent of the private per-read directories that hold streamed media until its consumer closes it. */
+  mediaTemporaryDirectory: z.string().min(1).optional(),
   minimumDelayMs: z.number().int().nonnegative().default(1500),
   maximumDelayMs: z.number().int().nonnegative().default(5000),
   dailyMaximum: z.number().int().positive().default(1500),
@@ -485,7 +492,7 @@ export class Gateway implements GatewayOperations
     }
     return this.media.read(reference, this.configuration.maximumMediaBytes);
   }
-  async readMedia(requestedAccountId: string, sourceId: string): Promise<Uint8Array>
+  private mediaIdentity(requestedAccountId: string, sourceId: string)
   {
     const accountId = GatewayIdentifierSchema.parse(requestedAccountId);
     const identity = decodeWhatsAppMediaSource(sourceId);
@@ -493,22 +500,26 @@ export class Gateway implements GatewayOperations
     {
       throw new Error("Media scope mismatch");
     }
-    const repository = new BaileysMediaRepository(
+    return { accountId, identity };
+  }
+  private mediaRepository(): BaileysMediaRepository
+  {
+    return new BaileysMediaRepository(
       this.media,
       this.configuration.maximumMediaBytes,
       this.configuration.mediaTimeoutMs,
     );
-    if (!this.media)
-    {
-      return repository.read(
-        identity,
-        await this.store.native(accountId, identity.messageId, identity.chatId),
-      );
-    }
+  }
+  /** Reuses an existing materialization or materializes the native source once into gateway storage. */
+  private async materializedMedia(
+    accountId: string,
+    sourceId: string,
+    identity: WhatsAppMediaSourceIdentity,
+  ): Promise<MediaReference>
+  {
     const legacyNative = identity.chatId === undefined
       ? await this.store.native(accountId, identity.messageId)
       : undefined;
-    const media = this.media;
     const cached = await this.store.materialized(accountId, sourceId);
     if (cached)
     {
@@ -516,15 +527,82 @@ export class Gateway implements GatewayOperations
       {
         throw new Error("Media exceeds configured byte limit");
       }
-      return media.read(cached, this.configuration.maximumMediaBytes);
+      return cached;
     }
+    // Read the native envelope before materialize: its callback runs inside the store's exclusive section.
     const native = legacyNative ?? await this.store.native(accountId, identity.messageId, identity.chatId);
     const reference = await this.store.materialize(
       accountId,
       sourceId,
-      async () => repository.materialize(identity, native),
+      async () => this.mediaRepository().materialize(identity, native),
     );
-    return media.read(reference, this.configuration.maximumMediaBytes);
+    if (reference.byteSize > this.configuration.maximumMediaBytes)
+    {
+      throw new Error("Media exceeds configured byte limit");
+    }
+    return reference;
+  }
+  async readMedia(requestedAccountId: string, sourceId: string): Promise<Uint8Array>
+  {
+    const { accountId, identity } = this.mediaIdentity(requestedAccountId, sourceId);
+    if (!this.media)
+    {
+      return this.mediaRepository().read(
+        identity,
+        await this.store.native(accountId, identity.messageId, identity.chatId),
+      );
+    }
+    const reference = await this.materializedMedia(accountId, sourceId, identity);
+    return this.media.read(reference, this.configuration.maximumMediaBytes);
+  }
+  /**
+   * Opens media as a stream of verified bytes. Direct mode downloads into a private temporary directory,
+   * authenticates and checks the media before exposing it, and removes the directory when the stream closes.
+   */
+  async openMedia(requestedAccountId: string, sourceId: string, signal?: AbortSignal): Promise<OpenedMedia>
+  {
+    const { accountId, identity } = this.mediaIdentity(requestedAccountId, sourceId);
+    signal?.throwIfAborted();
+    if (this.media)
+    {
+      const reference = await this.materializedMedia(accountId, sourceId, identity);
+      return {
+        byteSize: reference.byteSize,
+        contentType: reference.contentType,
+        ...(reference.fileName === undefined ? {} : { fileName: reference.fileName }),
+        stream: await this.media.open(reference, this.configuration.maximumMediaBytes, signal),
+      };
+    }
+    const directory = await mkdtemp(join(this.configuration.mediaTemporaryDirectory ?? tmpdir(), "media-"));
+    const release = async (): Promise<void> =>
+    {
+      try
+      {
+        await rm(directory, { recursive: true, force: true });
+      }
+      catch (error)
+      {
+        this.logger.error({ event: "gateway_media_cleanup_failed", accountId, error });
+      }
+    };
+    try
+    {
+      const native = await this.store.native(accountId, identity.messageId, identity.chatId);
+      const opened = await this.mediaRepository().open(identity, native, directory, signal);
+      const stream = createReadStream(opened.file.path);
+      stream.once("close", () => void release());
+      return {
+        byteSize: opened.file.byteSize,
+        contentType: opened.source.contentType,
+        ...(opened.source.fileName === undefined ? {} : { fileName: opened.source.fileName }),
+        stream,
+      };
+    }
+    catch (error)
+    {
+      await release();
+      throw error;
+    }
   }
   async stop(requestedAccountId: string): Promise<void>
   {

@@ -1,10 +1,13 @@
 import { type MediaReference, type MediaSource, MediaSourceSchema } from "@digows/whatsapp-gateway-contracts";
 import { BufferJSON, normalizeMessageContent, proto } from "baileys";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { defaultMaximumMediaBytes, validateMediaLimit } from "../../domain/media-bytes.ts";
 import { encodeWhatsAppMediaSource, type WhatsAppMediaSourceIdentity } from "../../domain/media-source.ts";
 import type { IMediaRepository } from "../../domain/media-storage.ts";
-import { downloadNativeMedia } from "./baileys-media-download.ts";
+import type { VerifiedMediaFile } from "../../domain/media-stream.ts";
+import { downloadNativeMedia, downloadNativeMediaFile } from "./baileys-media-download.ts";
 
 export type NativeMedia =
   | proto.Message.IImageMessage
@@ -18,6 +21,12 @@ interface ResolvedNativeMedia
 {
   readonly part: NativeMediaPart;
   readonly source: MediaSource;
+}
+
+export interface OpenedNativeMedia
+{
+  readonly source: MediaSource;
+  readonly file: VerifiedMediaFile;
 }
 
 interface NativeMediaPart
@@ -131,26 +140,67 @@ export class BaileysMediaRepository
     }
     return { part, source };
   }
-  private async download(resolved: ResolvedNativeMedia): Promise<Uint8Array>
+  /** The declared size and plaintext checksum gate every exposure, buffered or streamed. */
+  private verify(resolved: ResolvedNativeMedia, byteSize: number, sha256: () => Buffer): void
   {
     const { part, source } = resolved;
-    const bytes = part.inlineBytes
-      ?? await downloadNativeMedia(part.source, part.kind, this.maximumBytes, this.timeoutMs);
-    if (bytes.byteLength > this.maximumBytes) throw new Error("Media exceeds configured byte limit");
-    if (source.byteSize !== undefined && source.byteSize !== bytes.byteLength)
+    if (byteSize > this.maximumBytes) throw new Error("Media exceeds configured byte limit");
+    if (source.byteSize !== undefined && source.byteSize !== byteSize)
     {
       throw new Error("WhatsApp media size does not match its source");
     }
     const expectedHash = part.source.fileSha256;
     if (Object.hasOwn(part.source, "fileSha256") && expectedHash)
     {
-      const hash = createHash("sha256").update(bytes).digest();
+      const hash = sha256();
       if (expectedHash.byteLength !== hash.byteLength || !timingSafeEqual(hash, expectedHash))
       {
         throw new Error("WhatsApp media integrity check failed");
       }
     }
+  }
+  private async download(resolved: ResolvedNativeMedia): Promise<Uint8Array>
+  {
+    const { part } = resolved;
+    const bytes = part.inlineBytes
+      ?? await downloadNativeMedia(part.source, part.kind, this.maximumBytes, this.timeoutMs);
+    this.verify(resolved, bytes.byteLength, () => createHash("sha256").update(bytes).digest());
     return bytes;
+  }
+  /** Writes verified plaintext into the caller's private directory, which the caller removes. */
+  async open(
+    identity: WhatsAppMediaSourceIdentity,
+    serializedMessage: string,
+    directory: string,
+    signal?: AbortSignal,
+  ): Promise<OpenedNativeMedia>
+  {
+    const resolved = this.resolve(identity, serializedMessage);
+    const { part, source } = resolved;
+    let file: VerifiedMediaFile;
+    if (part.inlineBytes)
+    {
+      const path = join(directory, "plaintext");
+      await writeFile(path, part.inlineBytes, { mode: 0o600, flag: "wx" });
+      file = {
+        path,
+        byteSize: part.inlineBytes.byteLength,
+        sha256: createHash("sha256").update(part.inlineBytes).digest(),
+      };
+    }
+    else
+    {
+      file = await downloadNativeMediaFile(
+        part.source,
+        part.kind,
+        this.maximumBytes,
+        this.timeoutMs,
+        directory,
+        signal,
+      );
+    }
+    this.verify(resolved, file.byteSize, () => file.sha256);
+    return { source, file };
   }
   async read(identity: WhatsAppMediaSourceIdentity, serializedMessage: string): Promise<Uint8Array>
   {

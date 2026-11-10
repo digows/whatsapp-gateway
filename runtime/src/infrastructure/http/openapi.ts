@@ -176,7 +176,9 @@ export function createGatewayOpenApi()
           }],
           responses: {
             "200": {
-              description: "Bounded decrypted bytes; no provider keys or URLs",
+              description:
+                "Bounded decrypted bytes streamed with Content-Length, verified before the response starts; "
+                + "a failure after the headers ends the body early. No provider keys or URLs",
               content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
             },
             ...errors,

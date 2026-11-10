@@ -289,9 +289,11 @@ in the request logs. Remote account/operation results must match the route's aut
 - `GET /v1/accounts/{workspaceId}/{accountId}/operations/{key}`: native send-operation observation.
 - `GET`/`PUT /v1/accounts/{workspaceId}/{accountId}/desired`: scoped durable revisioned intent,
   when a fleet store is configured; otherwise explicitly unavailable.
-- `GET /v1/accounts/{workspaceId}/{accountId}/media?sourceId=...`: bounded, lazy decrypted bytes,
-  without an object store or through configured S3 materialization. Source expiry/unavailability
-  is explicit; no media-key/provider-URL response. Responses use private/no-store caching.
+- `GET /v1/accounts/{workspaceId}/{accountId}/media?sourceId=...`: bounded, lazy decrypted bytes
+  streamed with their `Content-Length`, without an object store or through configured S3
+  materialization. Bytes are verified before the response starts; a failure after the headers ends
+  the response early instead of reporting a successful body. Source expiry/unavailability is
+  explicit; no media-key/provider-URL response. Responses use private/no-store caching.
 
 The same owning Zod schemas generate [OpenAPI 3.1.1](https://spec.openapis.org/oas/v3.1.1.html) at `/openapi.json`. `/docs` serves pinned local
 [Swagger UI assets](https://swagger.io/docs/open-source-tools/swagger-ui/usage/installation/) with the actual bearer security scheme and callable operations, without an external
@@ -505,6 +507,19 @@ pipe errors. The gateway therefore owns bounded fetch/cancellation and retains t
 public `getMediaKeys()` derivation and AES-CBC/10-byte-HMAC framing from `encryptedStream()`.
 Controlled encrypted HTTP scenarios prove timeout, byte limits and corruption rejection.
 
+`openMedia()` exposes the same scoped media as a stream without holding the whole file in memory.
+Direct mode downloads the encrypted bytes into a private per-read directory (`mkdtemp`, owner-only
+files) under `mediaTemporaryDirectory` (default: the operating-system temporary directory), updating
+the encrypted SHA-256 and native HMAC as bytes arrive. HMAC and the encrypted checksum are verified
+before any decryption; decryption then writes plaintext to a second private file while measuring its
+size and SHA-256 against the byte limit and the declared checksum. Only verified plaintext is exposed.
+The directory is removed when the consumer finishes or destroys the stream, and on any failure or
+caller abort before exposure. These per-read files are transient, not a filesystem media backend.
+S3 mode streams the stored object, failing when its body differs from the reference size.
+`GatewayHttpClient.openMedia()` reads the binary endpoint: its client timeout bounds only the response
+headers, the caller's signal controls the transfer, and the body fails when it differs from the
+declared length. `readMedia()` remains the buffered form used by remote queries.
+
 Unavailable/expired source or missing object is an explicit error, not empty successful media.
 Native envelopes/keys and provider URLs remain private; the portable source exposes none of them.
 SQL retains protocol envelopes/metadata, not downloaded/decrypted media objects. Permanent archive
@@ -634,7 +649,7 @@ scoped request and the actual server response; it does not establish every brows
 No live pairing, external message, production deployment or production DML is part of qualification.
 Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
-Release packages share SemVer 2.0.4 across root, runtime, contracts and Adapter.
+Release packages share SemVer 3.0.0 across root, runtime, contracts and Adapter.
 Annotated `v<version>` tags must match all manifests and target a commit on main.
 The release workflow runs configured qualification and validates the packed
 compiled consumer exports/dependencies/checksums, then smoke-tests native AMD64

@@ -10,7 +10,7 @@ import { BufferJSON, getMediaKeys, type WAMessage } from "baileys";
 import assert from "node:assert/strict";
 import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -47,6 +47,7 @@ interface MediaFixtureOptions
   readonly declareSize?: boolean;
   readonly corruptHash?: boolean;
   readonly timeoutMs?: number;
+  readonly payload?: Buffer;
 }
 interface StoredObject
 {
@@ -60,7 +61,7 @@ class MediaFixture
   readonly sourceObjects = new Map<string, Buffer>();
   socket: NativeSocketFixture | undefined;
   connection: BaileysConnection | undefined;
-  readonly payload = Buffer.from("controlled encrypted WhatsApp media");
+  payload: Buffer = Buffer.from("controlled encrypted WhatsApp media");
   readonly accountId = randomUUID();
   readonly workspaceId = randomUUID();
   readonly messageId = randomUUID();
@@ -80,6 +81,7 @@ class MediaFixture
   gateway!: Gateway;
   storage!: GatewayStorage;
   directory = "";
+  streams = "";
   client: S3Client | undefined;
   constructor()
   {
@@ -143,6 +145,9 @@ class MediaFixture
     const temporaryRoot = process.env["TMPDIR"];
     if (!temporaryRoot) throw new Error("Explicit owned TMPDIR required");
     this.directory = await mkdtemp(join(temporaryRoot, "gateway-media-"));
+    this.streams = join(this.directory, "streams");
+    await mkdir(this.streams);
+    if (options.payload) this.payload = options.payload;
     const configuration = {
       engine: "sqlite",
       workspaceId: this.workspaceId,
@@ -184,6 +189,7 @@ class MediaFixture
     }, {
       ...(options.maximumBytes === undefined ? {} : { maximumMediaBytes: options.maximumBytes }),
       mediaTimeoutMs: options.timeoutMs ?? 3000,
+      mediaTemporaryDirectory: this.streams,
     }, media);
     await store.createAccount(this.accountId);
     await this.gateway.start(this.accountId);
@@ -222,10 +228,15 @@ class MediaFixture
     assert.equal(this.mediaRequests, 0);
     // SQL retains the private protocol envelope, not a downloaded plaintext media archive.
     assert.match(await store.native(this.accountId, this.messageId), /imageMessage/);
-    assert.doesNotMatch(
-      JSON.stringify(message, BufferJSON.replacer),
-      new RegExp(this.payload.toString("base64")),
+    assert.equal(
+      JSON.stringify(message, BufferJSON.replacer).includes(this.payload.toString("base64")),
+      false,
     );
+  }
+  /** Temporary stream files the gateway still holds; every opened stream must leave none behind. */
+  async residue(): Promise<string[]>
+  {
+    return readdir(this.streams);
   }
   async close(): Promise<void>
   {
@@ -711,5 +722,231 @@ test("remote HTTP and Redis media use actual native decryption and private S3 up
     await redis?.close();
     if (client.isOpen) await client.close();
     await fixture.close();
+  }
+});
+
+async function collectStream(stream: AsyncIterable<unknown>): Promise<Buffer>
+{
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream)
+  {
+    assert.ok(chunk instanceof Uint8Array);
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Cleanup runs when the stream closes; wait for it without masking a leak. */
+async function assertNoResidue(fixture: MediaFixture): Promise<void>
+{
+  const deadline = Date.now() + 3000;
+  while ((await fixture.residue()).length > 0 && Date.now() < deadline)
+  {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(await fixture.residue(), []);
+}
+
+for (const materialize of [false, true])
+{
+  test(`opened media streams only verified bytes and leaves no temporary files with S3 mode ${materialize}`, async () =>
+  {
+    const fixture = new MediaFixture();
+    try
+    {
+      await fixture.start(materialize);
+      const opened = await fixture.gateway.openMedia(fixture.accountId, fixture.sourceId);
+      assert.equal(opened.byteSize, fixture.payload.byteLength);
+      assert.equal(opened.contentType, "image/jpeg");
+      assert.deepEqual(await collectStream(opened.stream), fixture.payload);
+      await assertNoResidue(fixture);
+      assert.equal(fixture.mediaRequests, 1);
+      assert.equal(fixture.objectWrites, materialize ? 1 : 0);
+      await assert.rejects(fixture.gateway.openMedia(randomUUID(), fixture.sourceId), /scope/);
+    }
+    finally
+    {
+      await fixture.close();
+    }
+  });
+}
+
+test("a large opened media stream preserves every byte under consumer backpressure", async () =>
+{
+  const fixture = new MediaFixture();
+  try
+  {
+    await fixture.start(false, { payload: randomBytes(3 * 1024 * 1024 + 7) });
+    const opened = await fixture.gateway.openMedia(fixture.accountId, fixture.sourceId);
+    const chunks: Buffer[] = [];
+    for await (const chunk of opened.stream)
+    {
+      assert.ok(chunk instanceof Uint8Array);
+      chunks.push(Buffer.from(chunk));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.ok(Buffer.concat(chunks).equals(fixture.payload));
+    await assertNoResidue(fixture);
+  }
+  finally
+  {
+    await fixture.close();
+  }
+});
+
+test("opened media rejects altered encrypted bytes and checksum mismatch before exposing a stream", async () =>
+{
+  for (const corruption of ["encrypted", "plaintext"] as const)
+  {
+    const fixture = new MediaFixture();
+    try
+    {
+      await fixture.start(false, { corruptHash: corruption === "plaintext" });
+      if (corruption === "encrypted")
+      {
+        const first = fixture.encrypted[0];
+        assert.ok(first !== undefined);
+        fixture.encrypted[0] = first ^ 1;
+      }
+      await assert.rejects(fixture.gateway.openMedia(fixture.accountId, fixture.sourceId), /integrity/);
+      await assertNoResidue(fixture);
+      assert.equal(fixture.objectWrites, 0);
+    }
+    finally
+    {
+      await fixture.close();
+    }
+  }
+});
+
+for (const declareSize of [true, false])
+{
+  test(`opened media enforces the byte limit with declared size ${declareSize}`, async () =>
+  {
+    const fixture = new MediaFixture();
+    try
+    {
+      await fixture.start(false, { maximumBytes: 8, declareSize });
+      await assert.rejects(fixture.gateway.openMedia(fixture.accountId, fixture.sourceId), /byte limit/);
+      await assertNoResidue(fixture);
+      assert.equal(fixture.mediaRequests, declareSize ? 0 : 1);
+    }
+    finally
+    {
+      await fixture.close();
+    }
+  });
+}
+
+test("aborting an opened media download releases the stalled source and its temporary files", async () =>
+{
+  const fixture = new MediaFixture();
+  try
+  {
+    await fixture.start(false);
+    fixture.stall = true;
+    const controller = new AbortController();
+    const opening = fixture.gateway.openMedia(fixture.accountId, fixture.sourceId, controller.signal);
+    setTimeout(() => controller.abort(), 50);
+    await assert.rejects(opening, error => error instanceof Error && error.name === "AbortError");
+    await assertNoResidue(fixture);
+    assert.equal(fixture.mediaRequests, 1);
+  }
+  finally
+  {
+    await fixture.close();
+  }
+});
+
+test("a consumer that stops reading an opened media stream releases its temporary files", async () =>
+{
+  const fixture = new MediaFixture();
+  try
+  {
+    await fixture.start(false, { payload: randomBytes(2 * 1024 * 1024) });
+    const opened = await fixture.gateway.openMedia(fixture.accountId, fixture.sourceId);
+    assert.ok((await fixture.residue()).length > 0);
+    for await (const chunk of opened.stream)
+    {
+      assert.ok(chunk instanceof Uint8Array);
+      break;
+    }
+    await assertNoResidue(fixture);
+  }
+  finally
+  {
+    await fixture.close();
+  }
+});
+
+test("authenticated HTTP streams media with its length and a client abort releases temporary files", async () =>
+{
+  const fixture = new MediaFixture();
+  let http: GatewayHttpTransport | undefined;
+  try
+  {
+    await fixture.start(false, { payload: randomBytes(4 * 1024 * 1024 + 3) });
+    const store = fixture.storage.workspace(fixture.workspaceId);
+    const principal = new GatewayPrincipal("media-agent", [{
+      workspaceId: fixture.workspaceId,
+      accountIds: [fixture.accountId],
+    }]);
+    const token = randomBytes(32).toString("hex");
+    http = new GatewayHttpTransport({ enabled: true, port: 0 }, [{
+      store,
+      commands: new GatewayCommandIngress(new SqlCommandInbox(store)),
+      gateway: fixture.gateway,
+    }], [{ token, principal }]);
+    await http.start();
+    const origin = http.origin;
+    assert.ok(origin);
+    const client = new GatewayHttpClient({ url: origin, token });
+    const scope = { workspaceId: fixture.workspaceId, accountId: fixture.accountId };
+    const opened = await client.openMedia(scope, fixture.sourceId);
+    assert.equal(opened.byteSize, fixture.payload.byteLength);
+    assert.ok((await collectStream(opened.body)).equals(fixture.payload));
+    await assertNoResidue(fixture);
+    const controller = new AbortController();
+    const partial = await client.openMedia(scope, fixture.sourceId, controller.signal);
+    const reader = partial.body.getReader();
+    assert.equal((await reader.read()).done, false);
+    controller.abort();
+    await assert.rejects(reader.read());
+    await assertNoResidue(fixture);
+    fixture.expired = true;
+    await assert.rejects(client.openMedia(scope, fixture.sourceId), /unavailable/i);
+    await assertNoResidue(fixture);
+  }
+  finally
+  {
+    await http?.close();
+    await fixture.close();
+  }
+});
+
+test("the HTTP media client rejects a response shorter than its declared length", async () =>
+{
+  const token = randomBytes(32).toString("hex");
+  const server = createServer((_request, response) =>
+  {
+    response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": 64 });
+    response.write(Buffer.alloc(16));
+    setTimeout(() => response.destroy(), 20);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try
+  {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Fixture address unavailable");
+    const client = new GatewayHttpClient({ url: `http://127.0.0.1:${address.port}`, token });
+    const opened = await client.openMedia({ workspaceId: randomUUID(), accountId: randomUUID() }, "source");
+    assert.equal(opened.byteSize, 64);
+    await assert.rejects(collectStream(opened.body));
+  }
+  finally
+  {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });

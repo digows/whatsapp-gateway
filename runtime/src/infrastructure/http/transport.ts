@@ -15,6 +15,7 @@ import {
 import { createHash, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
 import pino, { type Logger } from "pino";
 import { z } from "zod";
 import type { GatewayCommandIngress } from "../../application/command-ingress.ts";
@@ -23,6 +24,7 @@ import { GatewayAuthorizationError, type GatewayPrincipal } from "../../domain/a
 import { GatewayConflictError, GatewayResourceUnavailableError } from "../../domain/errors.ts";
 import type { GatewayFleetStore } from "../../domain/fleet-store.ts";
 import type { GatewayStore } from "../../domain/gateway-store.ts";
+import type { MediaStreamReader } from "../../domain/media-stream.ts";
 import { createGatewayAsyncApi } from "../redis/asyncapi.ts";
 import { createGatewayOpenApi, gatewayDocumentationHtml, gatewayDocumentationInitialize } from "./openapi.ts";
 
@@ -40,7 +42,7 @@ export interface GatewayHttpWorkspace
 {
   readonly store: GatewayStore;
   readonly commands: GatewayCommandIngress;
-  readonly gateway: GatewayOperations;
+  readonly gateway: GatewayOperations & MediaStreamReader;
   readonly fleet?: GatewayFleetStore;
   readonly queries?: GatewayQueryService;
 }
@@ -297,12 +299,15 @@ export class GatewayHttpTransport
       else if (action === "media" && !key)
       {
         const sourceId = parseInput(z.string().min(1).max(16384), url.searchParams.get("sourceId"));
-        const bytes = await workspace.gateway.readMedia(scope.accountId, sourceId);
+        // A disconnected client stops the native download and releases its temporary files.
+        const disconnected = new AbortController();
+        response.once("close", () => disconnected.abort());
+        const opened = await workspace.gateway.openMedia(scope.accountId, sourceId, disconnected.signal);
         response.writeHead(200, {
           "Content-Type": "application/octet-stream",
-          "Content-Length": bytes.byteLength,
+          "Content-Length": opened.byteSize,
         });
-        response.end(bytes);
+        await pipeline(opened.stream, response);
       }
       else throw new HttpFailure(404, "NOT_FOUND");
     }
@@ -323,6 +328,12 @@ export class GatewayHttpTransport
         });
       }
       if (response.destroyed) return;
+      // A failure after the media headers cannot become a JSON error; the client sees a truncated body.
+      if (response.headersSent)
+      {
+        response.destroy();
+        return;
+      }
       if (failure.status === 401) response.setHeader("WWW-Authenticate", "Bearer");
       response.setHeader("Connection", "close");
       sendJson(response, failure.status, { apiVersion: "1", code: failure.code });

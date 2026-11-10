@@ -520,6 +520,10 @@ For optional materialization, `createMediaStorage()` accepts `mode: "s3"`, `endp
 `maximumMediaBytes` (default 32 MiB) and `mediaTimeoutMs` (default 60 seconds) on the gateway.
 Pass matching `maximumBytes`/`timeoutMs` as the factory's second argument for S3 transfers.
 
+`openMedia()` (runtime) and `GatewayHttpClient.openMedia()` (SDK) stream one verified media part
+without holding the whole file in memory; set `mediaTemporaryDirectory` to an owned private
+directory for the per-read files that direct mode removes when the stream closes.
+
 Cloudflare R2 uses the same S3 adapter with its endpoint, region `auto` and R2 credentials; a public
 bucket is not required. See the [official AWS SDK configuration example](https://developers.cloudflare.com/r2/examples/aws/aws-sdk-js-v3/).
 R2 live access has not been tested. Outbound stored-media sends still require a media repository;
