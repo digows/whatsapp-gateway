@@ -92,6 +92,26 @@ test("packed and freshly installed Adapter runs released native Mastra channels 
       env: process.env,
       timeout: 60000,
     });
+    const imports = `
+import assert from 'node:assert/strict';
+import {GatewayCloudEventSchema} from '@digows/whatsapp-gateway-contracts';
+import {WhatsAppGatewayAdapter} from '@digows/chat-adapter-whatsapp-gateway';
+import {createMastraGatewayExample} from '@digows/chat-adapter-whatsapp-gateway/examples/mastra';
+assert.equal(typeof GatewayCloudEventSchema.parse,'function');
+assert.equal(typeof WhatsAppGatewayAdapter,'function');
+assert.equal(typeof createMastraGatewayExample,'function');
+for(const name of ['@digows/whatsapp-gateway-contracts','@digows/chat-adapter-whatsapp-gateway','@digows/chat-adapter-whatsapp-gateway/examples/mastra']) {
+  assert.ok(import.meta.resolve(name).includes('/dist/'));
+}
+`;
+    for (const conditions of [[], ["--conditions=development"]])
+    {
+      await execute(process.execPath, [...conditions, "--input-type=module", "-e", imports], {
+        cwd: directory,
+        env: process.env,
+        timeout: 30000,
+      });
+    }
     await fixture.start("sqlite", "http");
     const event = await fixture.inbound();
     const configuration = {

@@ -1,6 +1,6 @@
 {
   "name": "@digows/chat-adapter-whatsapp-gateway",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "private": true,
   "type": "module",
   "exports": {
@@ -13,6 +13,20 @@
       "development": "./examples/mastra.ts",
       "types": "./dist/examples/mastra.d.ts",
       "default": "./dist/examples/mastra.js"
+    }
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "development": "./dist/src/index.js",
+        "types": "./dist/src/index.d.ts",
+        "default": "./dist/src/index.js"
+      },
+      "./examples/mastra": {
+        "development": "./dist/examples/mastra.js",
+        "types": "./dist/examples/mastra.d.ts",
+        "default": "./dist/examples/mastra.js"
+      }
     }
   },
   "dependencies": {

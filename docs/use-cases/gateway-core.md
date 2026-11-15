@@ -651,7 +651,7 @@ scoped request and the actual server response; it does not establish every brows
 No live pairing, external message, production deployment or production DML is part of qualification.
 Repository/image publication follows final review; a prepared workflow is not proof of publication.
 
-Release packages share SemVer 3.0.1 across root, runtime, contracts and Adapter.
+Release packages share one SemVer across root, runtime, contracts and Adapter.
 Annotated `v<version>` tags must match all manifests and target a commit on main.
 The release workflow runs configured qualification and validates the packed
 compiled consumer exports/dependencies/checksums, then smoke-tests native AMD64
@@ -662,6 +662,14 @@ version, moving major/latest aliases and immutable source SHA; the release
 records the registry digest. Manual SHA publication retains its exact reviewed
 main-SHA check. No npm publication, protocol bump or SQL schema bump is implied:
 wire `apiVersion: "1"` and SQL schema 9 are independently owned identifiers.
+
+Contracts and Adapter source manifests keep their `development` source exports
+for workspace tests. Their `publishConfig.exports` maps every distributed
+`development` entry, including the Mastra example, to the compiled JavaScript
+used by `default`; pnpm 12.9.1 applies this override without replacing the source
+manifest. All announced packed export conditions must resolve to compiled files
+present in the archive. Installed consumer qualification imports the real value
+exports with both default and `development` conditions before opening services.
 
 The packaged Adapter requires the exact matching contracts release as a mandatory
 peer, supplied directly by its consumer. It must not declare that package as a

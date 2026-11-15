@@ -74,6 +74,25 @@ test("release archives validate packaged versions, compiled exports and required
     const checksums = await readFile(join(root, "SHA256SUMS"), "utf8");
     assert.equal(checksums.trim().split("\n").length, 2);
     await execute("shasum", ["-a", "256", "-c", "SHA256SUMS"], { cwd: root });
+    const compiled = { types: "./dist/index.d.ts", default: "./dist/index.js" };
+    for (
+      const exports of [
+        { ".": { development: "./src/index.ts", ...compiled } },
+        {
+          ".": compiled,
+          "./examples/mastra": { development: "./examples/mastra.ts", ...compiled },
+        },
+        { ".": { browser: "./dist/missing.js", ...compiled } },
+      ]
+    )
+    {
+      await packFixture(root, adapter, { exports });
+      await assert.rejects(writeConsumerChecksums(root, root), /compiled release files/);
+    }
+    await packFixture(root, adapter, {
+      exports: { ".": { development: "./dist/index.js", ...compiled } },
+    });
+    await writeConsumerChecksums(root, root);
     for (
       const invalid of [
         { peerDependencies: { [contracts]: "workspace:*" } },

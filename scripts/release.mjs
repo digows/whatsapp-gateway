@@ -77,7 +77,7 @@ export async function writeConsumerChecksums(root, directory)
     const entries = new Set(entryText.trim().split("\n"));
     for (const conditions of Object.values(manifest.exports ?? {}))
     {
-      for (const condition of ["types", "default"])
+      for (const condition of new Set(["types", "default", ...Object.keys(conditions)]))
       {
         const target = conditions[condition];
         if (

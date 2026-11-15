@@ -376,7 +376,10 @@ one local participant per owned workspace file. See the [owning use case](docs/u
 ### Compose the core
 
 Packages export compiled JavaScript and declarations after `pnpm build`; workspace tests select the
-explicit `development` source condition. This example provisions an account without opening a
+explicit `development` source condition. Packing with pnpm 12.9.1 applies `publishConfig.exports`:
+the distributed `development` condition resolves to the same compiled JavaScript as `default`,
+including the Mastra example. Source manifests retain their workspace paths; consumer archives
+contain only compiled package files. This example provisions an account without opening a
 WhatsApp connection:
 
 ```ts
